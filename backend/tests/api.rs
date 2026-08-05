@@ -37,7 +37,11 @@ impl App {
         // persistence, which `index::sync` covers.
         let index = Index::open(None).await.expect("open index");
         Self {
-            router: rhizowiki::router(AppState { store, index }),
+            router: rhizowiki::router(AppState {
+                store,
+                index,
+                usage: rhizowiki::UsageTally::new(),
+            }),
             _directory: directory,
         }
     }
@@ -714,6 +718,167 @@ async fn search_survives_hostile_queries() {
     }
 
     assert_eq!(app.get("/api/search?q=rust-lang").await.body["total"], 1);
+}
+
+// ----------------------------------------------------------------- graph
+
+#[tokio::test]
+async fn reports_links_in_both_directions() {
+    let app = App::new().await;
+    app.seed("notes/target", json!({ "content": "The target.\n" }))
+        .await;
+    app.seed(
+        "index",
+        json!({ "content": "See [[notes/target]] and [out](https://example.com).\n" }),
+    )
+    .await;
+
+    let index_links = app.get("/api/links/index").await;
+    assert_eq!(index_links.status, StatusCode::OK);
+    assert_eq!(index_links.body["exists"], true);
+    assert_eq!(index_links.body["outbound"].as_array().unwrap().len(), 2);
+    assert!(index_links.body["inbound"].as_array().unwrap().is_empty());
+
+    let target_links = app.get("/api/links/notes/target").await;
+    assert_eq!(target_links.body["inbound"][0]["slug"], "index");
+    assert_eq!(target_links.body["inbound"][0]["kind"], "wiki");
+}
+
+/// A link to a page nobody has written is not an error — it is a wanted page,
+/// and it resolves the moment someone writes it, with no reindex.
+#[tokio::test]
+async fn a_wanted_page_resolves_when_it_is_created() {
+    let app = App::new().await;
+    app.seed("index", json!({ "content": "See [[notes/later]].\n" }))
+        .await;
+
+    let before = app.get("/api/links/index").await;
+    assert_eq!(before.body["outbound"][0]["resolved"], false);
+    assert_eq!(before.body["outbound"][0]["target"], "notes/later");
+
+    let wanted = app.get("/api/links/notes/later").await;
+    assert_eq!(
+        wanted.status,
+        StatusCode::OK,
+        "a wanted page still has links"
+    );
+    assert_eq!(wanted.body["exists"], false);
+    assert_eq!(wanted.body["inbound"][0]["slug"], "index");
+
+    let stats = app.get("/api/stats").await;
+    assert_eq!(stats.body["wanted_count"], 1);
+    assert_eq!(stats.body["wanted"][0]["slug"], "notes/later");
+
+    // Write only the new page; nothing touches `index`.
+    app.seed("notes/later", json!({ "content": "Now it exists.\n" }))
+        .await;
+
+    let after = app.get("/api/links/index").await;
+    assert_eq!(after.body["outbound"][0]["resolved"], true);
+    assert_eq!(app.get("/api/stats").await.body["wanted_count"], 0);
+}
+
+#[tokio::test]
+async fn reports_tags_with_counts() {
+    let app = App::new().await;
+    app.seed("a", json!({ "tags": ["theory", "shared"] })).await;
+    app.seed("b", json!({ "tags": ["shared"] })).await;
+
+    let res = app.get("/api/tags").await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["tags"][0], json!({ "tag": "shared", "pages": 2 }));
+    assert_eq!(res.body["tags"][1], json!({ "tag": "theory", "pages": 1 }));
+}
+
+#[tokio::test]
+async fn stats_describe_the_shape_of_the_wiki() {
+    let app = App::new().await;
+    app.seed(
+        "hub",
+        json!({ "tags": ["meta"], "content": "See [[spoke]] and [[missing]].\n" }),
+    )
+    .await;
+    app.seed("spoke", json!({ "content": "Linked to.\n" }))
+        .await;
+    app.seed("lonely", json!({ "content": "Nothing links here.\n" }))
+        .await;
+
+    let res = app.get("/api/stats").await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["pages"], 3);
+    assert_eq!(res.body["tags"], 1);
+    assert_eq!(res.body["links"]["internal"], 2);
+    assert_eq!(res.body["links"]["resolved"], 1);
+    assert_eq!(res.body["links"]["wanted"], 1);
+
+    // `hub` and `lonely` are unreferenced.
+    assert_eq!(res.body["orphan_count"], 2);
+    assert_eq!(res.body["wanted"][0]["slug"], "missing");
+    assert_eq!(res.body["most_linked"][0]["slug"], "spoke");
+    assert_eq!(res.body["most_linked"][0]["referrers"], 1);
+    assert!(res.body["last_indexed"].is_null(), "no scan has run here");
+}
+
+/// Usage is keyed on the route template, not the URL, or the table would grow a
+/// row per page ever fetched.
+#[tokio::test]
+async fn api_usage_is_counted_per_route_template() {
+    let app = App::new().await;
+    app.seed("a", json!({ "content": "Body.\n" })).await;
+    app.seed("b", json!({ "content": "Body.\n" })).await;
+
+    app.get("/api/pages/a").await;
+    app.get("/api/pages/b").await;
+    app.get("/api/pages").await;
+
+    let usage = app.get("/api/stats").await.body["api_usage"].clone();
+    let usage = usage.as_array().expect("usage list");
+
+    let page_reads = usage
+        .iter()
+        .find(|entry| entry["route"] == "/api/pages/{slug}" && entry["method"] == "GET")
+        .expect("page reads were not counted");
+    assert_eq!(
+        page_reads["count"], 2,
+        "two different pages should share one route counter"
+    );
+
+    // The wildcard spelling must not leak here either.
+    for entry in usage {
+        let route = entry["route"].as_str().unwrap();
+        assert!(
+            !route.contains("{*"),
+            "wildcard syntax leaked into usage: {route}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn links_for_an_invalid_slug_are_refused() {
+    let app = App::new().await;
+
+    let res = app.get("/api/links/notes/../../etc").await;
+
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.code(), "slug_relative_segment");
+}
+
+#[tokio::test]
+async fn deleting_a_page_leaves_its_backlinks_wanting() {
+    let app = App::new().await;
+    app.seed("index", json!({ "content": "See [[notes/target]].\n" }))
+        .await;
+    app.seed("notes/target", json!({ "content": "The target.\n" }))
+        .await;
+    assert_eq!(app.get("/api/stats").await.body["links"]["resolved"], 1);
+
+    app.delete("/api/pages/notes/target").await;
+
+    let stats = app.get("/api/stats").await;
+    assert_eq!(stats.body["links"]["wanted"], 1);
+    assert_eq!(stats.body["wanted"][0]["slug"], "notes/target");
 }
 
 #[tokio::test]

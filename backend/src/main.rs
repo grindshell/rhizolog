@@ -1,8 +1,10 @@
 use std::process::ExitCode;
+use std::time::Duration;
 
+use rhizowiki::api::graph::flush_usage;
 use rhizowiki::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
 use rhizowiki::index::sync;
-use rhizowiki::{AppState, Config, Index, Store};
+use rhizowiki::{AppState, Config, Index, Store, UsageTally};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -52,13 +54,40 @@ async fn run() -> anyhow::Result<()> {
     tracing::info!("API docs at http://{address}{SWAGGER_UI_PATH}");
     tracing::info!("OpenAPI at http://{address}{OPENAPI_PATH}");
 
-    let router = rhizowiki::router(AppState { store, index });
+    let state = AppState {
+        store,
+        index,
+        usage: UsageTally::new(),
+    };
+
+    let flusher = tokio::spawn(flush_usage_periodically(state.clone()));
+
+    let router = rhizowiki::router(state.clone());
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
+    // Stop the periodic flush before the final one, so the two cannot race for
+    // the tally and split the last batch between them.
+    flusher.abort();
+    flush_usage(&state.index, &state.usage).await;
+
     tracing::info!("shut down");
     Ok(())
+}
+
+/// How often API usage counts are moved from memory into the index.
+const USAGE_FLUSH_INTERVAL: Duration = Duration::from_secs(60);
+
+async fn flush_usage_periodically(state: AppState) {
+    let mut ticker = tokio::time::interval(USAGE_FLUSH_INTERVAL);
+    // The first tick fires immediately and would flush an empty tally.
+    ticker.tick().await;
+
+    loop {
+        ticker.tick().await;
+        flush_usage(&state.index, &state.usage).await;
+    }
 }
 
 fn init_tracing() {

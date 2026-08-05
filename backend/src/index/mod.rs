@@ -8,6 +8,7 @@
 //! its work in `spawn_blocking` — keeping that boilerplate in one file is most
 //! of why the SQL is confined here rather than spread across handlers.
 
+pub mod graph;
 pub mod schema;
 pub mod sync;
 
@@ -23,6 +24,10 @@ use crate::page::Page;
 use crate::slug::Slug;
 use schema::{FTS_BODY_COLUMN, KEY_LAST_SYNC, KEY_SCHEMA_VERSION, SCHEMA_VERSION};
 
+pub use graph::{
+    InboundLink, LinkTotals, LinkedPage, OutboundLink, PageLinks, PageRef, RouteUsage, Stats,
+    TagCount, WantedPage,
+};
 pub use sync::{SyncReport, sync};
 
 #[derive(Debug, Error)]
@@ -213,6 +218,7 @@ impl Index {
         let title = page.title();
         let tags = page.tags().to_vec();
         let body = page.body.clone();
+        let links = crate::markdown::extract_links(&page.slug, &page.body);
         let created = to_nanos(page.created(), "created")?;
         let updated = to_nanos(page.updated, "updated")?;
         let size = page.size as i64;
@@ -232,6 +238,22 @@ impl Index {
                     .prepare("insert or ignore into page_tags (slug, tag) values (?1, ?2)")?;
                 for tag in &tags {
                     insert.execute(params![&slug, tag])?;
+                }
+            }
+
+            transaction.execute("delete from links where src_slug = ?1", params![&slug])?;
+            {
+                let mut insert = transaction.prepare(
+                    "insert or ignore into links (src_slug, target, display, kind)
+                     values (?1, ?2, ?3, ?4)",
+                )?;
+                for link in &links {
+                    insert.execute(params![
+                        &slug,
+                        &link.target,
+                        &link.display,
+                        link.kind.as_str()
+                    ])?;
                 }
             }
 
@@ -255,6 +277,9 @@ impl Index {
             let transaction = connection.transaction()?;
             transaction.execute("delete from pages where slug = ?1", params![&slug])?;
             transaction.execute("delete from page_tags where slug = ?1", params![&slug])?;
+            // Outbound links go with the page. Inbound ones do not: they belong
+            // to the pages that wrote them, and they become wanted links.
+            transaction.execute("delete from links where src_slug = ?1", params![&slug])?;
             transaction.execute("delete from pages_fts where slug = ?1", params![&slug])?;
             transaction.commit()?;
             Ok(())
@@ -475,6 +500,7 @@ impl Index {
             let transaction = connection.transaction()?;
             transaction.execute("delete from pages", [])?;
             transaction.execute("delete from page_tags", [])?;
+            transaction.execute("delete from links", [])?;
             transaction.execute("delete from pages_fts", [])?;
             transaction.commit()?;
             Ok(())
@@ -513,19 +539,21 @@ impl Index {
     }
 }
 
-/// Create the schema, or drop and recreate it if it was written by a different
-/// version of Rhizowiki.
+/// Create the schema, dropping and rebuilding the derived half of it if it was
+/// written by a different version of Rhizowiki.
+///
+/// The durable tables are created first, because the version number this
+/// decision rests on lives in one of them.
 fn ensure_schema(connection: &Connection) -> Result<(), IndexError> {
+    connection.execute_batch(schema::CREATE_DURABLE)?;
+
     let existing: Option<String> = connection
         .query_row(
             "select value from meta where key = ?1",
             params![KEY_SCHEMA_VERSION],
             |row| row.get(0),
         )
-        // The `meta` table itself is missing on a fresh database, which is not
-        // an error — it just means there is nothing to keep.
-        .optional()
-        .unwrap_or(None);
+        .optional()?;
 
     let version = existing.and_then(|value| value.parse::<i64>().ok());
     if version == Some(SCHEMA_VERSION) {
@@ -540,8 +568,8 @@ fn ensure_schema(connection: &Connection) -> Result<(), IndexError> {
         );
     }
 
-    connection.execute_batch(schema::DROP)?;
-    connection.execute_batch(schema::CREATE)?;
+    connection.execute_batch(schema::DROP_DERIVED)?;
+    connection.execute_batch(schema::CREATE_DERIVED)?;
     connection.execute(
         "insert or replace into meta (key, value) values (?1, ?2)",
         params![KEY_SCHEMA_VERSION, SCHEMA_VERSION.to_string()],

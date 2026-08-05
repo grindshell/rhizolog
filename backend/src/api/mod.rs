@@ -6,9 +6,11 @@
 //! and a spec that drifts from the routes is worse than no spec at all.
 
 pub mod extract;
+pub mod graph;
 pub mod meta;
 pub mod pages;
 pub mod search;
+pub mod usage;
 
 use axum::Router;
 use tower_http::trace::TraceLayer;
@@ -30,6 +32,8 @@ pub struct AppState {
     pub store: Store,
     /// The derived index. Everything in it can be rebuilt from `store`.
     pub index: Index,
+    /// API calls since the last flush to the index.
+    pub usage: usage::UsageTally,
 }
 
 #[derive(OpenApi)]
@@ -50,6 +54,7 @@ pub struct AppState {
     tags(
         (name = "pages", description = "Reading and writing wiki pages"),
         (name = "search", description = "Full-text search and index maintenance"),
+        (name = "graph", description = "Links between pages, tags, and meta-stats"),
         (name = "meta", description = "Server and index status"),
     ),
 )]
@@ -69,12 +74,21 @@ pub fn router(state: AppState) -> Router {
         .routes(routes!(pages::move_page))
         .routes(routes!(search::search))
         .routes(routes!(search::reindex))
+        .routes(routes!(graph::links))
+        .routes(routes!(graph::tags))
+        .routes(routes!(graph::stats))
         .split_for_parts();
 
     normalize_wildcard_paths(&mut api);
 
     router
         .merge(SwaggerUi::new(SWAGGER_UI_PATH).url(OPENAPI_PATH, api))
+        // Counting sits inside the trace layer so it sees the matched route,
+        // and applies before `with_state` so it can take the state it needs.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            usage::count,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

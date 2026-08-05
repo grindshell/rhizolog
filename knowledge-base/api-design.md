@@ -15,11 +15,10 @@ storage model it sits on.
 | `PATCH` | `/api/pages/{slug}` | Partial update of title / tags / content |
 | `DELETE` | `/api/pages/{slug}` | Delete |
 | `POST` | `/api/move` | Move a page to a new slug |
-| `GET` | `/api/pages/{slug}/links` | Outbound links — *not yet built* |
-| `GET` | `/api/pages/{slug}/backlinks` | Inbound links — *not yet built* |
+| `GET` | `/api/links/{slug}` | Links in **both** directions |
 | `GET` | `/api/search` | Full-text search with snippets |
-| `GET` | `/api/tags` | All tags with page counts — *not yet built* |
-| `GET` | `/api/stats` | Meta-stats for the dashboard — *not yet built* |
+| `GET` | `/api/tags` | All tags with page counts |
+| `GET` | `/api/stats` | Meta-stats for the dashboard |
 | `POST` | `/api/reindex` | Force a full rebuild of the index |
 | `GET` | `/api/health` | Liveness + index freshness |
 | `GET` | `/api-docs/openapi.json` | Generated OpenAPI document |
@@ -41,6 +40,18 @@ name.
 So the operation lives at `/api/move`, outside the namespace slugs occupy, and
 takes `{from, to}` rather than reading one slug from the path. `/api/reindex`
 already has the same shape.
+
+### One links endpoint, not two
+
+The plan called for separate `/links` and `/backlinks`. They are one endpoint
+returning `{outbound, inbound}`, for the same routing reason as above —
+`{*slug}/links` cannot be a route — and because it is how they are used: a page
+view shows its links and its backlinks together, so one round trip beats two.
+
+The slug does not have to name a page that exists. Asking about a wanted page
+returns what already points at it, which is exactly what you want to see before
+deciding whether to write it. The response carries `exists` to say which case
+you are in.
 
 ### The wildcard does not appear in the spec
 

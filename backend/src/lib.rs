@@ -13,6 +13,7 @@ pub mod page;
 pub mod slug;
 pub mod store;
 
+pub use api::usage::UsageTally;
 pub use api::{AppState, router};
 pub use config::Config;
 pub use error::{AppError, AppResult};

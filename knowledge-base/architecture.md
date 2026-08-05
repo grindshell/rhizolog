@@ -99,9 +99,41 @@ Two link forms are extracted at index time:
 - Standard markdown `[text](target)` — internal if it resolves to a page,
   external otherwise
 
-Resolution: exact slug match first, then a unique basename match (`[[async]]`
-finds `notes/rust/async` if nothing else is named `async`). Ambiguous or
-missing targets stay unresolved.
+Extraction goes through comrak's AST, not a regex over the source. comrak parses
+`[[slug]]` natively, which means a wikilink inside a code fence stays inside the
+code fence — the parser has already decided what is code and what is prose, and
+a regex would have to relitigate that and get it wrong. A page documenting
+wikilink syntax should not acquire links by describing them.
+
+Markdown link targets are resolved relative to the page's own directory, so
+`[rhizome](../rhizome.md)` from `notes/rust/async` reaches `notes/rhizome`. A
+target that climbs out of the wiki is **dropped**, not recorded as broken: a
+wanted page should be something you could go and create, and
+`../../etc/passwd` is not.
+
+### Resolution is exact, and it is a query
+
+A wikilink target is a slug, matched exactly. There is no basename fallback —
+an earlier draft of this page promised that `[[async]]` would find
+`notes/rust/async` when nothing else was named `async`, and that is now
+withdrawn for two reasons.
+
+The first is that it makes a link's meaning depend on wiki state in a way that
+changes silently. Write a second page called `async` and every existing
+`[[async]]` quietly retargets or goes ambiguous. For a tool whose whole subject
+is how knowledge branches, links that move on their own are the wrong kind of
+surprise.
+
+The second is that exact matching keeps resolution a **pure join** against
+`pages`, evaluated at query time and never cached. That is what makes the graph
+self-healing: create a page that three others already link to, and those three
+links resolve immediately, with nothing to reindex. A basename fallback would
+need either a re-resolve pass on every page create or a materially hairier
+query.
+
+The cost is verbosity — you write `[[notes/rust/async]]`, not `[[async]]`. The
+editor can offer completion for that; it cannot un-break a link that retargeted
+itself.
 
 **Unresolved links are a feature, not an error.** They are "wanted pages" —
 branches someone gestured at but has not written yet — and they surface in
@@ -114,19 +146,19 @@ silently rotting. Link-rewriting on move is a post-MVP convenience.
 
 ## Index schema
 
-Built:
+Derived from the wiki, and therefore disposable:
 
 ```sql
 pages(slug PK, title, created, updated, size)
 page_tags(slug, tag)
-pages_fts  -- FTS5 over (slug unindexed, title, body)
-meta(key, value)  -- schema_version, last_sync
+links(src_slug, target, display, kind)  -- kind: wiki | internal | external
+pages_fts                               -- FTS5 over (slug unindexed, title, body)
 ```
 
-Still to come, with the link graph and usage stats:
+Not derived from anything, and therefore kept:
 
 ```sql
-links(src_slug, dst_slug, kind, display, resolved)
+meta(key, value)               -- schema_version, last_sync
 api_usage(route, method, count)
 ```
 
@@ -136,15 +168,34 @@ SQLite (3.53.2) that `rusqlite`'s `bundled` feature compiles, including the
 `unicode61` and `trigram` tokenizers and the `snippet()` function used to build
 search result excerpts.
 
-`api_usage` will key on axum's `MatchedPath` (the route template, e.g.
-`/api/pages/{slug}`) rather than the raw URI, so cardinality stays bounded.
+`links.target` holds the target **as written** — a slug for wiki and internal
+links, a URL for external ones. It is never resolved once and stored; see
+"Resolution is exact, and it is a query" above.
 
 ### There are no migrations
 
-The schema carries a version number. When it changes, the index is **dropped
-and rebuilt from the wiki** rather than migrated. This is the real payoff of
-keeping files authoritative: a schema change costs one scan and no migration
-script, forever.
+The schema carries a version number. When it changes, the derived tables are
+**dropped and rebuilt from the wiki** rather than migrated. This is the real
+payoff of keeping files authoritative: a schema change costs one scan and no
+migration script, forever.
+
+The split matters here. API usage counts are the one thing in the index with no
+source to rebuild from, so they live in tables a version bump leaves alone —
+which also means a change to *those* would need a real migration. Keep them
+boring.
+
+### API usage
+
+Counted in memory and flushed to SQLite every 60 seconds and on shutdown. One
+database write per request would be absurd for a number nobody reads in real
+time. `/api/stats` adds the unflushed tally to the persisted counts, so the
+figure it reports is current without the read having to write.
+
+The counter keys on axum's `MatchedPath` — the route template
+(`/api/pages/{slug}`), not the URL that arrived. Keying on the raw URI would
+grow a row per page ever fetched, which is unbounded and useless. The template
+is spelled the way the OpenAPI document spells it, so the stats and the docs
+agree on what an endpoint is called.
 
 ### Timestamps are integers, and there is no content hash
 
