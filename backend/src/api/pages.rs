@@ -312,6 +312,22 @@ pub struct ListQuery {
     /// Return only pages carrying this tag.
     #[param(example = "rust")]
     pub tag: Option<String>,
+    /// Return only pages at or under this slug path.
+    ///
+    /// `notes/rust` matches the page `notes/rust` and everything beneath it.
+    /// It stops at the separator, so `notes/rustlings` is a different
+    /// directory and does not match. Matching is case-sensitive.
+    #[param(example = "notes/rust")]
+    pub prefix: Option<String>,
+    /// Return only pages sitting in a directory of this name, wherever in the
+    /// wiki that directory is.
+    ///
+    /// `rust` matches `notes/rust/async` and `code/rust/traits` alike — the
+    /// flat reading of a slug, which is why it behaves like `tag` rather than
+    /// like `prefix`. A page's own name is not a directory it sits in, so
+    /// `async` does not match `notes/rust/async`.
+    #[param(example = "rust")]
+    pub segment: Option<String>,
     /// One of `slug`, `title`, `created`, `updated`. Defaults to `slug`.
     #[param(example = "updated")]
     pub sort: Option<String>,
@@ -356,6 +372,8 @@ pub async fn list(
         .index
         .list(ListOptions {
             tag: query.tag,
+            prefix: query.prefix,
+            segment: query.segment,
             sort: parse_sort(query.sort.as_deref())?,
             order: parse_order(query.order.as_deref())?,
             limit,

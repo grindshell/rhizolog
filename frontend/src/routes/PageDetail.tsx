@@ -7,10 +7,15 @@ import {
   getPage,
   pageHref,
   pageLinks,
+  prefixHref,
+  segmentHref,
+  slugSegments,
+  tagHref,
 } from '../api/client'
 import type { PageLinksResponse } from '../api/client'
 import { Async, ErrorNotice } from '../components/Async'
 import Markdown from '../components/Markdown'
+import SlugPath from '../components/SlugPath'
 
 /**
  * Read one page.
@@ -40,12 +45,28 @@ export default function PageDetail() {
 
   return (
     <div class="flex flex-col gap-6">
+      {/*
+        One `<li>` per segment rather than one holding the whole slug, so the
+        directories a page sits in are the breadcrumb rather than decoration on
+        the end of it. Each one leads to what is under it; the last is the page
+        you are already reading.
+      */}
       <div class="breadcrumbs text-sm">
         <ul>
           <li>
             <A href="/pages">Pages</A>
           </li>
-          <li class="font-mono">{slug()}</li>
+          <For each={slugSegments(slug())}>
+            {(segment) => (
+              <li class="font-mono">
+                <Show when={!segment.last} fallback={<span>{segment.name}</span>}>
+                  <A href={prefixHref(segment.path)} title={`Pages under ${segment.path}`}>
+                    {segment.name}
+                  </A>
+                </Show>
+              </li>
+            )}
+          </For>
         </ul>
       </div>
 
@@ -99,13 +120,30 @@ export default function PageDetail() {
                   </div>
                 </div>
 
-                <div class="flex flex-wrap gap-1">
+                {/*
+                  The other reading of the slug, next to the tags because it is
+                  the same kind of thing: `/rust` collects every page in a
+                  `rust` directory, wherever in the wiki that directory is,
+                  which is what the breadcrumb above deliberately will not do.
+                  Mono and slash-prefixed so the two kinds of badge do not read
+                  as one list.
+                */}
+                <div class="flex flex-wrap items-center gap-1">
+                  <For each={slugSegments(loaded().slug).filter((segment) => !segment.last)}>
+                    {(segment) => (
+                      <A
+                        class="badge badge-ghost font-mono"
+                        href={segmentHref(segment.name)}
+                        title={`Every page in a ${segment.name} directory, anywhere`}
+                      >
+                        <span class="opacity-50">/</span>
+                        {segment.name}
+                      </A>
+                    )}
+                  </For>
                   <For each={loaded().tags}>
                     {(tag) => (
-                      <A
-                        class="badge badge-outline"
-                        href={`/pages?tag=${encodeURIComponent(tag)}`}
-                      >
+                      <A class="badge badge-outline" href={tagHref(tag)}>
                         {tag}
                       </A>
                     )}
@@ -217,7 +255,7 @@ function LinkPanels(props: { links: PageLinksResponse }) {
                   <A class="link" href={pageHref(link.slug)}>
                     {link.title}
                   </A>
-                  <div class="font-mono text-xs opacity-60">{link.slug}</div>
+                  <SlugPath class="block font-mono text-xs opacity-60" slug={link.slug} />
                 </li>
               )}
             </For>

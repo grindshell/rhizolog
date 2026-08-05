@@ -114,6 +114,53 @@ export function editHref(slug: string): string {
   return '/edit/' + encodeSlug(slug)
 }
 
+/** One clickable part of a slug. */
+export interface SlugSegment {
+  /** The segment on its own: `rust`. */
+  name: string
+  /** The path up to and including it: `notes/rust`. */
+  path: string
+  /** True for the last segment, which names the page rather than a directory. */
+  last: boolean
+}
+
+/**
+ * Break a slug into its parts, each of which is a place you can go.
+ *
+ * A segment can be read two ways, and both are useful. `notes/rust/async`
+ * sits *under* `notes/rust` — that is `path`, and following it stays inside
+ * this branch of the wiki. It is also simply *in a `rust` directory* — that is
+ * `name`, and following it leaves the branch behind and finds
+ * `code/rust/traits` too. The first is a breadcrumb, the second is a tag, and
+ * this returns both because the UI offers both.
+ *
+ * The final segment names the page itself rather than anything containing it,
+ * so it is marked and callers leave it as text.
+ */
+export function slugSegments(slug: string): SlugSegment[] {
+  const names = slug.split('/')
+  return names.map((name, position) => ({
+    name,
+    path: names.slice(0, position + 1).join('/'),
+    last: position === names.length - 1,
+  }))
+}
+
+/** Browse everything carrying a tag. */
+export function tagHref(tag: string): string {
+  return `/pages?tag=${encodeURIComponent(tag)}`
+}
+
+/** Browse everything at or under a slug path. */
+export function prefixHref(path: string): string {
+  return `/pages?prefix=${encodeURIComponent(path)}`
+}
+
+/** Browse every page in a directory of this name, wherever it sits. */
+export function segmentHref(name: string): string {
+  return `/pages?segment=${encodeURIComponent(name)}`
+}
+
 function queryString(params: Record<string, unknown> | undefined): string {
   if (!params) return ''
   const search = new URLSearchParams()

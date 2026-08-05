@@ -8,7 +8,7 @@ storage model it sits on.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/pages` | List pages; `?tag=`, `?q=`, `?limit=`, `?offset=`, `?sort=` |
+| `GET` | `/api/pages` | List pages; `?tag=`, `?prefix=`, `?segment=`, `?q=`, `?limit=`, `?offset=`, `?sort=` |
 | `POST` | `/api/pages` | Create; `409` if the slug exists |
 | `GET` | `/api/pages/{slug}` | Read; `?render=true` adds rendered HTML |
 | `PUT` | `/api/pages/{slug}` | Create or replace |
@@ -24,6 +24,31 @@ storage model it sits on.
 | `GET` | `/api/health` | Liveness + index freshness |
 | `GET` | `/api-docs/openapi.json` | Generated OpenAPI document |
 | `GET` | `/swagger-ui` | Swagger UI |
+
+### `?prefix=` and `?segment=` are two different questions
+
+Both filter on a slug's path, and the difference is the point. For
+`notes/rust/async`:
+
+| Filter | Asks | Also returns |
+|---|---|---|
+| `?prefix=notes/rust` | what is at or under this path | `notes/rust` itself |
+| `?segment=rust` | what is in a `rust` directory, anywhere | `code/rust/traits` |
+
+`?prefix=` is hierarchical and stops at the separator, so `notes/rustlings` is
+not under `notes/rust`. `?segment=` is flat and behaves like `?tag=` — see
+"A slug has two readings" in [Architecture](architecture.md) for why the wiki
+wants both. All three filters intersect: naming a tag *and* a path asks for
+pages satisfying both.
+
+Neither is validated as a slug. They are filters rather than lookups, so a path
+nobody uses is an empty listing and a `200`, not a `404` — there is no such
+thing as a missing directory in a wiki whose directories are implied by its
+files.
+
+`/api/search` takes none of them. Search answers "where is this word" and the
+listing answers "what is in here"; the dashboard picks one endpoint or the
+other rather than pretending the filters compose across both.
 
 ### Why moving a page is not `/api/pages/{slug}/move`
 

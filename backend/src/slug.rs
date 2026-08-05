@@ -257,6 +257,21 @@ impl Slug {
     pub fn parent(&self) -> Option<&str> {
         self.0.rsplit_once('/').map(|(parent, _)| parent)
     }
+
+    /// The directories this page sits in, outermost first.
+    ///
+    /// `notes/rust/async` yields `notes`, then `rust`. The final segment names
+    /// the page itself rather than anything containing it, so it is not one of
+    /// these — these are the paths the page is *under*, which is what makes
+    /// them worth filtering on. A top-level page yields nothing.
+    ///
+    /// A segment may repeat (`notes/rust/notes/pinning`); they are yielded in
+    /// path order and not deduplicated, so position stays meaningful.
+    pub fn directories(&self) -> impl Iterator<Item = &str> {
+        self.parent()
+            .into_iter()
+            .flat_map(|parent| parent.split('/'))
+    }
 }
 
 fn strip_suffix_ignore_ascii_case<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
@@ -566,6 +581,24 @@ mod tests {
         let flat = Slug::parse("index").unwrap();
         assert_eq!(flat.basename(), "index");
         assert_eq!(flat.parent(), None);
+    }
+
+    #[test]
+    fn lists_the_directories_a_page_sits_in() {
+        let nested = Slug::parse("notes/rust/async").unwrap();
+        assert_eq!(nested.directories().collect::<Vec<_>>(), ["notes", "rust"]);
+
+        // The page's own name is not a directory, so a top-level page is in
+        // none at all.
+        let flat = Slug::parse("index").unwrap();
+        assert_eq!(flat.directories().count(), 0);
+
+        // Repeats stay put: these are positions in a path, not a set.
+        let repeated = Slug::parse("notes/rust/notes/pinning").unwrap();
+        assert_eq!(
+            repeated.directories().collect::<Vec<_>>(),
+            ["notes", "rust", "notes"]
+        );
     }
 
     #[test]

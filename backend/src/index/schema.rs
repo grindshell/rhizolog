@@ -13,7 +13,7 @@
 
 /// Bump this whenever [`CREATE_DERIVED`] changes. The next startup will notice,
 /// drop the derived tables, and rebuild them from disk.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -65,6 +65,25 @@ create table page_tags (
 
 create index page_tags_by_tag on page_tags(tag);
 
+-- The directories a page sits in, one row each: `notes/rust/async` records
+-- `notes` at depth 0 and `rust` at depth 1. It is redundant with the slug in
+-- `pages` and exists only to make -- every page in a `rust` directory, wherever
+-- that directory sits -- an indexed lookup rather than a scan. That is the same
+-- shape as `page_tags` because it is the same question. The page's own name is
+-- not a directory and is not recorded.
+--
+-- `depth` is in the key rather than `segment`: a slug may pass through the same
+-- name twice (`notes/rust/notes/pinning`), and position is what distinguishes
+-- the two rows.
+create table page_segments (
+    slug    text    not null references pages(slug) on delete cascade,
+    segment text    not null,
+    depth   integer not null,
+    primary key (slug, depth)
+) strict;
+
+create index page_segments_by_segment on page_segments(segment);
+
 -- `target` is a slug for wiki and internal links, and a URL for external ones.
 -- It is stored as written and resolved by joining against `pages` at query
 -- time, never resolved once and cached: that is what lets a wanted page become
@@ -91,6 +110,7 @@ create virtual table pages_fts using fts5(
 pub const DROP_DERIVED: &str = "
 drop table if exists links;
 drop table if exists page_tags;
+drop table if exists page_segments;
 drop table if exists pages_fts;
 drop table if exists pages;
 ";

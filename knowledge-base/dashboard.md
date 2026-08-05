@@ -9,12 +9,38 @@ Setup and versions live in [Tech stack](tech-stack.md).
 | Route | What it is |
 |---|---|
 | `/` | Stats: counts, orphans, wanted pages, tag histogram, API usage |
-| `/pages` | Listing, or search results when there is a `?q=` |
+| `/pages` | Listing, or search results when there is a `?q=`; narrowed by `?tag=`, `?prefix=`, `?segment=` |
 | `/pages/*slug` | One page, rendered, with both directions of its links |
 | `/new`, `/edit/*slug` | The editor |
 | `/tags` | Every tag, linking into the filtered listing |
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
+
+## Every part of a slug is a place you can go
+
+A slug is never printed as flat text where it could be printed as links. Both
+readings of it are offered, and they are deliberately two controls rather than
+one that guesses:
+
+- **The breadcrumb** on a page is one `<li>` per segment, each leading to
+  `?prefix=` — everything at or under that path. Hierarchical: following `rust`
+  in `notes/rust/async` stays inside `notes`.
+- **A badge row** beside the page's tags offers `/notes` and `/rust`, each
+  leading to `?segment=` — every directory of that name in the wiki. Flat, and
+  sitting next to the tags because it is the same kind of filter.
+
+The badges are mono and slash-prefixed so the two kinds do not read as one
+list, and both carry a `title` saying which is which — they look alike and do
+different things, so the distinction has to be legible without a click.
+
+The last segment of a slug names the page rather than a directory holding it,
+so it is text everywhere. Wherever a slug appears the page's own title is
+already a link right beside it, and a second link that looked the same but led
+to a filtered listing would only mislead.
+
+Everything above lives in `slugSegments` in the API client and the `SlugPath`
+component, so the listing, the search results, and the backlink panels all
+behave the same way without repeating the rule.
 
 ## Editing is not `/pages/*slug/edit`
 

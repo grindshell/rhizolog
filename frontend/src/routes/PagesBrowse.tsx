@@ -1,9 +1,10 @@
 import { For, Show, createEffect, createResource, createSignal, onCleanup } from 'solid-js'
 import { A, useSearchParams } from '@solidjs/router'
-import { listPages, pageHref, search } from '../api/client'
+import { listPages, pageHref, search, tagHref } from '../api/client'
 import type { PageListResponse, SearchResponse } from '../api/client'
 import { Async } from '../components/Async'
 import Snippet from '../components/Snippet'
+import SlugPath from '../components/SlugPath'
 import { formatDate } from './PageDetail'
 
 /** How long typing has to pause before the search runs. */
@@ -42,21 +43,39 @@ export default function PagesBrowse() {
   const query = () => ({
     q: first(searchParams.q) ?? '',
     tag: first(searchParams.tag) ?? '',
+    prefix: first(searchParams.prefix) ?? '',
+    segment: first(searchParams.segment) ?? '',
     sort: first(searchParams.sort) ?? 'updated',
   })
 
   const [result] = createResource(
     query,
-    async ({ q, tag, sort }): Promise<PageListResponse | SearchResponse> => {
+    async ({ q, tag, prefix, segment, sort }): Promise<PageListResponse | SearchResponse> => {
       if (q) return await search({ q, limit: 25 })
       return await listPages({
         tag: tag || undefined,
+        prefix: prefix || undefined,
+        segment: segment || undefined,
         limit: 100,
         sort,
         order: sort === 'updated' ? 'desc' : 'asc',
       })
     },
   )
+
+  /**
+   * The narrowing currently in force, in the order it reads.
+   *
+   * `/api/search` takes none of these, so typing a query drops all of them —
+   * the banner goes with them rather than describing a listing that is not on
+   * screen.
+   */
+  const filters = () =>
+    [
+      { label: 'tagged', value: first(searchParams.tag) },
+      { label: 'under', value: first(searchParams.prefix) },
+      { label: 'in a directory named', value: first(searchParams.segment) },
+    ].filter((filter) => filter.value)
 
   return (
     <div class="flex flex-col gap-4">
@@ -90,15 +109,21 @@ export default function PagesBrowse() {
         </Show>
       </div>
 
-      <Show when={first(searchParams.tag)}>
-        {(tag) => (
-          <div class="text-sm">
-            Filtered by tag <span class="badge badge-primary">{tag()}</span>
-            <A class="link ml-2" href="/pages">
-              clear
-            </A>
-          </div>
-        )}
+      <Show when={!first(searchParams.q) && filters().length > 0}>
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+          <span class="opacity-70">Showing pages</span>
+          <For each={filters()}>
+            {(filter) => (
+              <span class="flex items-center gap-1">
+                <span class="opacity-70">{filter.label}</span>
+                <span class="badge badge-primary font-mono">{filter.value}</span>
+              </span>
+            )}
+          </For>
+          <A class="link" href="/pages">
+            clear
+          </A>
+        </div>
       </Show>
 
       <Async resource={result}>
@@ -148,14 +173,13 @@ function PageTable(props: { data: PageListResponse }) {
                     {page.title}
                   </A>
                 </td>
-                <td class="font-mono text-sm opacity-70">{page.slug}</td>
+                <td>
+                  <SlugPath class="font-mono text-sm opacity-70" slug={page.slug} />
+                </td>
                 <td>
                   <For each={page.tags}>
                     {(tag) => (
-                      <A
-                        class="badge badge-ghost badge-sm mr-1"
-                        href={`/pages?tag=${encodeURIComponent(tag)}`}
-                      >
+                      <A class="badge badge-ghost badge-sm mr-1" href={tagHref(tag)}>
                         {tag}
                       </A>
                     )}
@@ -187,7 +211,7 @@ function SearchResults(props: { data: SearchResponse }) {
               <A class="link font-medium" href={pageHref(hit.slug)}>
                 {hit.title}
               </A>
-              <div class="font-mono text-xs opacity-60">{hit.slug}</div>
+              <SlugPath class="font-mono text-xs opacity-60" slug={hit.slug} />
               <div class="text-sm">
                 <Snippet text={hit.snippet} />
               </div>

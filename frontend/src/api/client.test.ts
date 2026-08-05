@@ -9,6 +9,10 @@ import {
   getPage,
   listPages,
   pageHref,
+  prefixHref,
+  segmentHref,
+  slugSegments,
+  tagHref,
 } from './client'
 
 /** Reply as the API would, with a given status and JSON body. */
@@ -69,6 +73,51 @@ describe('slug encoding', () => {
     expect(pageHref('notes/rust/async')).toBe('/pages/notes/rust/async')
     expect(pageHref('notes/my page')).toBe('/pages/notes/my%20page')
     expect(editHref('notes/rust/async')).toBe('/edit/notes/rust/async')
+  })
+})
+
+describe('slug segments', () => {
+  it('gives each segment both of its readings', () => {
+    expect(slugSegments('notes/rust/async')).toEqual([
+      { name: 'notes', path: 'notes', last: false },
+      { name: 'rust', path: 'notes/rust', last: false },
+      { name: 'async', path: 'notes/rust/async', last: true },
+    ])
+  })
+
+  /**
+   * `path` accumulates and `name` does not, which is the whole distinction the
+   * two filters rest on: the same directory name in two places is one `name`
+   * and two `path`s.
+   */
+  it('keeps a repeated directory name apart by its path', () => {
+    const segments = slugSegments('notes/rust/notes/pinning')
+    expect(segments.map((segment) => segment.name)).toEqual([
+      'notes',
+      'rust',
+      'notes',
+      'pinning',
+    ])
+    expect(segments.map((segment) => segment.path)).toEqual([
+      'notes',
+      'notes/rust',
+      'notes/rust/notes',
+      'notes/rust/notes/pinning',
+    ])
+  })
+
+  /** A top-level page is one segment, and that segment is the page itself. */
+  it('marks the final segment, which names the page rather than a directory', () => {
+    expect(slugSegments('index')).toEqual([{ name: 'index', path: 'index', last: true }])
+  })
+
+  it('builds filter URLs that escape the separator', () => {
+    expect(tagHref('rust')).toBe('/pages?tag=rust')
+    expect(segmentHref('rust')).toBe('/pages?segment=rust')
+    // A prefix is a path, and it travels in a query parameter rather than the
+    // URL path, so its separators are escaped rather than kept.
+    expect(prefixHref('notes/rust')).toBe('/pages?prefix=notes%2Frust')
+    expect(prefixHref('notes/my page')).toBe('/pages?prefix=notes%2Fmy%20page')
   })
 })
 

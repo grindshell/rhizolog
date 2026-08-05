@@ -889,6 +889,44 @@ async fn lists_filtered_by_tag_and_sorted() {
 }
 
 #[tokio::test]
+async fn lists_filtered_by_slug_path() {
+    let app = App::new().await;
+    for slug in [
+        "notes/rust",
+        "notes/rust/async",
+        "notes/rustlings",
+        "code/rust/traits",
+    ] {
+        app.seed(slug, json!({ "content": "Body.\n" })).await;
+    }
+
+    // Hierarchical: everything at or under one path, and nothing that merely
+    // starts with the same characters.
+    let under = app.get("/api/pages?prefix=notes/rust").await;
+    assert_eq!(under.status, StatusCode::OK);
+    assert_eq!(under.body["total"], 2);
+    assert_eq!(under.body["pages"][0]["slug"], "notes/rust");
+    assert_eq!(under.body["pages"][1]["slug"], "notes/rust/async");
+
+    // Flat, the way a tag is: every `rust` directory, wherever it sits.
+    let anywhere = app.get("/api/pages?segment=rust").await;
+    assert_eq!(anywhere.body["total"], 2);
+    assert_eq!(anywhere.body["pages"][0]["slug"], "code/rust/traits");
+    assert_eq!(anywhere.body["pages"][1]["slug"], "notes/rust/async");
+
+    // The filters intersect rather than widening each other.
+    let both = app.get("/api/pages?segment=rust&prefix=code").await;
+    assert_eq!(both.body["total"], 1);
+    assert_eq!(both.body["pages"][0]["slug"], "code/rust/traits");
+
+    // A path nobody uses is an empty listing, not an error: these are filters,
+    // not lookups, and there is no such thing as a missing directory.
+    let nowhere = app.get("/api/pages?prefix=nonsense").await;
+    assert_eq!(nowhere.status, StatusCode::OK);
+    assert_eq!(nowhere.body["total"], 0);
+}
+
+#[tokio::test]
 async fn listing_can_be_narrowed_to_named_fields() {
     let app = App::new().await;
     app.seed("a", json!({ "title": "Alpha", "tags": ["theory"] }))

@@ -1,7 +1,7 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createResource, createSignal } from 'solid-js'
 import { A } from '@solidjs/router'
-import { health, pageHref, reindex, stats } from '../api/client'
+import { health, pageHref, reindex, stats, tagHref } from '../api/client'
 import type { StatsResponse } from '../api/client'
 import { Async, ErrorNotice } from '../components/Async'
 import { formatDate } from './PageDetail'
@@ -181,10 +181,7 @@ function Graph(props: { data: StatsResponse }) {
                 fallback={<span class="text-sm opacity-60">No tags in the wiki yet.</span>}
               >
                 {(tag) => (
-                  <A
-                    class="badge badge-outline gap-2"
-                    href={`/pages?tag=${encodeURIComponent(tag.tag)}`}
-                  >
+                  <A class="badge badge-outline gap-2" href={tagHref(tag.tag)}>
                     {tag.tag}
                     <span class="opacity-60">{tag.pages}</span>
                   </A>

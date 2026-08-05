@@ -131,6 +131,17 @@ impl SortOrder {
 pub struct ListOptions {
     /// Restrict to pages carrying this tag.
     pub tag: Option<String>,
+    /// Restrict to pages at or under this slug path.
+    ///
+    /// The hierarchical reading of a slug: `notes/rust` matches the page
+    /// `notes/rust` and everything beneath it, and stops at the separator, so
+    /// `notes/rustlings` is a different directory and does not match.
+    pub prefix: Option<String>,
+    /// Restrict to pages sitting in a directory of this name, wherever it is.
+    ///
+    /// The flat reading of the same slug, and the one that behaves like a tag:
+    /// `rust` matches `notes/rust/async` and `code/rust/traits` alike.
+    pub segment: Option<String>,
     pub sort: SortBy,
     pub order: SortOrder,
     pub limit: usize,
@@ -141,6 +152,8 @@ impl Default for ListOptions {
     fn default() -> Self {
         Self {
             tag: None,
+            prefix: None,
+            segment: None,
             sort: SortBy::default(),
             order: SortOrder::default(),
             limit: 50,
@@ -217,6 +230,7 @@ impl Index {
         let slug = page.slug.to_string();
         let title = page.title();
         let tags = page.tags().to_vec();
+        let directories: Vec<String> = page.slug.directories().map(str::to_owned).collect();
         let body = page.body.clone();
         let links = crate::markdown::extract_links(&page.slug, &page.body);
         let created = to_nanos(page.created(), "created")?;
@@ -238,6 +252,20 @@ impl Index {
                     .prepare("insert or ignore into page_tags (slug, tag) values (?1, ?2)")?;
                 for tag in &tags {
                     insert.execute(params![&slug, tag])?;
+                }
+            }
+
+            // Derived from the slug, so it is rewritten here rather than
+            // anywhere a page is written: a move is an upsert under the new
+            // slug and a remove of the old, and this follows for free.
+            transaction.execute("delete from page_segments where slug = ?1", params![&slug])?;
+            {
+                let mut insert = transaction.prepare(
+                    "insert or replace into page_segments (slug, segment, depth)
+                     values (?1, ?2, ?3)",
+                )?;
+                for (depth, directory) in directories.iter().enumerate() {
+                    insert.execute(params![&slug, directory, depth as i64])?;
                 }
             }
 
@@ -277,6 +305,7 @@ impl Index {
             let transaction = connection.transaction()?;
             transaction.execute("delete from pages where slug = ?1", params![&slug])?;
             transaction.execute("delete from page_tags where slug = ?1", params![&slug])?;
+            transaction.execute("delete from page_segments where slug = ?1", params![&slug])?;
             // Outbound links go with the page. Inbound ones do not: they belong
             // to the pages that wrote them, and they become wanted links.
             transaction.execute("delete from links where src_slug = ?1", params![&slug])?;
@@ -418,6 +447,8 @@ impl Index {
     pub async fn list(&self, options: ListOptions) -> Result<PageList, IndexError> {
         let ListOptions {
             tag,
+            prefix,
+            segment,
             sort,
             order,
             limit,
@@ -425,40 +456,62 @@ impl Index {
         } = options;
 
         self.with_connection(move |connection| {
-            // A single filter expression rather than a conditional join: when
-            // `tag` binds as NULL the first branch short-circuits and every
-            // page matches, so there is one query to read instead of two.
-            const TAG_FILTER: &str = "where (?1 is null or exists (
+            // One filter expression rather than conditional joins: each clause
+            // short-circuits to "everything" when its parameter binds as NULL,
+            // so there is one query to read instead of eight. The filters
+            // intersect — asking for a tag and a path asks for both.
+            //
+            // The prefix clause compares with `substr` rather than `like`.
+            // SQLite's `like` is case-insensitive over ASCII, and slugs are
+            // case-sensitive (`Notes/x` and `notes/x` are two files on Linux);
+            // `substr` also spares the caller's prefix from having to escape
+            // `%` and `_`. Comparing against `prefix || '/'` is what stops
+            // `notes/rust` from matching `notes/rustlings`, and the equality
+            // beside it is what keeps the page `notes/rust` itself in its own
+            // listing — a page that names a directory is that directory's
+            // index, and hiding it there would be a surprise.
+            const FILTERS: &str = "where (?1 is null or exists (
                      select 1 from page_tags
                      where page_tags.slug = pages.slug and page_tags.tag = ?1
+                 ))
+                 and (?2 is null
+                      or slug = ?2
+                      or substr(slug, 1, length(?2) + 1) = ?2 || '/')
+                 and (?3 is null or exists (
+                     select 1 from page_segments
+                     where page_segments.slug = pages.slug
+                       and page_segments.segment = ?3
                  ))";
 
             let total: i64 = connection.query_row(
-                &format!("select count(*) from pages {TAG_FILTER}"),
-                params![&tag],
+                &format!("select count(*) from pages {FILTERS}"),
+                params![&tag, &prefix, &segment],
                 |row| row.get(0),
             )?;
 
             let sql = format!(
                 "select slug, title, created, updated, size
                  from pages
-                 {TAG_FILTER}
+                 {FILTERS}
                  order by {} {}, slug asc
-                 limit ?2 offset ?3",
+                 limit ?4 offset ?5",
                 sort.column(),
                 order.keyword(),
             );
             let mut statement = connection.prepare(&sql)?;
 
-            let rows = statement.query_map(params![&tag, limit as i64, offset as i64], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                ))
-            })?;
+            let rows = statement.query_map(
+                params![&tag, &prefix, &segment, limit as i64, offset as i64],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )?;
 
             let mut pending = Vec::new();
             for row in rows {
@@ -500,6 +553,7 @@ impl Index {
             let transaction = connection.transaction()?;
             transaction.execute("delete from pages", [])?;
             transaction.execute("delete from page_tags", [])?;
+            transaction.execute("delete from page_segments", [])?;
             transaction.execute("delete from links", [])?;
             transaction.execute("delete from pages_fts", [])?;
             transaction.commit()?;
@@ -880,6 +934,161 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.total, 0);
+    }
+
+    /// A wiki where the same directory name occurs in two places, which is the
+    /// only interesting case: it is what separates the two path filters.
+    async fn branching_index() -> Index {
+        let index = index().await;
+        for slug in [
+            "notes/rust",
+            "notes/rust/async",
+            "notes/rust/pinning",
+            "notes/rustlings",
+            "code/rust/traits",
+            "index",
+        ] {
+            index.upsert(&page(slug, slug, &[], "body")).await.unwrap();
+        }
+        index
+    }
+
+    async fn slugs_under(index: &Index, options: ListOptions) -> Vec<String> {
+        let list = index.list(options).await.unwrap();
+        assert_eq!(list.total, list.pages.len(), "nothing was paginated away");
+        list.pages
+            .into_iter()
+            .map(|page| page.slug.as_str().to_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn lists_filtered_by_slug_prefix() {
+        let index = branching_index().await;
+
+        // The page that names the directory is the directory's index, and
+        // belongs in its own listing. `notes/rustlings` does not: the prefix
+        // has to stop at the separator, not at the characters.
+        let under = slugs_under(
+            &index,
+            ListOptions {
+                prefix: Some("notes/rust".to_owned()),
+                ..ListOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            under,
+            ["notes/rust", "notes/rust/async", "notes/rust/pinning"]
+        );
+
+        // The prefix is hierarchical, so the other `rust` directory is a
+        // different place entirely.
+        assert!(!under.contains(&"code/rust/traits".to_owned()));
+
+        // Case-sensitively: `like` would have matched here, and slugs are two
+        // different files on a case-sensitive filesystem.
+        let shouted = slugs_under(
+            &index,
+            ListOptions {
+                prefix: Some("NOTES/RUST".to_owned()),
+                ..ListOptions::default()
+            },
+        )
+        .await;
+        assert!(shouted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn lists_filtered_by_slug_segment() {
+        let index = branching_index().await;
+
+        // Flat, like a tag: both `rust` directories answer, wherever they sit.
+        let rust = slugs_under(
+            &index,
+            ListOptions {
+                segment: Some("rust".to_owned()),
+                ..ListOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            rust,
+            ["code/rust/traits", "notes/rust/async", "notes/rust/pinning"]
+        );
+
+        // `notes/rust` is a page named `rust`, not a page inside one, so it is
+        // absent — and `notes/rustlings` was never a match to begin with.
+        assert!(!rust.contains(&"notes/rust".to_owned()));
+
+        // A page's own name is not a directory it sits in.
+        let basename = slugs_under(
+            &index,
+            ListOptions {
+                segment: Some("async".to_owned()),
+                ..ListOptions::default()
+            },
+        )
+        .await;
+        assert!(basename.is_empty());
+    }
+
+    #[tokio::test]
+    async fn path_filters_intersect_with_tags() {
+        let index = index().await;
+        index
+            .upsert(&page("notes/rust/async", "A", &["theory"], "body"))
+            .await
+            .unwrap();
+        index
+            .upsert(&page("notes/rust/pinning", "P", &[], "body"))
+            .await
+            .unwrap();
+        index
+            .upsert(&page("code/rust/traits", "T", &["theory"], "body"))
+            .await
+            .unwrap();
+
+        let both = slugs_under(
+            &index,
+            ListOptions {
+                tag: Some("theory".to_owned()),
+                segment: Some("rust".to_owned()),
+                prefix: Some("notes".to_owned()),
+                ..ListOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(both, ["notes/rust/async"]);
+    }
+
+    #[tokio::test]
+    async fn a_moved_page_leaves_its_old_directories_behind() {
+        let index = index().await;
+        index
+            .upsert(&page("notes/rust/async", "Async", &[], "body"))
+            .await
+            .unwrap();
+
+        // A move is an upsert at the new slug and a remove of the old one.
+        index
+            .upsert(&page("code/rust/async", "Async", &[], "body"))
+            .await
+            .unwrap();
+        index
+            .remove(&Slug::parse("notes/rust/async").unwrap())
+            .await
+            .unwrap();
+
+        let notes = slugs_under(
+            &index,
+            ListOptions {
+                segment: Some("notes".to_owned()),
+                ..ListOptions::default()
+            },
+        )
+        .await;
+        assert!(notes.is_empty(), "the old directory row outlived the page");
     }
 
     #[tokio::test]

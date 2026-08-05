@@ -1,6 +1,6 @@
 import { createResource, For } from 'solid-js'
 import { A } from '@solidjs/router'
-import { tags } from '../api/client'
+import { tagHref, tags } from '../api/client'
 import { Async } from '../components/Async'
 
 /** Every tag with its page count, linking into the filtered page list. */
@@ -25,10 +25,7 @@ export default function Tags() {
               }
             >
               {(tag) => (
-                <A
-                  class="badge badge-lg badge-outline gap-2"
-                  href={`/pages?tag=${encodeURIComponent(tag.tag)}`}
-                >
+                <A class="badge badge-lg badge-outline gap-2" href={tagHref(tag.tag)}>
                   {tag.tag}
                   <span class="opacity-60">{tag.pages}</span>
                 </A>

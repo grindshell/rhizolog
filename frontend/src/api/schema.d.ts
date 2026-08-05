@@ -888,6 +888,26 @@ export interface operations {
                  */
                 tag?: string;
                 /**
+                 * @description Return only pages at or under this slug path.
+                 *
+                 *     `notes/rust` matches the page `notes/rust` and everything beneath it.
+                 *     It stops at the separator, so `notes/rustlings` is a different
+                 *     directory and does not match. Matching is case-sensitive.
+                 * @example notes/rust
+                 */
+                prefix?: string;
+                /**
+                 * @description Return only pages sitting in a directory of this name, wherever in the
+                 *     wiki that directory is.
+                 *
+                 *     `rust` matches `notes/rust/async` and `code/rust/traits` alike — the
+                 *     flat reading of a slug, which is why it behaves like `tag` rather than
+                 *     like `prefix`. A page's own name is not a directory it sits in, so
+                 *     `async` does not match `notes/rust/async`.
+                 * @example rust
+                 */
+                segment?: string;
+                /**
                  * @description One of `slug`, `title`, `created`, `updated`. Defaults to `slug`.
                  * @example updated
                  */

@@ -45,10 +45,42 @@ and `.git/` out of the wiki.
 A page's slug is its path relative to the wiki root with `.md` removed, always
 with `/` separators: `notes/rust/async.md` → `notes/rust/async`.
 
-Directories are for humans. The index treats a slug as an opaque string — the
-link graph is what actually gives the wiki its shape, which is the whole point
-of the "rhizome" framing. A flat wiki is just the case where no slug contains
-a `/`.
+Directories are for humans. The link graph is what actually gives the wiki its
+shape, which is the whole point of the "rhizome" framing. A flat wiki is just
+the case where no slug contains a `/`.
+
+### A slug has two readings, and both are navigable
+
+The index used to treat a slug as an opaque string. It no longer quite does:
+the directories a page sits in are indexed, because a directory name is a
+claim about a page and the wiki already has a word for that — a tag.
+
+`notes/rust/async` can be read two ways, and both are worth following:
+
+- **Hierarchically.** The page is *under* `notes/rust`. Following that stays
+  inside this branch and finds its siblings. This is `?prefix=`.
+- **Flatly.** The page is *in a `rust` directory*. Following that leaves the
+  branch entirely and finds `code/rust/traits` too. This is `?segment=`, and it
+  behaves exactly like `?tag=` because it is the same kind of question.
+
+The second one is the one that fits the premise. A tree says `notes/rust` and
+`code/rust` are unrelated places that happen to share a name; the flat reading
+says a directory name means something wherever it is written. Keeping both is
+the honest answer — the hierarchy is real, it is just not the only structure
+present — and they stay separate controls in the UI rather than one control
+that guesses.
+
+A page's own name is not one of these. `async` in `notes/rust/async` names the
+page, not a container, so it is not indexed as a directory and does not answer
+`?segment=async`. The prefix filter does include the page that *names* a
+directory: `?prefix=notes/rust` returns `notes/rust` itself, because a page
+sitting where a directory sits is that directory's index and hiding it from its
+own listing would be a surprise.
+
+The prefix comparison stops at the separator, so `notes/rustlings` is a
+different directory from `notes/rust`. It is done with `substr` rather than
+`like`: SQLite's `like` is case-insensitive over ASCII, and slugs are
+case-sensitive.
 
 ### Slug validation is security-critical
 
@@ -172,9 +204,16 @@ Derived from the wiki, and therefore disposable:
 ```sql
 pages(slug PK, title, created, updated, size)
 page_tags(slug, tag)
+page_segments(slug, segment, depth)     -- the directories a page sits in
 links(src_slug, target, display, kind)  -- kind: wiki | internal | external
 pages_fts                               -- FTS5 over (slug unindexed, title, body)
 ```
+
+`page_segments` is redundant with the slug in `pages` and exists only to make
+"every page in a `rust` directory" an indexed lookup instead of a scan. `depth`
+is in its key rather than `segment`, because a slug may pass through the same
+name twice (`notes/rust/notes/pinning`) and position is what tells the two rows
+apart.
 
 Not derived from anything, and therefore kept:
 
