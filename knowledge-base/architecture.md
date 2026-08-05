@@ -91,6 +91,27 @@ keeps it honest and is consistent with files being the source of truth.
 `serde_yaml` is unmaintained (it is published as `0.9.34+deprecated`), so
 frontmatter uses `serde_yaml_ng`.
 
+### A UTF-8 BOM is stripped before parsing
+
+`read_to_string` keeps a byte order mark — U+FEFF is a valid character — so a
+file that starts with one does not start with `---`, and its entire frontmatter
+block gets read as body. Title, tags, and `created` vanish, and the title
+silently falls back to the humanized slug.
+
+This is not a corner case on Windows: Notepad, PowerShell's
+`Set-Content -Encoding utf8`, and any editor set to "UTF-8 with BOM" all write
+one by default. It was found by hand-editing a page against a running server —
+every test until then had built its input as a Rust string literal, where the
+problem cannot occur.
+
+Two details worth keeping:
+
+- The recorded `size` counts the BOM, because it is part of the file. Measuring
+  the stripped text instead would make every scan see a size mismatch and
+  reindex that page forever.
+- The BOM is not written back. A page that round-trips through the API comes
+  out normalised without one.
+
 ## The link graph
 
 Two link forms are extracted at index time:

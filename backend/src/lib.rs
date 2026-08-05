@@ -12,6 +12,7 @@ pub mod markdown;
 pub mod page;
 pub mod slug;
 pub mod store;
+pub mod watcher;
 
 pub use api::usage::UsageTally;
 pub use api::{AppState, router};

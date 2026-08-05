@@ -4,6 +4,7 @@ use std::time::Duration;
 use rhizowiki::api::graph::flush_usage;
 use rhizowiki::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
 use rhizowiki::index::sync;
+use rhizowiki::watcher;
 use rhizowiki::{AppState, Config, Index, Store, UsageTally};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -53,6 +54,10 @@ async fn run() -> anyhow::Result<()> {
     tracing::info!("listening on http://{address}");
     tracing::info!("API docs at http://{address}{SWAGGER_UI_PATH}");
     tracing::info!("OpenAPI at http://{address}{OPENAPI_PATH}");
+
+    // Started after the initial scan, so it only ever reports genuinely new
+    // changes rather than racing the reconciliation that just ran.
+    watcher::spawn(store.clone(), index.clone());
 
     let state = AppState {
         store,

@@ -81,6 +81,13 @@ impl Page {
         text: &str,
         updated: DateTime<Utc>,
     ) -> Result<Self, PageError> {
+        // Taken before the BOM is stripped: `text` is the file's contents
+        // verbatim, so its length is the file's length, and that is what the
+        // startup scan compares against the filesystem.
+        let size = text.len() as u64;
+
+        let text = strip_bom(text);
+
         let (frontmatter, body) = match split_frontmatter(text)? {
             Some((yaml, body)) => (parse_frontmatter(yaml)?, body),
             None => (Frontmatter::default(), text),
@@ -91,9 +98,7 @@ impl Page {
             frontmatter,
             body: body.to_owned(),
             updated,
-            // `text` is the file's contents verbatim, so its length is the
-            // file's length.
-            size: text.len() as u64,
+            size,
         })
     }
 
@@ -183,6 +188,26 @@ fn parse_frontmatter(yaml: &str) -> Result<Frontmatter, PageError> {
 fn strip_one_line_ending(text: &str) -> Option<&str> {
     text.strip_prefix("\r\n")
         .or_else(|| text.strip_prefix('\n'))
+}
+
+/// Drop a leading UTF-8 byte order mark.
+///
+/// `read_to_string` keeps the BOM — U+FEFF is a perfectly valid character — so
+/// a file saved by Notepad, by PowerShell's `Set-Content -Encoding utf8`, or by
+/// an editor set to "UTF-8 with BOM" begins with three bytes that are invisible
+/// to a person and fatal to frontmatter detection: the text no longer starts
+/// with `---`, the whole block is read as body, and the title, tags, and
+/// creation date are silently lost.
+///
+/// Development is on Windows, where writing a BOM is the *default* for several
+/// common tools, so this is the likeliest way for a hand-authored page to be
+/// misparsed — and it fails quietly, which is what makes it worth handling here
+/// rather than expecting an author to notice.
+///
+/// The BOM is not written back: a page that round-trips through the API comes
+/// out normalised without one.
+fn strip_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
 }
 
 /// The first ATX level-one heading, skipping fenced code blocks so that a `#`
@@ -289,6 +314,47 @@ mod tests {
 
         assert_eq!(parsed.frontmatter.title.as_deref(), Some("Rhizome"));
         assert_eq!(parsed.body, "\r\nBranches off.\r\n");
+    }
+
+    /// Found by hand-editing a page against a running server: PowerShell's
+    /// `Set-Content -Encoding utf8` writes a BOM, and the title came back as
+    /// the slug's basename because the frontmatter had been read as body.
+    #[test]
+    fn a_utf8_bom_does_not_hide_the_frontmatter() {
+        let parsed = page("\u{feff}---\ntitle: Rhizome\ntags: [theory]\n---\n\nBranches off.\n");
+
+        assert_eq!(parsed.frontmatter.title.as_deref(), Some("Rhizome"));
+        assert_eq!(parsed.tags(), ["theory"]);
+        assert_eq!(parsed.body, "\nBranches off.\n");
+        assert_eq!(parsed.title(), "Rhizome");
+    }
+
+    #[test]
+    fn a_utf8_bom_is_stripped_from_a_body_with_no_frontmatter() {
+        let parsed = page("\u{feff}# Heading\n\nBody.\n");
+
+        assert_eq!(parsed.body, "# Heading\n\nBody.\n");
+        assert_eq!(parsed.title(), "Heading");
+    }
+
+    /// The BOM counts toward the file's length even though it is not part of
+    /// the body — otherwise every scan would see a size mismatch and reindex
+    /// the page forever.
+    #[test]
+    fn a_bom_counts_toward_the_recorded_size() {
+        let text = "\u{feff}Body.\n";
+        assert_eq!(page(text).size, text.len() as u64);
+        assert_eq!(page(text).size, 9, "3 bytes of BOM plus 6 of body");
+    }
+
+    /// A BOM is not written back. This changes the file's bytes on the next
+    /// write, which is intended: one canonical encoding beats two.
+    #[test]
+    fn a_bom_is_not_written_back() {
+        let rendered = page("\u{feff}---\ntitle: Rhizome\n---\nBody.\n").to_markdown();
+
+        assert!(!rendered.starts_with('\u{feff}'));
+        assert_eq!(rendered, "---\ntitle: Rhizome\n---\nBody.\n");
     }
 
     #[test]
