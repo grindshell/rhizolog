@@ -146,8 +146,9 @@ impl Store {
             slug: slug.clone(),
             frontmatter,
             body: body.to_owned(),
-            // Replaced below with what the filesystem actually recorded.
+            // Both replaced below with what the filesystem actually recorded.
             updated: Utc::now(),
+            size: 0,
         };
 
         if let Some(parent) = path.parent() {
@@ -155,8 +156,12 @@ impl Store {
         }
         write_atomically(&path, page.to_markdown().as_bytes()).await?;
 
-        let updated = modified_at(&tokio::fs::metadata(&path).await?)?;
-        Ok(Page { updated, ..page })
+        let metadata = tokio::fs::metadata(&path).await?;
+        Ok(Page {
+            updated: modified_at(&metadata)?,
+            size: metadata.len(),
+            ..page
+        })
     }
 
     /// Write a page that must not already exist.

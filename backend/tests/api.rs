@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use rhizowiki::{AppState, Store};
+use rhizowiki::{AppState, Index, Store};
 use serde_json::Value;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -15,7 +15,9 @@ use tower::ServiceExt;
 async fn app() -> (TempDir, Router) {
     let directory = TempDir::new().expect("temp dir");
     let store = Store::open(directory.path()).await.expect("open store");
-    (directory, rhizowiki::router(AppState { store }))
+    // In-memory index: these tests are about the HTTP surface, not persistence.
+    let index = Index::open(None).await.expect("open index");
+    (directory, rhizowiki::router(AppState { store, index }))
 }
 
 async fn get(router: Router, path: &str) -> (StatusCode, Value) {
@@ -47,6 +49,11 @@ async fn health_reports_the_wiki_it_is_serving() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ok");
     assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["pages"], 0);
+    assert!(
+        body["last_indexed"].is_null(),
+        "nothing has been scanned yet"
+    );
 
     // The root is canonicalised internally, so compare against the canonical
     // form of the temp dir rather than the path we happened to pass in — but

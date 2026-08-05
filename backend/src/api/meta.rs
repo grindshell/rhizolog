@@ -2,10 +2,12 @@
 
 use axum::Json;
 use axum::extract::State;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::api::AppState;
+use crate::error::AppResult;
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Health {
@@ -19,9 +21,18 @@ pub struct Health {
 
     /// Absolute path of the wiki directory being served.
     pub wiki_root: String,
+
+    /// Number of pages currently indexed.
+    #[schema(example = 42)]
+    pub pages: usize,
+
+    /// When the index was last reconciled with the wiki directory. Null if it
+    /// has not been scanned yet.
+    pub last_indexed: Option<DateTime<Utc>>,
 }
 
-/// Report that the server is running, and which wiki it is serving.
+/// Report that the server is running, which wiki it is serving, and how fresh
+/// its index is.
 #[utoipa::path(
     get,
     path = "/api/health",
@@ -30,10 +41,12 @@ pub struct Health {
         (status = 200, description = "The server is running", body = Health),
     ),
 )]
-pub async fn health(State(state): State<AppState>) -> Json<Health> {
-    Json(Health {
+pub async fn health(State(state): State<AppState>) -> AppResult<Json<Health>> {
+    Ok(Json(Health {
         status: "ok".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         wiki_root: state.store.root_display(),
-    })
+        pages: state.index.count().await?,
+        last_indexed: state.index.last_sync().await?,
+    }))
 }

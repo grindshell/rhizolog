@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use utoipa::ToSchema;
 
+use crate::index::IndexError;
 use crate::page::PageError;
 use crate::slug::SlugError;
 use crate::store::StoreError;
@@ -36,6 +37,9 @@ pub enum AppError {
 
     #[error(transparent)]
     Store(#[from] StoreError),
+
+    #[error(transparent)]
+    Index(#[from] IndexError),
 
     #[error("{message}")]
     Internal { message: String },
@@ -60,7 +64,9 @@ impl AppError {
                 }
                 StoreError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
             },
-            Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            // The index is derived and rebuildable, so a failure here is the
+            // server's problem, never something the caller phrased wrong.
+            Self::Index(_) | Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -77,6 +83,7 @@ impl AppError {
                 StoreError::Malformed { .. } => "page_malformed",
                 StoreError::Io(_) => "io_error",
             },
+            Self::Index(_) => "index_error",
             Self::Internal { .. } => "internal_error",
         }
     }
@@ -99,7 +106,7 @@ impl AppError {
                 })),
                 StoreError::Io(_) => None,
             },
-            Self::Internal { .. } => None,
+            Self::Index(_) | Self::Internal { .. } => None,
         }
     }
 
@@ -110,7 +117,7 @@ impl AppError {
     /// anyway. The full error goes to the log instead.
     fn public_message(&self) -> String {
         match self {
-            Self::Store(StoreError::Io(_)) | Self::Internal { .. } => {
+            Self::Store(StoreError::Io(_)) | Self::Index(_) | Self::Internal { .. } => {
                 "the server failed to handle the request".to_owned()
             }
             other => other.to_string(),

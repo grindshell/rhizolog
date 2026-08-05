@@ -55,6 +55,14 @@ pub struct Page {
     pub body: String,
     /// The file's mtime. Not part of the file's contents.
     pub updated: DateTime<Utc>,
+    /// The file's length in bytes. Not part of the file's contents.
+    ///
+    /// This must be the length of the file as it sits on disk, not of anything
+    /// re-serialised from [`Page::to_markdown`] — the startup scan compares it
+    /// against what the walker reports, and a hand-written file whose YAML is
+    /// formatted differently to ours would otherwise look changed on every
+    /// single startup.
+    pub size: u64,
 }
 
 #[derive(Debug, Error)]
@@ -83,6 +91,9 @@ impl Page {
             frontmatter,
             body: body.to_owned(),
             updated,
+            // `text` is the file's contents verbatim, so its length is the
+            // file's length.
+            size: text.len() as u64,
         })
     }
 

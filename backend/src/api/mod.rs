@@ -14,6 +14,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::index::Index;
 use crate::store::Store;
 
 pub const OPENAPI_PATH: &str = "/api-docs/openapi.json";
@@ -21,7 +22,10 @@ pub const SWAGGER_UI_PATH: &str = "/swagger-ui";
 
 #[derive(Clone)]
 pub struct AppState {
+    /// The wiki directory: the source of truth.
     pub store: Store,
+    /// The derived index. Everything in it can be rebuilt from `store`.
+    pub index: Index,
 }
 
 #[derive(OpenApi)]

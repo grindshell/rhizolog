@@ -114,23 +114,67 @@ silently rotting. Link-rewriting on move is a post-MVP convenience.
 
 ## Index schema
 
+Built:
+
 ```sql
-pages(slug PK, title, path, created, updated, size, body_hash)
+pages(slug PK, title, created, updated, size)
 page_tags(slug, tag)
-links(src_slug, dst_slug, kind, display, resolved)
-pages_fts  -- FTS5 over (slug, title, body)
-api_usage(route, method, count)
-meta(key, value)  -- schema_version, last_full_reindex
+pages_fts  -- FTS5 over (slug unindexed, title, body)
+meta(key, value)  -- schema_version, last_sync
 ```
 
-Page bodies are stored only in the FTS5 table, not duplicated in `pages`; full
+Still to come, with the link graph and usage stats:
+
+```sql
+links(src_slug, dst_slug, kind, display, resolved)
+api_usage(route, method, count)
+```
+
+Page bodies live only in the FTS5 table, never duplicated in `pages`; full
 content always comes from disk. FTS5 is confirmed available in the bundled
 SQLite (3.53.2) that `rusqlite`'s `bundled` feature compiles, including the
 `unicode61` and `trigram` tokenizers and the `snippet()` function used to build
 search result excerpts.
 
-`api_usage` keys on axum's `MatchedPath` (the route template, e.g.
+`api_usage` will key on axum's `MatchedPath` (the route template, e.g.
 `/api/pages/{slug}`) rather than the raw URI, so cardinality stays bounded.
+
+### There are no migrations
+
+The schema carries a version number. When it changes, the index is **dropped
+and rebuilt from the wiki** rather than migrated. This is the real payoff of
+keeping files authoritative: a schema change costs one scan and no migration
+script, forever.
+
+### Timestamps are integers, and there is no content hash
+
+Timestamps are stored as nanoseconds since the Unix epoch, not as RFC 3339
+text. The scan decides whether a page changed by comparing its recorded mtime
+against the filesystem's, and integers compare exactly where a round-tripped
+string invites precision bugs.
+
+An earlier draft of this page had a `body_hash` column. It is gone: mtime and
+size already answer the only question the scan asks, and a column nothing reads
+is worse than no column. The gap — an edit that preserves both mtime and size —
+needs a tool that restores mtime plus a replacement of exactly equal length, and
+a full rebuild fixes it. Hashing every file on every startup is the worse trade.
+
+## Search behaviour
+
+Query terms are matched **literally**. Each whitespace-separated term is quoted
+before it reaches FTS5, so punctuation a user typed cannot become query syntax
+and a stray `"` cannot turn a search box into a 500. Terms combine with an
+implicit AND, and a trailing `*` still means prefix search so search-as-you-type
+stays usable.
+
+The cost is that FTS5's own operators (`OR`, `NEAR`) are unreachable. For a
+single-user wiki, a search that never errors is worth more than a query
+language; passthrough can be a flag later if it is ever missed.
+
+One implementation note worth keeping, because it is not obvious from the SQLite
+docs: FTS5's auxiliary functions (`snippet`, `bm25`) take the table's **real
+name**, not a query alias. `snippet(f, ...)` after `from pages_fts f` fails with
+"no such column: f".
 
 ## Concurrency
 

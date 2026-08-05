@@ -7,6 +7,7 @@
 pub mod api;
 pub mod config;
 pub mod error;
+pub mod index;
 pub mod page;
 pub mod slug;
 pub mod store;
@@ -14,6 +15,7 @@ pub mod store;
 pub use api::{AppState, router};
 pub use config::Config;
 pub use error::{AppError, AppResult};
+pub use index::{Index, IndexError, SyncReport};
 pub use page::{Frontmatter, Page, PageError};
 pub use slug::{Slug, SlugError};
 pub use store::{Store, StoreError};

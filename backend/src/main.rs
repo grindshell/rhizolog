@@ -1,7 +1,8 @@
 use std::process::ExitCode;
 
 use rhizowiki::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
-use rhizowiki::{AppState, Config, Store};
+use rhizowiki::index::sync;
+use rhizowiki::{AppState, Config, Index, Store};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -21,8 +22,27 @@ async fn main() -> ExitCode {
 async fn run() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let store = Store::open(&config.root).await?;
+    let index = Index::open(Some(&config.database)).await?;
 
     tracing::info!(wiki_root = %store.root_display(), "opened wiki");
+
+    // Reconcile before serving: the wiki may have been edited, or the whole
+    // index deleted, while the server was down.
+    let report = sync(&store, &index).await?;
+    tracing::info!(
+        scanned = report.scanned,
+        indexed = report.indexed,
+        unchanged = report.unchanged,
+        removed = report.removed,
+        failed = report.failed,
+        "index synchronised"
+    );
+    if report.failed > 0 {
+        tracing::warn!(
+            failed = report.failed,
+            "some pages could not be indexed; they will not appear in search"
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(config.address).await?;
     let address = listener.local_addr()?;
@@ -32,7 +52,7 @@ async fn run() -> anyhow::Result<()> {
     tracing::info!("API docs at http://{address}{SWAGGER_UI_PATH}");
     tracing::info!("OpenAPI at http://{address}{OPENAPI_PATH}");
 
-    let router = rhizowiki::router(AppState { store });
+    let router = rhizowiki::router(AppState { store, index });
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
