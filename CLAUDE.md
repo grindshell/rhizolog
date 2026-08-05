@@ -46,7 +46,7 @@ deployment.
 
 - **One repo, one `.git`.** Scaffolding tools like to create nested git repos
   (`cargo new` does; `pnpm create` templates sometimes do). If a generator
-  creates a `.git` inside `app/` or elsewhere, delete it — otherwise the root
+  creates a `.git` inside `backend/` or elsewhere, delete it — otherwise the root
   repo treats that directory as an opaque embedded repo and stops tracking
   its files. Pass `--vcs none` to `cargo new`/`cargo init` to avoid this.
 - **Main branch is `main`.** Commit directly to it or branch off it for
@@ -58,12 +58,12 @@ deployment.
   implementation approach changes, record it as a page in `knowledge-base/`
   in the same commit as the code where practical. `knowledge-base/index.md`
   is the entry point — keep it linking to every page.
-- Build artifacts never get committed: `app/target/`, `node_modules/`, and
+- Build artifacts never get committed: `backend/target/`, `node_modules/`, and
   frontend `dist/` output are gitignored at the root.
 
 ## Commands
 
-Backend (run from `app/`):
+Backend (run from `backend/`):
 
 ```
 cargo run        # start the server
@@ -72,7 +72,7 @@ cargo fmt        # format
 cargo clippy     # lint
 ```
 
-Frontend (run from `app/frontend/`, once it exists):
+Frontend (run from `frontend/`, once it exists):
 
 ```
 pnpm install     # install dependencies
