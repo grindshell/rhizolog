@@ -116,11 +116,12 @@ flushes the usage counters.
 
 *Done.* Notes on the parts that were not just typing:
 
-**`example-wiki/`** is six pages that demonstrate nested slugs, both link
+**`example-wiki/`** shipped as six pages demonstrating nested slugs, both link
 spellings, a wanted page, two orphans, and a wikilink inside a code fence that
 is not a link. Its `index.md` states what the dashboard will report about it,
 which makes the whole thing a check on the software rather than only a demo —
 and it was wrong on the first pass, because the entry page is itself an orphan.
+It has since grown to nine, for the slug path filters.
 
 **The OpenAPI examples** started at 49 fields with no description, 42 with no
 example, and 11 parameters with neither. The audit turned up something worse

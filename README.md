@@ -47,10 +47,11 @@ Then open:
 The first compile takes a while: SQLite is built from source, and Swagger UI is
 unpacked at build time.
 
-`example-wiki/` is six pages arranged to show the features off — nested slugs,
-wikilinks, a page that is linked but not written, and two orphans. Read
-[its index](example-wiki/index.md) first; it explains what the dashboard will
-say about it and why.
+`example-wiki/` is nine pages arranged to show the features off — nested slugs,
+wikilinks, a page that is linked but not written, two orphans, and the same
+directory name in two places, which is what makes the two path filters differ.
+Read [its index](example-wiki/index.md) first; it explains what the dashboard
+will say about it and why.
 
 To use your own notes instead, point `RHIZOWIKI_ROOT` at any directory of
 markdown files. Nothing needs importing.
