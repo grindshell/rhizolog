@@ -7,6 +7,7 @@ import Layout from './components/Layout'
 import Dashboard from './routes/Dashboard'
 import PagesBrowse from './routes/PagesBrowse'
 import PageDetail from './routes/PageDetail'
+import Editor from './routes/Editor'
 import Tags from './routes/Tags'
 import NotFound from './routes/NotFound'
 
@@ -25,6 +26,14 @@ render(
         the literal `/pages` route still wins for the bare listing.
       */}
       <Route path="/pages/*slug" component={PageDetail} />
+      {/*
+        Editing lives outside `/pages` for the same reason the backend's move
+        endpoint does: a splat has to be the last thing in the path, so
+        `/pages/*slug/edit` cannot be expressed, and a literal `/pages/edit`
+        would shadow any page actually slugged `edit`.
+      */}
+      <Route path="/new" component={Editor} />
+      <Route path="/edit/*slug" component={Editor} />
       <Route path="/tags" component={Tags} />
       <Route path="/*404" component={NotFound} />
     </Router>

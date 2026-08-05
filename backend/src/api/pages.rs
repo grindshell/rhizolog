@@ -54,6 +54,15 @@ pub struct PageView {
     pub slug: Slug,
     #[schema(example = "Rhizome")]
     pub title: String,
+    /// Whether `title` was derived rather than stored — from the body's first
+    /// heading, or failing that the slug.
+    ///
+    /// This is what makes read-modify-write safe. Send a derived title back and
+    /// it stops being derived: it is written into the frontmatter, and the
+    /// heading it came from can never update it again. A client editing a page
+    /// should send `null` for the title while this is true, and the editor in
+    /// the dashboard leaves its title field empty for exactly that reason.
+    pub title_derived: bool,
     pub tags: Vec<String>,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
@@ -74,12 +83,13 @@ impl PageView {
         Self {
             slug: page.slug.clone(),
             title: page.title(),
+            title_derived: !page.has_stored_title(),
             tags: page.tags().to_vec(),
             created: page.created(),
             updated: page.updated,
             size: page.size,
             content: page.body.clone(),
-            html: render.then(|| markdown::render(&page.body)),
+            html: render.then(|| markdown::render(Some(&page.slug), &page.body)),
         }
     }
 }
@@ -117,6 +127,15 @@ pub struct PageListResponse {
     pub total: usize,
     pub limit: usize,
     pub offset: usize,
+}
+
+/// Markdown rendered to HTML.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RenderedHtml {
+    /// The rendered body. Raw HTML in the source is dropped rather than passed
+    /// through, and links to pages come back as browsable `/pages/...` URLs.
+    #[schema(example = "<p>See <a href=\"/pages/notes/rhizome\">notes/rhizome</a>.</p>\n")]
+    pub html: String,
 }
 
 // ----------------------------------------------------------------- requests
@@ -176,6 +195,21 @@ where
 pub struct MovePage {
     pub from: Slug,
     pub to: Slug,
+}
+
+/// Markdown to render, with the context its links need.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RenderRequest {
+    /// Markdown body, without frontmatter.
+    pub content: String,
+    /// The slug this content is, or would be, saved at.
+    ///
+    /// It matters only for relative markdown links: `[traits](traits.md)` names
+    /// a different page depending on where it is written. Omit it and relative
+    /// links resolve from the wiki root. Wikilinks are unaffected — they are
+    /// always absolute.
+    #[serde(default)]
+    pub slug: Option<Slug>,
 }
 
 // -------------------------------------------------------------- query types
@@ -441,6 +475,34 @@ pub async fn move_page(
     state.index.upsert(&page).await?;
 
     Ok(Json(PageView::new(&page, false)))
+}
+
+/// Render markdown to HTML without storing it.
+///
+/// `GET /api/pages/{slug}?render=true` renders what is *saved*, which is no use
+/// to an editor showing an unsaved draft. This renders whatever it is handed,
+/// through the same renderer, so a preview cannot disagree with what the page
+/// will look like once written. Rendering in the client instead would mean a
+/// second markdown implementation that does not know about wikilinks, and it
+/// would be wrong in exactly the places this wiki cares about.
+///
+/// Nothing is read or written, so this is safe to call on every keystroke.
+#[utoipa::path(
+    post,
+    path = "/api/render",
+    tag = "pages",
+    request_body = RenderRequest,
+    responses(
+        (status = 200, description = "The rendered HTML", body = RenderedHtml),
+        (status = 400, description = "The request body is not valid", body = crate::error::ErrorResponse),
+    ),
+)]
+pub async fn render_markdown(
+    JsonBody(request): JsonBody<RenderRequest>,
+) -> AppResult<Json<RenderedHtml>> {
+    Ok(Json(RenderedHtml {
+        html: markdown::render(request.slug.as_ref(), &request.content),
+    }))
 }
 
 // ------------------------------------------------------------------ helpers

@@ -13,7 +13,20 @@ use comrak::{Arena, Options};
 
 use crate::slug::Slug;
 
+/// Where a rendered link to a page points.
+///
+/// This is the browsable URL, not the API one: rendered HTML is for a human
+/// reading the page, and `/api/pages/notes/a` would hand them JSON. The backend
+/// serves this route itself — the SPA fallback in [`crate::api`] is what makes
+/// it resolve — so this is a real URL on this origin rather than an assumption
+/// about some other frontend.
+pub const PAGE_URL_PREFIX: &str = "/pages/";
+
 /// Render a markdown body to HTML.
+///
+/// `source` is the slug of the page being rendered, which decides what its
+/// relative links mean. `None` renders as though the content sat at the wiki
+/// root — the right answer for previewing a draft that has no slug yet.
 ///
 /// Raw HTML in the source is **escaped, not passed through**. Rhizowiki is
 /// single-user and loopback-bound, so this is not guarding against a hostile
@@ -21,8 +34,86 @@ use crate::slug::Slug;
 /// rendering `<script>` from an indirect source into the dashboard is the kind
 /// of thing that is very hard to notice and very easy to avoid. Turning this on
 /// should be a deliberate, separate decision.
-pub fn render(markdown: &str) -> String {
-    comrak::markdown_to_html(markdown, &options())
+pub fn render(source: Option<&Slug>, markdown: &str) -> String {
+    let options = options();
+    let arena = Arena::new();
+    let root = comrak::parse_document(&arena, markdown, &options);
+
+    resolve_page_links(base_of(source), root);
+
+    let mut html = String::new();
+    comrak::format_html(root, &options, &mut html).expect("writing into a String cannot fail");
+    html
+}
+
+/// Point every link that names a page at its browsable URL.
+///
+/// comrak renders `[[notes/a]]` as `href="notes/a"`, which is *relative*: read
+/// on `/pages/notes/b` the browser resolves it to `/pages/notes/notes/a`. Every
+/// wikilink in a rendered body would land somewhere that does not exist, and it
+/// would fail differently depending on how deeply nested the page reading it
+/// was. Rewriting to a root-absolute URL is what makes rendered links work at
+/// all.
+///
+/// External links are left exactly as written.
+fn resolve_page_links<'a>(base: &str, root: &'a AstNode<'a>) {
+    for node in root.descendants() {
+        match &mut node.data.borrow_mut().value {
+            NodeValue::WikiLink(wiki) => {
+                // Wikilink targets are slugs from the wiki root, so they need
+                // no resolution — only validation and encoding.
+                if let Ok(slug) = Slug::parse(wiki.url.trim()) {
+                    wiki.url = page_url(slug.as_str());
+                }
+            }
+            NodeValue::Link(link) => {
+                if let Some((target, LinkKind::Internal)) = classify(base, &link.url) {
+                    link.url = page_url(&target);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The browsable URL for a slug.
+fn page_url(slug: &str) -> String {
+    let mut url = String::from(PAGE_URL_PREFIX);
+
+    for (index, segment) in slug.split('/').enumerate() {
+        if index > 0 {
+            url.push('/');
+        }
+        encode_segment(segment, &mut url);
+    }
+
+    url
+}
+
+/// Percent-encode one path segment.
+///
+/// Slugs may hold spaces, `#`, and `%`, none of which can go into a URL path
+/// verbatim — a `#` would turn the rest of the slug into a fragment. Only the
+/// unreserved set survives, which is a little stricter than the frontend's
+/// `encodeURIComponent` but decodes to the same string.
+fn encode_segment(segment: &str, out: &mut String) {
+    use std::fmt::Write as _;
+
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+}
+
+/// The directory a page's relative links resolve against.
+fn base_of(source: Option<&Slug>) -> &str {
+    source.and_then(Slug::parent).unwrap_or("")
 }
 
 /// Fields are set individually rather than through a struct literal because
@@ -103,6 +194,7 @@ pub struct Link {
 pub fn extract_links(source: &Slug, markdown: &str) -> Vec<Link> {
     let arena = Arena::new();
     let root = comrak::parse_document(&arena, markdown, &options());
+    let base = base_of(Some(source));
 
     let mut links: Vec<Link> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -115,7 +207,7 @@ pub fn extract_links(source: &Slug, markdown: &str) -> Vec<Link> {
                     .ok()
                     .map(|slug| build(slug.to_string(), text_of(node), LinkKind::Wiki))
             }
-            NodeValue::Link(markdown_link) => classify(source, &markdown_link.url)
+            NodeValue::Link(markdown_link) => classify(base, &markdown_link.url)
                 .map(|(target, kind)| build(target, text_of(node), kind)),
             // An image is not a link to a page.
             _ => None,
@@ -147,12 +239,17 @@ fn build(target: String, display: Option<String>, kind: LinkKind) -> Link {
 
 /// Decide what a markdown link target is, and normalise it if it is a page.
 ///
+/// `base` is the directory relative targets resolve against — the source page's
+/// parent, or `""` for a page at the wiki root. It is a plain path rather than a
+/// [`Slug`] so that rendering a draft with no slug of its own can still resolve
+/// links, without inventing a slug to stand in for one.
+///
 /// Returns `None` for things that are not page links at all: bare fragments,
 /// and internal-looking targets that cannot be normalised into a valid slug.
 /// Those are dropped rather than recorded as broken, because a "wanted page"
 /// should be something you could go and create — `../../outside-the-wiki` is
 /// not.
-fn classify(source: &Slug, url: &str) -> Option<(String, LinkKind)> {
+fn classify(base: &str, url: &str) -> Option<(String, LinkKind)> {
     let url = url.trim();
     if url.is_empty() || url.starts_with('#') {
         return None;
@@ -169,7 +266,6 @@ fn classify(source: &Slug, url: &str) -> Option<(String, LinkKind)> {
         normalize(absolute.split('/'))?
     } else {
         // Relative to the directory the source page lives in.
-        let base = source.parent().unwrap_or("");
         normalize(base.split('/').chain(path.split('/')))?
     };
 
@@ -242,9 +338,19 @@ fn text_of<'a>(node: &'a AstNode<'a>) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Render as though the content had no slug of its own.
+    fn html(markdown: &str) -> String {
+        render(None, markdown)
+    }
+
+    /// Render as a page living at `source`.
+    fn html_from(source: &str, markdown: &str) -> String {
+        render(Some(&Slug::parse(source).expect("valid slug")), markdown)
+    }
+
     #[test]
     fn renders_ordinary_markdown() {
-        let html = render("# Heading\n\nSome *emphasis* and a [link](https://example.com).\n");
+        let html = html("# Heading\n\nSome *emphasis* and a [link](https://example.com).\n");
 
         assert!(html.contains("<h1>Heading</h1>"));
         assert!(html.contains("<em>emphasis</em>"));
@@ -253,10 +359,10 @@ mod tests {
 
     #[test]
     fn renders_gfm_extensions() {
-        assert!(render("~~gone~~").contains("<del>gone</del>"));
-        assert!(render("| a | b |\n|---|---|\n| 1 | 2 |\n").contains("<table>"));
-        assert!(render("- [x] done\n").contains("checked"));
-        assert!(render("Visit https://example.com today").contains("<a href="));
+        assert!(html("~~gone~~").contains("<del>gone</del>"));
+        assert!(html("| a | b |\n|---|---|\n| 1 | 2 |\n").contains("<table>"));
+        assert!(html("- [x] done\n").contains("checked"));
+        assert!(html("Visit https://example.com today").contains("<a href="));
     }
 
     /// The whole point of leaving comrak's `unsafe_` option off.
@@ -268,7 +374,7 @@ mod tests {
     /// bug.
     #[test]
     fn raw_html_is_not_passed_through() {
-        let html = render("<script>alert('xss')</script>\n");
+        let html = html("<script>alert('xss')</script>\n");
 
         assert!(
             !html.contains("<script"),
@@ -282,7 +388,7 @@ mod tests {
 
     #[test]
     fn inline_html_is_escaped_too() {
-        let html = render("Text with <img src=x onerror=alert(1)> inline.\n");
+        let html = html("Text with <img src=x onerror=alert(1)> inline.\n");
 
         assert!(
             !html.contains("<img"),
@@ -293,7 +399,7 @@ mod tests {
     /// A javascript: URL must not survive as a clickable link.
     #[test]
     fn dangerous_link_schemes_are_neutralised() {
-        let html = render("[click me](javascript:alert(1))\n");
+        let html = html("[click me](javascript:alert(1))\n");
 
         assert!(
             !html.contains("href=\"javascript:"),
@@ -303,7 +409,80 @@ mod tests {
 
     #[test]
     fn an_empty_body_renders_to_nothing() {
-        assert_eq!(render("").trim(), "");
+        assert_eq!(html("").trim(), "");
+    }
+
+    // -------------------------------------------------- links in rendered HTML
+
+    /// The bug this rewriting exists to prevent: read on `/pages/notes/b`, a
+    /// relative `href="notes/a"` would resolve to `/pages/notes/notes/a`.
+    #[test]
+    fn rendered_page_links_are_root_absolute() {
+        let html = html_from("notes/b", "See [[notes/a]] and [traits](traits.md).\n");
+
+        assert!(html.contains(r#"href="/pages/notes/a""#), "got {html}");
+        assert!(
+            html.contains(r#"href="/pages/notes/traits""#),
+            "a relative markdown link was not resolved against the source page: {html}"
+        );
+        assert!(
+            !html.contains(r#"href="notes/a""#),
+            "a relative wikilink href survived: {html}"
+        );
+    }
+
+    /// Rendering a draft that has no slug yet must still work. Its relative
+    /// links resolve as though it sat at the wiki root.
+    #[test]
+    fn a_source_less_render_resolves_against_the_wiki_root() {
+        let html = html("See [[notes/a]] and [b](notes/b.md).\n");
+
+        assert!(html.contains(r#"href="/pages/notes/a""#), "got {html}");
+        assert!(html.contains(r#"href="/pages/notes/b""#), "got {html}");
+    }
+
+    #[test]
+    fn external_links_are_left_alone() {
+        let html = html("[site](https://example.com/a/b) and [mail](mailto:a@b.c)\n");
+
+        assert!(
+            html.contains(r#"href="https://example.com/a/b""#),
+            "got {html}"
+        );
+        assert!(html.contains(r#"href="mailto:a@b.c""#), "got {html}");
+    }
+
+    /// A `#` in a slug is legal but would truncate the URL into a fragment if
+    /// it went into the path verbatim.
+    #[test]
+    fn page_urls_percent_encode_their_segments() {
+        assert_eq!(page_url("notes/a b"), "/pages/notes/a%20b");
+        assert_eq!(page_url("notes/c#d"), "/pages/notes/c%23d");
+        assert_eq!(page_url("notes/100%"), "/pages/notes/100%25");
+        // Separators stay separators.
+        assert_eq!(page_url("a/b/c"), "/pages/a/b/c");
+        // Non-ASCII is encoded per UTF-8 byte.
+        assert_eq!(page_url("caf\u{e9}"), "/pages/caf%C3%A9");
+    }
+
+    /// A wikilink whose target is not a valid slug is not a page link, so it
+    /// must not be dressed up as one.
+    #[test]
+    fn an_invalid_wikilink_target_is_not_rewritten() {
+        let html = html("See [[../../etc/passwd]].\n");
+
+        assert!(
+            !html.contains("/pages/"),
+            "an invalid target was rewritten into a page URL: {html}"
+        );
+    }
+
+    /// Links inside code are not links, in rendered output either.
+    #[test]
+    fn wikilinks_inside_code_are_not_rewritten() {
+        let html = html("Write `[[notes/a]]` to link.\n");
+
+        assert!(!html.contains("/pages/"), "got {html}");
     }
 
     // ------------------------------------------------------------- links
@@ -456,8 +635,11 @@ mod tests {
 
     #[test]
     fn wikilinks_render_as_anchors() {
-        let html = render("See [[notes/rust/async|the notes]].\n");
-        assert!(html.contains(r#"href="notes/rust/async""#), "got {html}");
+        let html = html("See [[notes/rust/async|the notes]].\n");
+        assert!(
+            html.contains(r#"href="/pages/notes/rust/async""#),
+            "got {html}"
+        );
         assert!(html.contains("the notes"));
     }
 

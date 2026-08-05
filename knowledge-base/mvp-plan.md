@@ -90,11 +90,24 @@ Remember `--vcs none` / delete any `.git` a scaffolding tool leaves behind.
 directory — scaffold elsewhere and move the files in.)
 
 ### M7 — Authoring and dashboard
-Page editor (a `textarea` plus a debounced preview using the server's
-`?render=true` — no editor library in the MVP), search UI, tag browsing,
-backlinks panel on the page view, and the stats dashboard.
+Page editor (a `textarea` plus a debounced preview — no editor library in the
+MVP), search UI, tag browsing, backlinks panel on the page view, and the stats
+dashboard. What it became is described in [The dashboard](dashboard.md).
 
-*Done when:* a page can be written start to finish in the browser.
+*Done when:* a page can be written start to finish in the browser. It can:
+verified by writing one, following its wanted link, writing that, renaming it,
+and deleting a page, all in the browser against the real build.
+
+Two things this milestone assumed and got wrong, both now in
+[API design](api-design.md):
+
+- **The preview cannot use `?render=true`.** That renders what is *saved*, and a
+  preview exists to show what is not. `POST /api/render` was added for it.
+- **Rendered wikilinks were relative**, so every link in a rendered body pointed
+  somewhere that did not exist. Rendering now rewrites them to `/pages/<slug>`.
+
+And one bug it surfaced in the existing API: reading a page and writing it back
+silently froze a derived title. `PageView` now carries `title_derived`.
 
 ### M8 — Polish
 README with setup instructions, a seeded example wiki, `cargo clippy` clean,

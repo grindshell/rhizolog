@@ -1,7 +1,16 @@
-import { createResource, For, Show } from 'solid-js'
+import { For, Match, Show, Switch, createResource, createSignal } from 'solid-js'
 import { A, useParams } from '@solidjs/router'
-import { decodeSlug, encodeSlug, getPage, pageLinks } from '../api/client'
-import { Async } from '../components/Async'
+import {
+  ApiError,
+  decodeSlug,
+  editHref,
+  getPage,
+  pageHref,
+  pageLinks,
+} from '../api/client'
+import type { PageLinksResponse } from '../api/client'
+import { Async, ErrorNotice } from '../components/Async'
+import Markdown from '../components/Markdown'
 
 /**
  * Read one page.
@@ -11,15 +20,23 @@ import { Async } from '../components/Async'
  * top-level pages — the same trap the backend hit with `/api/pages/{*slug}`.
  *
  * `@solidjs/router` reads `location.pathname` verbatim and does not decode
- * path params, so the raw param is percent-encoded and goes through
- * `decodeSlug` before it reaches the API client.
+ * path params, so the raw param goes through `decodeSlug` before it reaches
+ * the API client.
  */
 export default function PageDetail() {
   const params = useParams<{ slug: string }>()
   const slug = () => decodeSlug(params.slug ?? '')
+  const [showSource, setShowSource] = createSignal(false)
 
-  const [page] = createResource(slug, (s) => getPage(s))
-  const [links] = createResource(slug, (s) => pageLinks(s))
+  const [page] = createResource(slug, (target) => getPage(target, { render: true }))
+  const [links] = createResource(slug, (target) => pageLinks(target))
+
+  /**
+   * A slug with no page is not an error here. Something linked to it, which is
+   * how wanted pages come into being, and the useful answer is "not yet — here
+   * is what is waiting for it".
+   */
+  const wanted = () => page.error instanceof ApiError && page.error.code === 'page_not_found'
 
   return (
     <div class="flex flex-col gap-6">
@@ -32,102 +49,206 @@ export default function PageDetail() {
         </ul>
       </div>
 
-      <Async resource={page}>
-        {(p) => (
-          <article class="card bg-base-100 shadow">
-            <div class="card-body">
-              <h1 class="card-title">{p.title}</h1>
-              <div class="flex flex-wrap gap-1">
-                <For each={p.tags}>
-                  {(tag) => (
-                    <A class="badge badge-outline" href={`/pages?tag=${encodeURIComponent(tag)}`}>
-                      {tag}
-                    </A>
-                  )}
-                </For>
-              </div>
-              <div class="text-xs opacity-60">
-                {p.size} bytes · created {p.created} · updated {p.updated}
-              </div>
-              {/*
-                Raw markdown on purpose. Rendering (and the editor) is M7;
-                the server can already do it via `?render=true`.
-              */}
-              <pre class="mt-2 max-h-[32rem] overflow-auto rounded bg-base-200 p-4 text-sm whitespace-pre-wrap">
-                {p.content}
-              </pre>
+      <Switch>
+        <Match when={page.loading}>
+          <div class="flex items-center gap-3 py-6 text-base-content/60">
+            <span class="loading loading-spinner loading-sm" />
+            Loading...
+          </div>
+        </Match>
+
+        <Match when={wanted()}>
+          <div class="card bg-base-100 shadow">
+            <div class="card-body items-start">
+              <h1 class="card-title">
+                <span class="font-mono">{slug()}</span>
+                <span class="badge badge-warning">wanted</span>
+              </h1>
+              <p class="opacity-70">
+                Nothing is written here yet. Pages linked to but never written
+                show up as wanted — the link starts working the moment the page
+                exists, with no reindex.
+              </p>
+              <A class="btn btn-primary btn-sm" href={`/new?slug=${encodeURIComponent(slug())}`}>
+                Write this page
+              </A>
             </div>
-          </article>
-        )}
-      </Async>
+          </div>
+        </Match>
+
+        <Match when={page.error}>
+          <ErrorNotice error={page.error} />
+        </Match>
+
+        <Match when={page()}>
+          {(loaded) => (
+            <article class="card bg-base-100 shadow">
+              <div class="card-body">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <h1 class="card-title text-2xl">{loaded().title}</h1>
+                  <div class="flex gap-2">
+                    <button
+                      class="btn btn-ghost btn-sm"
+                      onClick={() => setShowSource((shown) => !shown)}
+                    >
+                      {showSource() ? 'Rendered' : 'Source'}
+                    </button>
+                    <A class="btn btn-primary btn-sm" href={editHref(loaded().slug)}>
+                      Edit
+                    </A>
+                  </div>
+                </div>
+
+                <div class="flex flex-wrap gap-1">
+                  <For each={loaded().tags}>
+                    {(tag) => (
+                      <A
+                        class="badge badge-outline"
+                        href={`/pages?tag=${encodeURIComponent(tag)}`}
+                      >
+                        {tag}
+                      </A>
+                    )}
+                  </For>
+                </div>
+
+                <div class="text-xs opacity-60">
+                  <span class="font-mono">{loaded().slug}</span> · {loaded().size} bytes ·
+                  updated {formatDate(loaded().updated)}
+                </div>
+
+                <Show
+                  when={!showSource()}
+                  fallback={
+                    <pre class="mt-2 overflow-auto rounded bg-base-200 p-4 text-sm whitespace-pre-wrap">
+                      {loaded().content}
+                    </pre>
+                  }
+                >
+                  <Markdown
+                    class="prose dark:prose-invert mt-2 max-w-none"
+                    html={loaded().html ?? ''}
+                  />
+                </Show>
+              </div>
+            </article>
+          )}
+        </Match>
+      </Switch>
+
+      <Async resource={links}>{(data) => <LinkPanels links={data} />}</Async>
+    </div>
+  )
+}
+
+/**
+ * Both directions of the page's links.
+ *
+ * They come back from one endpoint because this is how they are read: what a
+ * page points at is only half of where it sits in the wiki.
+ *
+ * Each side is collapsed to one row per page. The graph legitimately holds two
+ * edges when something is linked both as `[[a]]` and as `[a](a.md)`, and the
+ * API is right to report both — but rendering the same page twice, under the
+ * same title, reads as a bug. The kinds are kept as badges so nothing is lost.
+ */
+function LinkPanels(props: { links: PageLinksResponse }) {
+  const outbound = () => collapse(props.links.outbound, (link) => link.target)
+  const inbound = () => collapse(props.links.inbound, (link) => link.slug)
+
+  return (
+    <div class="grid gap-4 sm:grid-cols-2">
+      <section class="card bg-base-100 shadow">
+        <div class="card-body">
+          <h2 class="card-title text-base">
+            Links out
+            <span class="badge badge-ghost badge-sm">{outbound().length}</span>
+          </h2>
+          <ul class="flex flex-col gap-2 text-sm">
+            <For
+              each={outbound()}
+              fallback={<li class="opacity-60">This page links nowhere.</li>}
+            >
+              {({ first: link, kinds }) => (
+                <li class="flex flex-wrap items-center gap-2">
+                  <Show
+                    when={link.kind !== 'external'}
+                    fallback={
+                      <a
+                        class="link break-all"
+                        href={link.target}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {link.display ?? link.target}
+                      </a>
+                    }
+                  >
+                    <A class="link" href={pageHref(link.target)}>
+                      {link.title ?? link.target}
+                    </A>
+                    <Show when={!link.resolved}>
+                      <span class="badge badge-warning badge-xs">wanted</span>
+                    </Show>
+                  </Show>
+                  <For each={kinds}>
+                    {(kind) => <span class="badge badge-ghost badge-xs">{kind}</span>}
+                  </For>
+                </li>
+              )}
+            </For>
+          </ul>
+        </div>
+      </section>
 
       <section class="card bg-base-100 shadow">
         <div class="card-body">
-          <h2 class="card-title text-base">Links</h2>
-          <Async resource={links}>
-            {(l) => (
-              <div class="grid gap-6 sm:grid-cols-2">
-                <div>
-                  <h3 class="mb-2 text-sm font-semibold opacity-70">
-                    Outbound ({l.outbound.length})
-                  </h3>
-                  <ul class="flex flex-col gap-1 text-sm">
-                    <For
-                      each={l.outbound}
-                      fallback={<li class="opacity-60">none</li>}
-                    >
-                      {(link) => (
-                        <li>
-                          <Show
-                            when={link.kind !== 'external'}
-                            fallback={
-                              <span class="font-mono break-all">{link.target}</span>
-                            }
-                          >
-                            <A class="link font-mono" href={`/pages/${encodeSlug(link.target)}`}>
-                              {link.target}
-                            </A>
-                          </Show>
-                          <span
-                            class="badge badge-xs ml-2"
-                            classList={{
-                              'badge-warning': !link.resolved && link.kind !== 'external',
-                            }}
-                          >
-                            {link.kind}
-                            {link.resolved || link.kind === 'external' ? '' : ' · wanted'}
-                          </span>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </div>
-                <div>
-                  <h3 class="mb-2 text-sm font-semibold opacity-70">
-                    Inbound ({l.inbound.length})
-                  </h3>
-                  <ul class="flex flex-col gap-1 text-sm">
-                    <For each={l.inbound} fallback={<li class="opacity-60">none</li>}>
-                      {(link) => (
-                        <li>
-                          <A class="link" href={`/pages/${encodeSlug(link.slug)}`}>
-                            {link.title}
-                          </A>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </div>
-                <Show when={!l.exists}>
-                  <div class="alert alert-warning sm:col-span-2">
-                    This page does not exist yet — it is a wanted page.
-                  </div>
-                </Show>
-              </div>
-            )}
-          </Async>
+          <h2 class="card-title text-base">
+            Backlinks
+            <span class="badge badge-ghost badge-sm">{inbound().length}</span>
+          </h2>
+          <ul class="flex flex-col gap-2 text-sm">
+            <For
+              each={inbound()}
+              fallback={<li class="opacity-60">Nothing links here — this page is an orphan.</li>}
+            >
+              {({ first: link }) => (
+                <li>
+                  <A class="link" href={pageHref(link.slug)}>
+                    {link.title}
+                  </A>
+                  <div class="font-mono text-xs opacity-60">{link.slug}</div>
+                </li>
+              )}
+            </For>
+          </ul>
         </div>
       </section>
     </div>
   )
+}
+
+/** One entry per distinct key, keeping every `kind` that reached it. */
+function collapse<T extends { kind: string }>(
+  links: T[],
+  key: (link: T) => string,
+): { first: T; kinds: string[] }[] {
+  const grouped = new Map<string, { first: T; kinds: string[] }>()
+
+  for (const link of links) {
+    const existing = grouped.get(key(link))
+    if (existing) {
+      if (!existing.kinds.includes(link.kind)) existing.kinds.push(link.kind)
+    } else {
+      grouped.set(key(link), { first: link, kinds: [link.kind] })
+    }
+  }
+
+  return [...grouped.values()]
+}
+
+/** Timestamps arrive as RFC 3339; show them in the reader's locale. */
+export function formatDate(value: string): string {
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }

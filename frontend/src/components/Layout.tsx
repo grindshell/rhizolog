@@ -1,11 +1,7 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { A } from '@solidjs/router'
 
-/**
- * The app shell. Deliberately thin — M7 owns the real dashboard chrome.
- * The daisyUI classes here (`navbar`, `menu`, `btn`, `badge`) are what prove
- * Tailwind + daisyUI are actually compiled into the bundle.
- */
+/** The app shell: navigation, and the width everything else is read at. */
 export default function Layout(props: RouteSectionProps) {
   return (
     <div class="min-h-screen bg-base-200">
@@ -14,9 +10,8 @@ export default function Layout(props: RouteSectionProps) {
           <A href="/" class="btn btn-ghost text-xl">
             Rhizowiki
           </A>
-          <span class="badge badge-outline badge-sm ml-2">scaffold</span>
         </div>
-        <nav class="flex-none">
+        <nav class="flex flex-none items-center gap-1">
           <ul class="menu menu-horizontal px-1">
             <li>
               <A href="/" end>
@@ -30,15 +25,22 @@ export default function Layout(props: RouteSectionProps) {
               <A href="/tags">Tags</A>
             </li>
             <li>
+              {/*
+                A plain anchor, not `A`: Swagger UI is served by the backend,
+                not by this app, so it must be a real navigation.
+              */}
               <a href="/swagger-ui" target="_blank" rel="noreferrer">
                 API docs
               </a>
             </li>
           </ul>
+          <A class="btn btn-primary btn-sm" href="/new">
+            New
+          </A>
         </nav>
       </div>
 
-      <main class="mx-auto max-w-5xl p-6">{props.children}</main>
+      <main class="mx-auto max-w-6xl p-6">{props.children}</main>
     </div>
   )
 }

@@ -15,6 +15,7 @@ storage model it sits on.
 | `PATCH` | `/api/pages/{slug}` | Partial update of title / tags / content |
 | `DELETE` | `/api/pages/{slug}` | Delete |
 | `POST` | `/api/move` | Move a page to a new slug |
+| `POST` | `/api/render` | Render markdown that has not been saved |
 | `GET` | `/api/links/{slug}` | Links in **both** directions |
 | `GET` | `/api/search` | Full-text search with snippets |
 | `GET` | `/api/tags` | All tags with page counts |
@@ -40,6 +41,51 @@ name.
 So the operation lives at `/api/move`, outside the namespace slugs occupy, and
 takes `{from, to}` rather than reading one slug from the path. `/api/reindex`
 already has the same shape.
+
+### Why `?render=true` was not enough
+
+M7's plan assumed the editor's preview could use `GET /api/pages/{slug}?render=true`.
+It cannot: that renders what is **saved**, and a preview exists precisely to show
+what is not. There is no version of it that works — previewing by saving first is
+not previewing.
+
+So `POST /api/render` takes `{content, slug?}` and returns `{html}`. It reads and
+writes nothing, so it is safe to call on every keystroke.
+
+The alternative was rendering markdown in the browser, which is worse for a
+reason specific to this project: a client-side renderer would not know about
+`[[wikilinks]]`, so the preview would be wrong in exactly the construct the wiki
+is mostly made of. One renderer means the preview cannot disagree with the page.
+
+`slug` is optional and only affects relative markdown links — `[traits](traits.md)`
+names a different page depending on where it is written. Wikilinks are absolute
+and unaffected, which is why a draft with no slug still previews correctly.
+
+### Rendered links point at `/pages/...`
+
+comrak renders `[[notes/a]]` as `href="notes/a"`, which is *relative*. Read on
+`/pages/notes/b` the browser resolves it to `/pages/notes/notes/a`, so every
+wikilink in a rendered body lands somewhere that does not exist — and fails
+differently depending on how deeply nested the page reading it was.
+
+Rendering therefore rewrites page links to root-absolute `/pages/<slug>`, which
+is why `render` needs to know the source page at all. This is the browsable URL
+rather than the API one on purpose: rendered HTML is for a human, and
+`/api/pages/notes/a` would hand them JSON. It is not an assumption about some
+other frontend — the backend serves `/pages/...` itself.
+
+### `title_derived`, or why read-modify-write was quietly lossy
+
+A page with no frontmatter `title` takes its title from the body's first heading,
+falling back to the slug. `GET` returns that resolved title, which is what a
+caller wants to display — but a client that read a page and wrote it straight
+back would send the derived value as a *stored* one. The title would freeze, and
+the heading it came from would never update it again.
+
+That is a round-trip asymmetry in an API whose whole point is being written to by
+agents, so `PageView` carries `title_derived`. When it is true, a caller writing
+the page back should send `title: null`. The dashboard's editor leaves its title
+field empty in that case and shows the derived title as the placeholder.
 
 ### One links endpoint, not two
 

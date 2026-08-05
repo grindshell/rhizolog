@@ -12,10 +12,15 @@
 - **Vite 8** + **SolidJS 1.9** — build tool and framework
 - **@solidjs/router 1** — routing
 - **TailwindCSS 4** + **daisyUI 5** — styling
+- **@tailwindcss/typography** — styles for rendered page bodies
 - **openapi-typescript 7** — generates request/response types from the API
 
 The frontend is served by the backend; there is no separate frontend
-deployment.
+deployment. What it actually does is in [The dashboard](dashboard.md).
+
+Notably absent: any markdown or editor library. The server renders, so the
+client does not need to — see the note on `POST /api/render` in
+[API design](api-design.md).
 
 ### Tailwind 4 has no config file
 
@@ -35,6 +40,11 @@ than a JS plugin array, so the whole configuration is `src/index.css`:
 
 Worth knowing before following a v3-era tutorial and concluding the install is
 broken.
+
+The typography plugin loads the same way. It is not decoration: Tailwind's
+preflight strips the browser's default styling from headings, lists, and
+blockquotes, so without it a rendered markdown page is correct HTML that reads as
+one flat wall of text.
 
 ### Slugs are a splat route here too
 

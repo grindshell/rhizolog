@@ -132,6 +132,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/render": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Render markdown to HTML without storing it.
+         * @description `GET /api/pages/{slug}?render=true` renders what is *saved*, which is no use
+         *     to an editor showing an unsaved draft. This renders whatever it is handed,
+         *     through the same renderer, so a preview cannot disagree with what the page
+         *     will look like once written. Rendering in the client instead would mean a
+         *     second markdown implementation that does not know about wikilinks, and it
+         *     would be wrong in exactly the places this wiki cares about.
+         *
+         *     Nothing is read or written, so this is safe to call on every keystroke.
+         */
+        post: operations["render_markdown"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/search": {
         parameters: {
             query?: never;
@@ -347,6 +374,17 @@ export interface components {
             tags: string[];
             /** @example Rhizome */
             title: string;
+            /**
+             * @description Whether `title` was derived rather than stored — from the body's first
+             *     heading, or failing that the slug.
+             *
+             *     This is what makes read-modify-write safe. Send a derived title back and
+             *     it stops being derived: it is written into the frontmatter, and the
+             *     heading it came from can never update it again. A client editing a page
+             *     should send `null` for the title while this is true, and the editor in
+             *     the dashboard leaves its title field empty for exactly that reason.
+             */
+            title_derived: boolean;
             /** Format: date-time */
             updated: string;
         };
@@ -369,6 +407,21 @@ export interface components {
             removed: number;
             /** @description Pages found on disk. */
             scanned: number;
+        };
+        /** @description Markdown to render, with the context its links need. */
+        RenderRequest: {
+            /** @description Markdown body, without frontmatter. */
+            content: string;
+            slug?: null | components["schemas"]["Slug"];
+        };
+        /** @description Markdown rendered to HTML. */
+        RenderedHtml: {
+            /**
+             * @description The rendered body. Raw HTML in the source is dropped rather than passed
+             *     through, and links to pages come back as browsable `/pages/...` URLs.
+             * @example <p>See <a href="/pages/notes/rhizome">notes/rhizome</a>.</p>
+             */
+            html: string;
         };
         ReplacePage: {
             content?: string;
@@ -866,6 +919,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReindexResponse"];
+                };
+            };
+        };
+    };
+    render_markdown: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenderRequest"];
+            };
+        };
+        responses: {
+            /** @description The rendered HTML */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderedHtml"];
+                };
+            };
+            /** @description The request body is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

@@ -321,6 +321,60 @@ async fn reads_a_deeply_nested_slug() {
     assert_eq!(res.body["content"], "Pinned.\n");
 }
 
+/// Reading a page and writing it straight back must not change what it means.
+///
+/// A title the server derived from the body would otherwise freeze into the
+/// frontmatter on the first save, and stop tracking the heading it came from —
+/// a trap for any read-modify-write client, the dashboard's editor included.
+#[tokio::test]
+async fn a_derived_title_says_so_and_survives_a_round_trip() {
+    let app = App::new().await;
+    app.seed(
+        "notes/rhizome",
+        json!({ "content": "# Rhizome\n\nBody.\n" }),
+    )
+    .await;
+
+    let read = app.get("/api/pages/notes/rhizome").await;
+    assert_eq!(read.body["title"], "Rhizome");
+    assert_eq!(read.body["title_derived"], true);
+
+    // Written back with a null title, it stays derived and follows the heading.
+    let put = app
+        .put(
+            "/api/pages/notes/rhizome",
+            json!({ "title": null, "content": "# Rhizomes\n\nBody.\n" }),
+        )
+        .await;
+    assert_eq!(put.body["title"], "Rhizomes");
+    assert_eq!(put.body["title_derived"], true);
+
+    // Given one, it is stored, and the heading no longer decides the title.
+    let put = app
+        .put(
+            "/api/pages/notes/rhizome",
+            json!({ "title": "Pinned", "content": "# Something else\n\nBody.\n" }),
+        )
+        .await;
+    assert_eq!(put.body["title"], "Pinned");
+    assert_eq!(put.body["title_derived"], false);
+}
+
+#[tokio::test]
+async fn an_explicit_title_is_not_reported_as_derived() {
+    let app = App::new().await;
+    app.seed(
+        "notes/rhizome",
+        json!({ "title": "Rhizome", "content": "# Other heading\n" }),
+    )
+    .await;
+
+    let res = app.get("/api/pages/notes/rhizome").await;
+
+    assert_eq!(res.body["title"], "Rhizome");
+    assert_eq!(res.body["title_derived"], false);
+}
+
 #[tokio::test]
 async fn renders_html_only_when_asked() {
     let app = App::new().await;
@@ -339,6 +393,120 @@ async fn renders_html_only_when_asked() {
     assert!(html.contains("<em>text</em>"));
     // The markdown source is still there; rendering adds, never replaces.
     assert_eq!(rendered.body["content"], "# Heading\n\nBody *text*.\n");
+}
+
+/// Rendered wikilinks have to be usable as links. A relative `href` would
+/// resolve against whatever page the reader is on, so it would break, and break
+/// differently depending on how deeply nested that page was.
+#[tokio::test]
+async fn rendered_links_point_at_browsable_urls() {
+    let app = App::new().await;
+    app.seed(
+        "notes/rust/async",
+        json!({ "content": "See [[notes/rhizome]] and [pinning](pinning.md).\n" }),
+    )
+    .await;
+
+    let res = app.get("/api/pages/notes/rust/async?render=true").await;
+    let html = res.body["html"].as_str().expect("html field");
+
+    assert!(
+        html.contains(r#"href="/pages/notes/rhizome""#),
+        "got {html}"
+    );
+    // Resolved against the page's own directory, not the wiki root.
+    assert!(
+        html.contains(r#"href="/pages/notes/rust/pinning""#),
+        "got {html}"
+    );
+}
+
+#[tokio::test]
+async fn renders_markdown_that_has_not_been_saved() {
+    let app = App::new().await;
+
+    let res = app
+        .post(
+            "/api/render",
+            json!({ "content": "# Draft\n\nSee [[notes/rhizome]].\n" }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    let html = res.body["html"].as_str().expect("html field");
+    assert!(html.contains("<h1>Draft</h1>"), "got {html}");
+    assert!(
+        html.contains(r#"href="/pages/notes/rhizome""#),
+        "got {html}"
+    );
+
+    // Nothing was stored: this is a pure function over the body.
+    assert_eq!(app.get("/api/pages").await.body["total"], 0);
+}
+
+/// The slug is what tells a relative link where it is being written from.
+#[tokio::test]
+async fn rendering_a_draft_resolves_relative_links_against_its_slug() {
+    let app = App::new().await;
+    let content = "See [traits](traits.md).\n";
+
+    let rooted = app.post("/api/render", json!({ "content": content })).await;
+    assert!(
+        rooted.body["html"]
+            .as_str()
+            .expect("html")
+            .contains(r#"href="/pages/traits""#),
+        "got {:?}",
+        rooted.body["html"]
+    );
+
+    let nested = app
+        .post(
+            "/api/render",
+            json!({ "content": content, "slug": "notes/rust/async" }),
+        )
+        .await;
+    assert!(
+        nested.body["html"]
+            .as_str()
+            .expect("html")
+            .contains(r#"href="/pages/notes/rust/traits""#),
+        "got {:?}",
+        nested.body["html"]
+    );
+}
+
+/// A preview is rendered from whatever an editor has typed, so it is exactly
+/// the path by which markup would reach the dashboard.
+#[tokio::test]
+async fn rendering_a_draft_does_not_pass_raw_html_through() {
+    let app = App::new().await;
+
+    let res = app
+        .post(
+            "/api/render",
+            json!({ "content": "<script>alert(1)</script>\n\nAnd <img src=x onerror=alert(1)>.\n" }),
+        )
+        .await;
+
+    let html = res.body["html"].as_str().expect("html field");
+    assert!(!html.contains("<script"), "got {html}");
+    assert!(!html.contains("<img"), "got {html}");
+}
+
+#[tokio::test]
+async fn rendering_rejects_a_bad_slug_in_the_envelope() {
+    let app = App::new().await;
+
+    let res = app
+        .post(
+            "/api/render",
+            json!({ "content": "x", "slug": "../escape" }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.code(), "invalid_request_body");
 }
 
 #[tokio::test]

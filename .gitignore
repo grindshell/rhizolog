@@ -5,6 +5,11 @@ target/
 node_modules/
 dist/
 
+# The development wiki. RHIZOWIKI_ROOT defaults to ./wiki, so running the
+# backend creates this — scratch content plus a derived SQLite index under
+# .rhizowiki/. None of it belongs in the repo.
+backend/wiki/
+
 # Editor / OS noise
 .DS_Store
 *.log

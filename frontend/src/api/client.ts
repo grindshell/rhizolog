@@ -26,6 +26,8 @@ export type InboundLinkView = Schemas['InboundLinkView']
 export type TagsResponse = Schemas['TagsResponse']
 export type TagCountView = Schemas['TagCountView']
 export type StatsResponse = Schemas['StatsResponse']
+export type RenderRequest = Schemas['RenderRequest']
+export type RenderedHtml = Schemas['RenderedHtml']
 export type ReindexResponse = Schemas['ReindexResponse']
 export type Health = Schemas['Health']
 export type ErrorResponse = Schemas['ErrorResponse']
@@ -90,6 +92,26 @@ export function encodeSlug(slug: string): string {
  */
 export function decodeSlug(param: string): string {
   return param.split('/').map(decodeURIComponent).join('/')
+}
+
+/**
+ * Where a page is read in the browser.
+ *
+ * The server knows this prefix too — it rewrites links inside rendered markdown
+ * to `/pages/...` so they are clickable. The two have to agree, which is why
+ * this is a named constant on both sides rather than a string scattered through
+ * the routes.
+ */
+export const PAGE_ROUTE_PREFIX = '/pages/'
+
+/** The browser URL for a page. */
+export function pageHref(slug: string): string {
+  return PAGE_ROUTE_PREFIX + encodeSlug(slug)
+}
+
+/** The browser URL for editing a page. */
+export function editHref(slug: string): string {
+  return '/edit/' + encodeSlug(slug)
 }
 
 function queryString(params: Record<string, unknown> | undefined): string {
@@ -211,6 +233,21 @@ export function deletePage(slug: string, signal?: AbortSignal): Promise<void> {
 /** `POST /api/move` — move a page to a new slug. Inbound links are left alone. */
 export function movePage(body: MovePage, signal?: AbortSignal): Promise<PageView> {
   return request<PageView>('/move', { method: 'POST', body, signal })
+}
+
+/**
+ * `POST /api/render` — render markdown that has not been saved.
+ *
+ * The editor's preview goes through here rather than through a markdown library
+ * in the browser, so that what the preview shows and what the page becomes
+ * cannot disagree. A client-side renderer would not know about wikilinks, which
+ * is most of what this wiki's pages are made of.
+ */
+export function renderMarkdown(
+  body: RenderRequest,
+  signal?: AbortSignal,
+): Promise<RenderedHtml> {
+  return request<RenderedHtml>('/render', { method: 'POST', body, signal })
 }
 
 /* --------------------------------------------------------------- search -- */

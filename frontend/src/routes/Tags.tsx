@@ -10,12 +10,19 @@ export default function Tags() {
   return (
     <div class="flex flex-col gap-4">
       <h1 class="text-2xl font-semibold">Tags</h1>
+      <p class="text-sm opacity-70">
+        Most-used first. Following one filters the page list.
+      </p>
       <Async resource={result}>
         {(data) => (
           <div class="flex flex-wrap gap-2">
             <For
               each={data.tags}
-              fallback={<div class="opacity-60">No tags in the wiki yet.</div>}
+              fallback={
+                <div class="opacity-60">
+                  No tags in the wiki yet — add some in a page's frontmatter.
+                </div>
+              }
             >
               {(tag) => (
                 <A

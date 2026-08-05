@@ -9,3 +9,19 @@
 @plugin 'daisyui' {
   themes: light --default, dark --prefersdark;
 }
+
+/*
+ * Rendered page bodies need this. Tailwind's preflight strips the browser's
+ * default styling from headings, lists, and blockquotes, so without the
+ * typography plugin a rendered markdown page reads as one flat wall of text —
+ * technically correct HTML that looks like nothing.
+ */
+@plugin '@tailwindcss/typography';
+
+/*
+ * The editor's two panes scroll together as one page rather than each carrying
+ * its own scrollbar, so a tall preview does not trap the cursor.
+ */
+.editor-pane {
+  min-height: 60vh;
+}

@@ -83,6 +83,7 @@ pub fn router(state: AppState) -> Router {
             pages::delete
         ))
         .routes(routes!(pages::move_page))
+        .routes(routes!(pages::render_markdown))
         .routes(routes!(search::search))
         .routes(routes!(search::reindex))
         .routes(routes!(graph::links))

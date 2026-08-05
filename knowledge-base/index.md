@@ -10,3 +10,4 @@ Every page should be reachable from this index.
 - [MVP plan](mvp-plan.md) — scope, milestones, dependencies, and risks
 - [Architecture](architecture.md) — storage model, page format, link graph, module layout
 - [API design](api-design.md) — endpoint surface and what makes it agent-friendly
+- [The dashboard](dashboard.md) — the admin UI: screens, the editor, and where HTML may be injected

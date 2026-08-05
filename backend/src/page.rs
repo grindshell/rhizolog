@@ -143,6 +143,17 @@ impl Page {
         humanize(self.slug.basename())
     }
 
+    /// Whether [`Page::title`] came from the frontmatter rather than being
+    /// derived from the body's first heading or the slug.
+    ///
+    /// A blank frontmatter title counts as absent, matching [`Page::title`].
+    pub fn has_stored_title(&self) -> bool {
+        self.frontmatter
+            .title
+            .as_ref()
+            .is_some_and(|title| !title.trim().is_empty())
+    }
+
     pub fn tags(&self) -> &[String] {
         &self.frontmatter.tags
     }
