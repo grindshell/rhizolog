@@ -1,12 +1,12 @@
 # Tech stack
 
-## Backend — Rust (`app/`)
+## Backend — Rust (`backend/`)
 
 - **tokio** — async executor
 - **axum** — HTTP server
 - **utoipa-axum** — OpenAPI definitions, kept in sync with the axum routes
 
-## Frontend — TypeScript (`app/frontend/`, not yet scaffolded)
+## Frontend — TypeScript (`frontend/`, not yet scaffolded)
 
 - **pnpm** — package manager
 - **SolidJS** — frontend framework

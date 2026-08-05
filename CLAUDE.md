@@ -19,20 +19,20 @@ This is a **git monorepo with a single `.git` at the root**.
 
 | Path | Purpose |
 |------|---------|
-| `app/` | The Rust backend (cargo project, crate name `rhizowiki`) |
-| `app/frontend/` | *Planned* — the TypeScript frontend, served by the backend |
+| `backend/` | The Rust backend (cargo project, crate name `rhizowiki`) |
+| `frontend/` | *Planned* — the TypeScript frontend, served by the backend |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizowiki's design and implementation |
 | `CLAUDE.md` | This file |
 
 ## Tech stack
 
-**Backend** (`app/`) — Rust, edition 2024:
+**Backend** (`backend/`) — Rust, edition 2024:
 
 - `tokio` — async executor
 - `axum` — HTTP server
 - `utoipa-axum` — OpenAPI definitions kept in sync with the axum routes
 
-**Frontend** (`app/frontend/`, not yet scaffolded) — TypeScript:
+**Frontend** (`frontend/`, not yet scaffolded) — TypeScript:
 
 - `pnpm` — package manager
 - SolidJS — frontend framework
