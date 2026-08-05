@@ -72,13 +72,19 @@ cargo fmt        # format
 cargo clippy     # lint
 ```
 
-Frontend (run from `frontend/`, once it exists):
+Frontend (run from `frontend/`):
 
 ```
 pnpm install     # install dependencies
-pnpm dev         # dev server with HMR
+pnpm dev         # dev server with HMR, proxying /api to the backend
 pnpm build       # production build (output served by the backend)
+pnpm typecheck   # tsc --noEmit
+pnpm gen:api     # regenerate API types from openapi.json
 ```
+
+`frontend/openapi.json` is dumped from a running backend
+(`curl http://127.0.0.1:3000/api-docs/openapi.json`) and is the input to
+`pnpm gen:api`. Refresh it when the API changes.
 
 ## Environment notes
 

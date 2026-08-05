@@ -41,6 +41,8 @@ impl App {
                 store,
                 index,
                 usage: rhizowiki::UsageTally::new(),
+                // API-only: the SPA fallback is covered in tests/frontend.rs.
+                assets: None,
             }),
             _directory: directory,
         }

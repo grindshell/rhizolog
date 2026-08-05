@@ -11,6 +11,7 @@ use crate::store::INTERNAL_DIR;
 pub const ENV_ROOT: &str = "RHIZOWIKI_ROOT";
 pub const ENV_DATABASE: &str = "RHIZOWIKI_DB";
 pub const ENV_ADDRESS: &str = "RHIZOWIKI_ADDR";
+pub const ENV_ASSETS: &str = "RHIZOWIKI_ASSETS";
 pub const ENV_LOG: &str = "RHIZOWIKI_LOG";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +21,12 @@ pub struct Config {
     /// The derived SQLite index. Safe to delete; it rebuilds on startup.
     pub database: PathBuf,
     pub address: SocketAddr,
+    /// The built frontend to serve.
+    ///
+    /// Missing is a normal state, not an error: during frontend development
+    /// `pnpm dev` serves the UI itself and proxies the API here, so nothing has
+    /// been built yet.
+    pub assets: PathBuf,
 }
 
 #[derive(Debug, Error)]
@@ -52,10 +59,17 @@ impl Config {
             Err(_) => SocketAddr::from(([127, 0, 0, 1], 3000)),
         };
 
+        let assets = env::var_os(ENV_ASSETS)
+            .map(PathBuf::from)
+            // Relative to the repository root, which is where `cargo run` is
+            // usually invoked from via `backend/`.
+            .unwrap_or_else(|| PathBuf::from("../frontend/dist"));
+
         Ok(Self {
             root,
             database,
             address,
+            assets,
         })
     }
 }

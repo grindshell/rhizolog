@@ -86,6 +86,8 @@ already the contract, so this is close to free and keeps the two halves honest.
 `pnpm build` + `cargo run` serves the same UI from the Rust binary alone.
 
 Remember `--vcs none` / delete any `.git` a scaffolding tool leaves behind.
+(`pnpm create vite` did not create one, but it does refuse a non-empty target
+directory — scaffold elsewhere and move the files in.)
 
 ### M7 — Authoring and dashboard
 Page editor (a `textarea` plus a debounced preview using the server's

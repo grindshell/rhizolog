@@ -1,0 +1,11 @@
+/*
+ * Tailwind v4 wiring: one CSS import, no `tailwind.config.js`, no PostCSS
+ * config. `@tailwindcss/vite` in `vite.config.ts` does the work, and content
+ * detection is automatic. daisyUI 5 loads through Tailwind's `@plugin`
+ * directive rather than a JS plugin array.
+ */
+@import 'tailwindcss';
+
+@plugin 'daisyui' {
+  themes: light --default, dark --prefersdark;
+}

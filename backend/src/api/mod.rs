@@ -12,8 +12,17 @@ pub mod pages;
 pub mod search;
 pub mod usage;
 
+use std::path::PathBuf;
+
 use axum::Router;
+use axum::extract::Request;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::any;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
+
+use crate::error::AppError;
 use utoipa::OpenApi;
 use utoipa::openapi::OpenApi as OpenApiDocument;
 use utoipa_axum::router::OpenApiRouter;
@@ -34,6 +43,8 @@ pub struct AppState {
     pub index: Index,
     /// API calls since the last flush to the index.
     pub usage: usage::UsageTally,
+    /// The built frontend, if there is one to serve.
+    pub assets: Option<PathBuf>,
 }
 
 #[derive(OpenApi)]
@@ -81,6 +92,20 @@ pub fn router(state: AppState) -> Router {
 
     normalize_wildcard_paths(&mut api);
 
+    // Registered explicitly rather than left to the fallback: with the SPA
+    // mounted as the fallback, an unmatched `/api` path would otherwise be
+    // answered with `index.html` and a 200. A catch-all route claims those
+    // first, and static segments still beat it, so the real endpoints are
+    // unaffected.
+    let router = router
+        .route("/api", any(missing_route))
+        .route("/api/{*rest}", any(missing_route));
+
+    let router = match &state.assets {
+        Some(assets) => router.fallback_service(spa(assets)),
+        None => router.fallback(missing_route),
+    };
+
     router
         .merge(SwaggerUi::new(SWAGGER_UI_PATH).url(OPENAPI_PATH, api))
         // Counting sits inside the trace layer so it sees the matched route,
@@ -91,6 +116,47 @@ pub fn router(state: AppState) -> Router {
         ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Serve the built frontend, falling back to `index.html`.
+///
+/// The fallback is what makes deep links work. `/pages/notes/rust/async` is a
+/// client-side route with no file behind it, so without this a hard refresh or
+/// a pasted link would 404 — the page would only ever be reachable by
+/// navigating to it from inside the app.
+///
+/// `ServeDir` still wins for anything that does exist, so real assets are not
+/// shadowed by the fallback.
+fn spa(assets: &std::path::Path) -> ServeDir<ServeFile> {
+    ServeDir::new(assets).fallback(ServeFile::new(assets.join("index.html")))
+}
+
+/// Answer a request that matched no route.
+///
+/// An agent that mistypes an endpoint should get the error envelope with a code
+/// it can act on, not a page of HTML that happens to be a 200.
+async fn missing_route(request: Request) -> Response {
+    let path = request.uri().path();
+
+    if is_api_path(path) {
+        return AppError::RouteNotFound {
+            path: path.to_owned(),
+        }
+        .into_response();
+    }
+
+    // A browser route, but there is no frontend built to serve it.
+    (
+        StatusCode::NOT_FOUND,
+        "No frontend has been built. Run `pnpm build` in frontend/, or set \
+         RHIZOWIKI_ASSETS to a built directory. The API is unaffected and is \
+         available under /api.",
+    )
+        .into_response()
+}
+
+fn is_api_path(path: &str) -> bool {
+    path == "/api" || path.starts_with("/api/")
 }
 
 /// Rewrite `{*slug}` to `{slug}` in the published OpenAPI paths.

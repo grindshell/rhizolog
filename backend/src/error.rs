@@ -51,6 +51,13 @@ pub enum AppError {
     #[error("invalid request body: {message}")]
     InvalidRequestBody { message: String, kind: &'static str },
 
+    /// No route matched an `/api` path.
+    ///
+    /// axum's own 404 has an empty body, which would make unknown routes the
+    /// one failure that does not arrive in the envelope the spec promises.
+    #[error("no API route at {path}")]
+    RouteNotFound { path: String },
+
     #[error("unknown field(s): {}", .unknown.join(", "))]
     UnknownFields {
         unknown: Vec<String>,
@@ -87,6 +94,7 @@ impl AppError {
                 }
                 StoreError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
             },
+            Self::RouteNotFound { .. } => StatusCode::NOT_FOUND,
             Self::InvalidRequestBody { .. }
             | Self::UnknownFields { .. }
             | Self::InvalidParameter { .. } => StatusCode::BAD_REQUEST,
@@ -110,6 +118,7 @@ impl AppError {
                 StoreError::Io(_) => "io_error",
             },
             Self::Index(_) => "index_error",
+            Self::RouteNotFound { .. } => "route_not_found",
             Self::InvalidRequestBody { .. } => "invalid_request_body",
             Self::UnknownFields { .. } => "unknown_fields",
             Self::InvalidParameter { .. } => "invalid_parameter",
@@ -135,6 +144,7 @@ impl AppError {
                 })),
                 StoreError::Io(_) => None,
             },
+            Self::RouteNotFound { path } => Some(json!({ "path": path })),
             Self::InvalidRequestBody { kind, .. } => Some(json!({ "kind": kind })),
             // Both of these name what was accepted, not just what was refused:
             // a caller that guessed a field or a sort key wrong can correct

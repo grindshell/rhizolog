@@ -59,10 +59,27 @@ async fn run() -> anyhow::Result<()> {
     // changes rather than racing the reconciliation that just ran.
     watcher::spawn(store.clone(), index.clone());
 
+    // A missing build is normal during frontend development, when `pnpm dev`
+    // serves the UI itself and proxies the API here.
+    let assets = match tokio::fs::try_exists(&config.assets).await {
+        Ok(true) => {
+            tracing::info!(path = %config.assets.display(), "serving the built frontend");
+            Some(config.assets.clone())
+        }
+        _ => {
+            tracing::info!(
+                path = %config.assets.display(),
+                "no frontend build found; serving the API only"
+            );
+            None
+        }
+    };
+
     let state = AppState {
         store,
         index,
         usage: UsageTally::new(),
+        assets,
     };
 
     let flusher = tokio::spawn(flush_usage_periodically(state.clone()));
