@@ -174,6 +174,19 @@ agent the spec *is* the manual — and it is also the easiest thing to let rot.
 Route registration goes through `utoipa-axum`'s `OpenApiRouter` so a handler
 cannot be added without appearing in the spec.
 
+Three things keep it honest:
+
+- **A doc comment is not always a description.** utoipa publishes doc comments,
+  and some of them are written for maintainers. `Slug`'s explained
+  `Slug::parse` and linked to it in rustdoc — meaningless on the wire, where
+  there is no crate to resolve the link against. Those types set `description`
+  explicitly, and a test fails if a rustdoc intra-doc link reaches the document.
+- **Every example describes the same page**, and that page exists in
+  `example-wiki/`, so the document can be read against a running server.
+- **The documented HTML is asserted against the renderer.** An example that has
+  quietly stopped being true is worse than none, because a reader cannot tell
+  which ones still hold.
+
 ## Verified dependency set
 
 Resolved together against a single `axum 0.8.9` with no duplicate `axum-core`:

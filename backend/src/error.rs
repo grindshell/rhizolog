@@ -183,6 +183,8 @@ impl AppError {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorResponse {
+    /// Every failure has this shape, whatever the status. Branch on
+    /// `error.code`.
     pub error: ErrorDetail,
 }
 
@@ -196,8 +198,11 @@ pub struct ErrorDetail {
     #[schema(example = "no page at notes/asnyc")]
     pub message: String,
 
-    /// Context for correcting the request, when there is any.
+    /// Context for correcting the request, when there is any. Where something
+    /// was refused for being outside a fixed set, this names the values that
+    /// would have worked.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = json!({ "slug": "notes/asnyc" }))]
     pub details: Option<Value>,
 }
 

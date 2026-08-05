@@ -24,6 +24,8 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
+// `#[schema(example = json!(...))]` needs no import: utoipa re-emits the macro
+// fully qualified.
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
@@ -48,11 +50,42 @@ const MAX_LIMIT: usize = 500;
 
 // ---------------------------------------------------------------- responses
 
+/// Every example in this document describes the same page.
+///
+/// A spec whose schemas each invent a different page is harder to read than one
+/// that tells a single story, and for an agent the examples are most of what the
+/// document teaches. This page exists in `example-wiki/`, so the document can be
+/// followed against a running server rather than only imagined.
+///
+/// These are functions rather than constants because `#[schema(example = path)]`
+/// means "call this", not "use this value" — a `const` there is a compile error
+/// that reads as though the type is wrong.
+fn example_title() -> &'static str {
+    "Async in Rust"
+}
+
+fn example_body() -> &'static str {
+    "# Async in Rust\n\nFutures are lazy. See [[notes/rust/pinning]].\n"
+}
+
+/// What [`example_body`] renders to. A unit test below keeps the two in step, so
+/// the document cannot promise output the renderer does not produce.
+///
+/// The `data-wikilink` attribute is comrak's, not ours. It is worth leaving in
+/// the example: it is the only thing in the output that distinguishes a
+/// `[[wikilink]]` from an ordinary markdown link to the same page.
+fn example_html() -> &'static str {
+    "<h1>Async in Rust</h1>\n<p>Futures are lazy. See \
+     <a href=\"/pages/notes/rust/pinning\" data-wikilink=\"true\">notes/rust/pinning</a>.</p>\n"
+}
+
 /// A page and its content.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PageView {
     pub slug: Slug,
-    #[schema(example = "Rhizome")]
+    /// The page's effective title: its frontmatter `title`, or failing that the
+    /// body's first heading, or failing that the slug.
+    #[schema(example = example_title)]
     pub title: String,
     /// Whether `title` was derived rather than stored — from the body's first
     /// heading, or failing that the slug.
@@ -63,18 +96,30 @@ pub struct PageView {
     /// should send `null` for the title while this is true, and the editor in
     /// the dashboard leaves its title field empty for exactly that reason.
     pub title_derived: bool,
+    /// The page's tags, in the order the frontmatter lists them.
+    #[schema(example = json!(["rust", "async"]))]
     pub tags: Vec<String>,
+    /// When the page was first written. Falls back to the file's mtime for
+    /// pages written by hand, which never carried the field.
     pub created: DateTime<Utc>,
+    /// The file's modification time.
     pub updated: DateTime<Utc>,
     /// Size of the page's file on disk, in bytes.
+    #[schema(example = 312)]
     pub size: u64,
     /// The page body as markdown, without its frontmatter. Title and tags are
     /// returned as fields above rather than left in the text, so an editor
     /// never has to reserialise YAML to change one of them.
+    #[schema(example = example_body)]
     pub content: String,
     /// The body rendered to HTML. Present only when `render=true` was asked
-    /// for. Raw HTML in the source is escaped, never passed through.
+    /// for.
+    ///
+    /// Raw HTML in the source is dropped rather than passed through — the
+    /// markup does not appear in the output at all, escaped or otherwise. Links
+    /// to pages come back as browsable `/pages/...` URLs.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = example_html)]
     pub html: Option<String>,
 }
 
@@ -98,10 +143,19 @@ impl PageView {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PageSummary {
     pub slug: Slug,
+    /// The page's effective title: its frontmatter `title`, or failing that the
+    /// body's first heading, or failing that the slug.
+    #[schema(example = example_title)]
     pub title: String,
+    /// The page's tags, in the order the frontmatter lists them.
+    #[schema(example = json!(["rust", "async"]))]
     pub tags: Vec<String>,
+    /// When the page was first written, falling back to the file's mtime.
     pub created: DateTime<Utc>,
+    /// The file's modification time.
     pub updated: DateTime<Utc>,
+    /// Size of the page's file on disk, in bytes.
+    #[schema(example = 312)]
     pub size: u64,
 }
 
@@ -124,8 +178,13 @@ pub struct PageListResponse {
     /// carries only the requested subset of these keys.
     pub pages: Vec<PageSummary>,
     /// Total matching pages, not the number returned.
+    #[schema(example = 128)]
     pub total: usize,
+    /// The limit that was applied, after clamping.
+    #[schema(example = 50)]
     pub limit: usize,
+    /// The offset that was applied.
+    #[schema(example = 0)]
     pub offset: usize,
 }
 
@@ -134,7 +193,7 @@ pub struct PageListResponse {
 pub struct RenderedHtml {
     /// The rendered body. Raw HTML in the source is dropped rather than passed
     /// through, and links to pages come back as browsable `/pages/...` URLs.
-    #[schema(example = "<p>See <a href=\"/pages/notes/rhizome\">notes/rhizome</a>.</p>\n")]
+    #[schema(example = example_html)]
     pub html: String,
 }
 
@@ -142,25 +201,39 @@ pub struct RenderedHtml {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreatePage {
+    /// Where the page will live. `409` if something is already there.
     pub slug: Slug,
     /// Optional. Without it the title falls back to the body's first heading,
     /// then to the slug.
     #[serde(default)]
+    #[schema(example = example_title)]
     pub title: Option<String>,
+    /// Free-form; tags are whatever you have used elsewhere. `GET /api/tags`
+    /// lists the ones already in play.
     #[serde(default)]
+    #[schema(example = json!(["rust", "async"]))]
     pub tags: Vec<String>,
     /// Markdown body, without frontmatter.
     #[serde(default)]
+    #[schema(example = example_body)]
     pub content: String,
 }
 
+/// A whole page. Every field is replaced, including the ones left out.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ReplacePage {
+    /// Send `null` to let the title follow the body's first heading. Sending a
+    /// title the server derived is what freezes it — see `title_derived`.
     #[serde(default)]
+    #[schema(example = example_title)]
     pub title: Option<String>,
+    /// Omitting this clears the page's tags. Use `PATCH` to leave them alone.
     #[serde(default)]
+    #[schema(example = json!(["rust", "async"]))]
     pub tags: Vec<String>,
+    /// Markdown body, without frontmatter. Omitting this empties the page.
     #[serde(default)]
+    #[schema(example = example_body)]
     pub content: String,
 }
 
@@ -170,11 +243,15 @@ pub struct PatchPage {
     /// Omit to leave the title unchanged; send `null` to clear it and fall
     /// back to the heading or slug.
     #[serde(default, deserialize_with = "present_or_absent")]
-    #[schema(value_type = Option<String>)]
+    #[schema(value_type = Option<String>, example = example_title)]
     pub title: Option<Option<String>>,
+    /// Replaces the whole tag list when present.
     #[serde(default)]
+    #[schema(example = json!(["rust", "async"]))]
     pub tags: Option<Vec<String>>,
+    /// Replaces the whole body when present.
     #[serde(default)]
+    #[schema(example = example_body)]
     pub content: Option<String>,
 }
 
@@ -193,7 +270,11 @@ where
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct MovePage {
+    /// The page to move. `404` if there is nothing there.
+    #[schema(example = "notes/rust/async")]
     pub from: Slug,
+    /// Where it goes. `409` if that slug is taken.
+    #[schema(example = "notes/rust/futures")]
     pub to: Slug,
 }
 
@@ -201,6 +282,7 @@ pub struct MovePage {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RenderRequest {
     /// Markdown body, without frontmatter.
+    #[schema(example = example_body)]
     pub content: String,
     /// The slug this content is, or would be, saved at.
     ///
@@ -217,8 +299,10 @@ pub struct RenderRequest {
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ReadQuery {
-    /// Also return the body rendered to HTML, in an `html` field.
+    /// Also return the body rendered to HTML, in an `html` field. The markdown
+    /// is still returned either way.
     #[serde(default)]
+    #[param(example = true)]
     pub render: bool,
 }
 
@@ -226,16 +310,24 @@ pub struct ReadQuery {
 #[into_params(parameter_in = Query)]
 pub struct ListQuery {
     /// Return only pages carrying this tag.
+    #[param(example = "rust")]
     pub tag: Option<String>,
     /// One of `slug`, `title`, `created`, `updated`. Defaults to `slug`.
+    #[param(example = "updated")]
     pub sort: Option<String>,
     /// `asc` or `desc`. Defaults to `asc`.
+    #[param(example = "desc")]
     pub order: Option<String>,
     /// Comma-separated subset of the summary fields to return, for cheap
-    /// listings — for example `slug,title,tags`.
+    /// listings. Naming an unknown field is refused, and the error lists the
+    /// ones that would have worked.
+    #[param(example = "slug,title,tags")]
     pub fields: Option<String>,
     /// Defaults to 50, capped at 500.
+    #[param(example = 50)]
     pub limit: Option<usize>,
+    /// How many matches to skip. Pair it with `total` in the response.
+    #[param(example = 0)]
     pub offset: Option<usize>,
 }
 
@@ -603,6 +695,19 @@ fn project(value: &mut Value, fields: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The document promises this output, so the renderer had better produce it.
+    /// Examples that quietly stop being true are worse than no examples: a
+    /// reader has no way to tell which ones still hold.
+    #[test]
+    fn the_documented_html_is_what_the_renderer_produces() {
+        let slug = Slug::parse("notes/rust/async").expect("valid slug");
+
+        assert_eq!(
+            markdown::render(Some(&slug), example_body()),
+            example_html()
+        );
+    }
 
     #[test]
     fn sort_and_order_accept_their_keys() {

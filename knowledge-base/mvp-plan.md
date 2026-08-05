@@ -114,6 +114,33 @@ README with setup instructions, a seeded example wiki, `cargo clippy` clean,
 consistent examples throughout the OpenAPI doc, and graceful shutdown that
 flushes the usage counters.
 
+*Done.* Notes on the parts that were not just typing:
+
+**`example-wiki/`** is six pages that demonstrate nested slugs, both link
+spellings, a wanted page, two orphans, and a wikilink inside a code fence that
+is not a link. Its `index.md` states what the dashboard will report about it,
+which makes the whole thing a check on the software rather than only a demo —
+and it was wrong on the first pass, because the entry page is itself an orphan.
+
+**The OpenAPI examples** started at 49 fields with no description, 42 with no
+example, and 11 parameters with neither. The audit turned up something worse
+than an absence: the `Slug` schema was publishing its Rust doc comment, which
+talks about `Slug::parse` and carries a rustdoc link — a dead reference to a
+reader who has no crate to resolve it against. Schemas whose doc comments are
+aimed at maintainers now set `description` explicitly, and a test fails if a
+rustdoc link reaches the document.
+
+Examples now all describe one page, which exists in `example-wiki/`, so the
+document can be followed against a running server. A unit test asserts the
+documented HTML is what the renderer actually produces — it caught the example
+being wrong immediately, because comrak marks wikilink anchors with
+`data-wikilink="true"` and the hand-written example did not.
+
+**Shutdown flushing** was already written but never tested. Usage counts are the
+only thing in the index not derivable from the markdown, so a rebuild cannot
+restore them; there is now a test that drives requests, flushes, reopens the
+database, and asserts the counts survived.
+
 ## Dependencies
 
 All verified to resolve together on the current index.

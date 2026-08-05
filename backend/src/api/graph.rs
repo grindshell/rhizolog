@@ -17,8 +17,10 @@ use crate::slug::Slug;
 #[derive(Debug, Serialize, ToSchema)]
 pub struct OutboundLinkView {
     /// A slug for `wiki` and `internal` links, a URL for `external` ones.
+    #[schema(example = "notes/rust/pinning")]
     pub target: String,
     /// The link's text, when it says something other than the target.
+    #[schema(example = "why pinning exists")]
     pub display: Option<String>,
     /// `wiki` (`[[slug]]`), `internal` (a markdown link to a page), or
     /// `external`.
@@ -28,6 +30,7 @@ pub struct OutboundLinkView {
     /// error — it is a wanted page.
     pub resolved: bool,
     /// Title of the target page, when it exists.
+    #[schema(example = "Pinning")]
     pub title: Option<String>,
 }
 
@@ -35,17 +38,26 @@ pub struct OutboundLinkView {
 pub struct InboundLinkView {
     /// The page that links here.
     pub slug: Slug,
+    /// Its title.
+    #[schema(example = "Async in Rust")]
     pub title: String,
+    /// What the link says, when that differs from the target.
+    #[schema(example = "the async notes")]
     pub display: Option<String>,
+    /// `wiki` or `internal`. A page cannot be reached by an external link.
+    #[schema(example = "wiki")]
     pub kind: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PageLinksResponse {
+    /// The slug that was asked about.
     pub slug: Slug,
     /// Whether the page itself exists. Links can point at pages that do not.
     pub exists: bool,
+    /// Links this page makes, in document order, deduplicated per kind.
     pub outbound: Vec<OutboundLinkView>,
+    /// Pages that link here — the backlinks.
     pub inbound: Vec<InboundLinkView>,
 }
 
@@ -105,8 +117,11 @@ pub async fn links(
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct TagCountView {
+    /// The tag, exactly as pages spell it. Tags are not normalised.
+    #[schema(example = "rust")]
     pub tag: String,
     /// How many pages carry this tag.
+    #[schema(example = 4)]
     pub pages: usize,
 }
 
@@ -140,31 +155,45 @@ pub async fn tags(State(state): State<AppState>) -> AppResult<Json<TagsResponse>
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LinkTotalsView {
     /// Links pointing at pages, whether or not those pages exist.
+    #[schema(example = 9)]
     pub internal: usize,
+    /// Links leaving the wiki.
+    #[schema(example = 2)]
     pub external: usize,
     /// Internal links whose target exists.
+    #[schema(example = 8)]
     pub resolved: usize,
     /// Internal links whose target has not been written yet.
+    #[schema(example = 1)]
     pub wanted: usize,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WantedPageView {
     /// The slug that is linked to but does not exist.
+    #[schema(example = "notes/rust/streams")]
     pub slug: String,
+    /// How many pages link to it — how badly it is wanted.
+    #[schema(example = 2)]
     pub referrers: usize,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LinkedPageView {
     pub slug: Slug,
+    /// The page's effective title.
+    #[schema(example = "Async in Rust")]
     pub title: String,
+    /// How many pages link to it.
+    #[schema(example = 3)]
     pub referrers: usize,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PageRefView {
     pub slug: Slug,
+    /// The page's effective title.
+    #[schema(example = "Async in Rust")]
     pub title: String,
 }
 
@@ -173,20 +202,32 @@ pub struct RouteUsageView {
     /// The route template, as the OpenAPI document spells it.
     #[schema(example = "/api/pages/{slug}")]
     pub route: String,
+    /// The HTTP method, uppercase.
+    #[schema(example = "GET")]
     pub method: String,
+    /// Calls since the wiki was created. Counts survive restarts; they live in
+    /// the durable half of the index, not the rebuildable half.
+    #[schema(example = 412)]
     pub count: u64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct StatsResponse {
+    /// Pages in the index.
+    #[schema(example = 6)]
     pub pages: usize,
+    /// Distinct tags across every page.
+    #[schema(example = 4)]
     pub tags: usize,
+    /// Link counts, split by where they point.
     pub links: LinkTotalsView,
     /// Pages nothing links to.
+    #[schema(example = 1)]
     pub orphan_count: usize,
     /// A sample of them, capped.
     pub orphans: Vec<PageRefView>,
     /// Distinct slugs that are linked to but do not exist.
+    #[schema(example = 1)]
     pub wanted_count: usize,
     /// The most-referenced of them, capped.
     pub wanted: Vec<WantedPageView>,

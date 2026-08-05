@@ -20,9 +20,15 @@ This is a **git monorepo with a single `.git` at the root**.
 | Path | Purpose |
 |------|---------|
 | `backend/` | The Rust backend (cargo project, crate name `rhizowiki`) |
-| `frontend/` | *Planned* — the TypeScript frontend, served by the backend |
+| `frontend/` | The TypeScript frontend, served by the backend |
+| `example-wiki/` | A small committed wiki to run against; its `index.md` states what the dashboard should report about it |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizowiki's design and implementation |
+| `README.md` | Setup and usage, for people who are not this file |
 | `CLAUDE.md` | This file |
+
+`backend/wiki/` is the default `RHIZOWIKI_ROOT` and is gitignored, as is
+`.rhizowiki/` anywhere. Do not develop against `example-wiki/` — it is a
+fixture, and changing it changes what the docs claim.
 
 ## Tech stack
 
@@ -91,3 +97,15 @@ pnpm gen:api     # regenerate API types from openapi.json
 - Development happens on Windows; the shell is PowerShell. Avoid bash-isms
   in any scripts or documented commands (`&&` chaining doesn't work in
   Windows PowerShell 5.1 — use `;`).
+- **Never edit a source file by round-tripping it through the shell.**
+  `(Get-Content f -Raw) -replace ... | Set-Content f -Encoding utf8` looks
+  harmless and corrupts the file twice over: 5.1's `Get-Content` decodes as the
+  system ANSI codepage, so every non-ASCII character comes back as mojibake
+  (`—` becomes `â€”`), and `-Encoding utf8` writes a BOM. This codebase uses
+  em-dashes in prose throughout, and a BOM has already caused one real bug —
+  it hid a page's frontmatter, since the text no longer started with `---`.
+  Use the editing tools. If a bulk edit is genuinely necessary, go through
+  `[System.IO.File]::ReadAllText` / `WriteAllText` with
+  `UTF8Encoding($false)`, and check the result for a BOM and for `â€`.
+- Stop the server before `cargo build`: a running `rhizowiki.exe` is locked,
+  and the build fails with "Access is denied" rather than anything informative.

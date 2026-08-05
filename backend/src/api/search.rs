@@ -19,33 +19,51 @@ pub struct SearchQuery {
     /// Terms to search for. Matched literally and combined with AND; a
     /// trailing `*` on a term searches by prefix. Punctuation is safe to
     /// include — it is never interpreted as query syntax.
-    #[param(example = "rhizome branch*")]
+    #[param(example = "futures lazy*")]
     pub q: String,
     /// Defaults to 20, capped at 100.
+    #[param(example = 20)]
     pub limit: Option<usize>,
+    /// How many matches to skip. Pair it with `total` in the response.
+    #[param(example = 0)]
     pub offset: Option<usize>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SearchHitView {
     pub slug: Slug,
+    /// The page's effective title.
+    #[schema(example = "Async in Rust")]
     pub title: String,
+    /// Its tags, so a caller can filter results without fetching each page.
+    #[schema(example = json!(["rust", "async"]))]
     pub tags: Vec<String>,
     /// An excerpt of the body with matched terms wrapped in `<mark>`. This is
     /// here so a caller can judge which hits are worth fetching without
     /// pulling every body.
-    #[schema(example = "knowledge branches off <mark>chaotically</mark>")]
+    ///
+    /// Only the marks are markup: the text around them is the page body
+    /// verbatim and is **not** escaped, so a client rendering this as HTML
+    /// would be rendering whatever the page contains.
+    #[schema(example = "Futures are <mark>lazy</mark>. See")]
     pub snippet: String,
     /// Relevance. Higher is better; comparable only within one result set.
+    #[schema(example = 1.87)]
     pub score: f64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResponse {
+    /// Best first.
     pub hits: Vec<SearchHitView>,
     /// Total matches, not the number returned.
+    #[schema(example = 3)]
     pub total: usize,
+    /// The limit that was applied, after clamping.
+    #[schema(example = 20)]
     pub limit: usize,
+    /// The offset that was applied.
+    #[schema(example = 0)]
     pub offset: usize,
 }
 
@@ -89,12 +107,16 @@ pub async fn search(
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReindexResponse {
     /// Pages found on disk.
+    #[schema(example = 6)]
     pub scanned: usize,
     /// Pages read and written to the index.
+    #[schema(example = 6)]
     pub indexed: usize,
     /// Pages dropped because they are no longer on disk.
+    #[schema(example = 0)]
     pub removed: usize,
     /// Pages on disk that could not be read, and so are not searchable.
+    #[schema(example = 0)]
     pub failed: usize,
 }
 

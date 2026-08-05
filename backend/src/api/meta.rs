@@ -20,6 +20,7 @@ pub struct Health {
     pub version: String,
 
     /// Absolute path of the wiki directory being served.
+    #[schema(example = "/home/tim/wiki")]
     pub wiki_root: String,
 
     /// Number of pages currently indexed.

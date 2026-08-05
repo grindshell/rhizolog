@@ -220,13 +220,28 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         CreatePage: {
-            /** @description Markdown body, without frontmatter. */
+            /**
+             * @description Markdown body, without frontmatter.
+             * @example # Async in Rust
+             *
+             *     Futures are lazy. See [[notes/rust/pinning]].
+             */
             content?: string;
+            /** @description Where the page will live. `409` if something is already there. */
             slug: components["schemas"]["Slug"];
+            /**
+             * @description Free-form; tags are whatever you have used elsewhere. `GET /api/tags`
+             *     lists the ones already in play.
+             * @example [
+             *       "rust",
+             *       "async"
+             *     ]
+             */
             tags?: string[];
             /**
              * @description Optional. Without it the title falls back to the body's first heading,
              *     then to the slug.
+             * @example Async in Rust
              */
             title?: string | null;
         };
@@ -236,7 +251,11 @@ export interface components {
              * @example page_not_found
              */
             code: string;
-            /** @description Context for correcting the request, when there is any. */
+            /**
+             * @description Context for correcting the request, when there is any. Where something
+             *     was refused for being outside a fixed set, this names the values that
+             *     would have worked.
+             */
             details?: unknown;
             /**
              * @description Human-readable explanation. Prose; do not branch on it.
@@ -245,6 +264,10 @@ export interface components {
             message: string;
         };
         ErrorResponse: {
+            /**
+             * @description Every failure has this shape, whatever the status. Branch on
+             *     `error.code`.
+             */
             error: components["schemas"]["ErrorDetail"];
         };
         Health: {
@@ -269,36 +292,77 @@ export interface components {
              * @example 0.1.0
              */
             version: string;
-            /** @description Absolute path of the wiki directory being served. */
+            /**
+             * @description Absolute path of the wiki directory being served.
+             * @example /home/tim/wiki
+             */
             wiki_root: string;
         };
         InboundLinkView: {
+            /**
+             * @description What the link says, when that differs from the target.
+             * @example the async notes
+             */
             display?: string | null;
+            /**
+             * @description `wiki` or `internal`. A page cannot be reached by an external link.
+             * @example wiki
+             */
             kind: string;
             /** @description The page that links here. */
             slug: components["schemas"]["Slug"];
+            /**
+             * @description Its title.
+             * @example Async in Rust
+             */
             title: string;
         };
         LinkTotalsView: {
+            /**
+             * @description Links leaving the wiki.
+             * @example 2
+             */
             external: number;
-            /** @description Links pointing at pages, whether or not those pages exist. */
+            /**
+             * @description Links pointing at pages, whether or not those pages exist.
+             * @example 9
+             */
             internal: number;
-            /** @description Internal links whose target exists. */
+            /**
+             * @description Internal links whose target exists.
+             * @example 8
+             */
             resolved: number;
-            /** @description Internal links whose target has not been written yet. */
+            /**
+             * @description Internal links whose target has not been written yet.
+             * @example 1
+             */
             wanted: number;
         };
         LinkedPageView: {
+            /**
+             * @description How many pages link to it.
+             * @example 3
+             */
             referrers: number;
             slug: components["schemas"]["Slug"];
+            /**
+             * @description The page's effective title.
+             * @example Async in Rust
+             */
             title: string;
         };
         MovePage: {
+            /** @description The page to move. `404` if there is nothing there. */
             from: components["schemas"]["Slug"];
+            /** @description Where it goes. `409` if that slug is taken. */
             to: components["schemas"]["Slug"];
         };
         OutboundLinkView: {
-            /** @description The link's text, when it says something other than the target. */
+            /**
+             * @description The link's text, when it says something other than the target.
+             * @example why pinning exists
+             */
             display?: string | null;
             /**
              * @description `wiki` (`[[slug]]`), `internal` (a markdown link to a page), or
@@ -311,43 +375,89 @@ export interface components {
              *     error — it is a wanted page.
              */
             resolved: boolean;
-            /** @description A slug for `wiki` and `internal` links, a URL for `external` ones. */
+            /**
+             * @description A slug for `wiki` and `internal` links, a URL for `external` ones.
+             * @example notes/rust/pinning
+             */
             target: string;
-            /** @description Title of the target page, when it exists. */
+            /**
+             * @description Title of the target page, when it exists.
+             * @example Pinning
+             */
             title?: string | null;
         };
         PageLinksResponse: {
             /** @description Whether the page itself exists. Links can point at pages that do not. */
             exists: boolean;
+            /** @description Pages that link here — the backlinks. */
             inbound: components["schemas"]["InboundLinkView"][];
+            /** @description Links this page makes, in document order, deduplicated per kind. */
             outbound: components["schemas"]["OutboundLinkView"][];
+            /** @description The slug that was asked about. */
             slug: components["schemas"]["Slug"];
         };
         PageListResponse: {
+            /**
+             * @description The limit that was applied, after clamping.
+             * @example 50
+             */
             limit: number;
+            /**
+             * @description The offset that was applied.
+             * @example 0
+             */
             offset: number;
             /**
              * @description Bodies are never included here. When `fields` is given, each entry
              *     carries only the requested subset of these keys.
              */
             pages: components["schemas"]["PageSummary"][];
-            /** @description Total matching pages, not the number returned. */
+            /**
+             * @description Total matching pages, not the number returned.
+             * @example 128
+             */
             total: number;
         };
         PageRefView: {
             slug: components["schemas"]["Slug"];
+            /**
+             * @description The page's effective title.
+             * @example Async in Rust
+             */
             title: string;
         };
         /** @description A page without its content. */
         PageSummary: {
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description When the page was first written, falling back to the file's mtime.
+             */
             created: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Size of the page's file on disk, in bytes.
+             * @example 312
+             */
             size: number;
             slug: components["schemas"]["Slug"];
+            /**
+             * @description The page's tags, in the order the frontmatter lists them.
+             * @example [
+             *       "rust",
+             *       "async"
+             *     ]
+             */
             tags: string[];
+            /**
+             * @description The page's effective title: its frontmatter `title`, or failing that the
+             *     body's first heading, or failing that the slug.
+             * @example Async in Rust
+             */
             title: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description The file's modification time.
+             */
             updated: string;
         };
         /** @description A page and its content. */
@@ -356,23 +466,48 @@ export interface components {
              * @description The page body as markdown, without its frontmatter. Title and tags are
              *     returned as fields above rather than left in the text, so an editor
              *     never has to reserialise YAML to change one of them.
+             * @example # Async in Rust
+             *
+             *     Futures are lazy. See [[notes/rust/pinning]].
              */
             content: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description When the page was first written. Falls back to the file's mtime for
+             *     pages written by hand, which never carried the field.
+             */
             created: string;
             /**
              * @description The body rendered to HTML. Present only when `render=true` was asked
-             *     for. Raw HTML in the source is escaped, never passed through.
+             *     for.
+             *
+             *     Raw HTML in the source is dropped rather than passed through — the
+             *     markup does not appear in the output at all, escaped or otherwise. Links
+             *     to pages come back as browsable `/pages/...` URLs.
+             * @example <h1>Async in Rust</h1>
+             *     <p>Futures are lazy. See <a href="/pages/notes/rust/pinning" data-wikilink="true">notes/rust/pinning</a>.</p>
              */
             html?: string | null;
             /**
              * Format: int64
              * @description Size of the page's file on disk, in bytes.
+             * @example 312
              */
             size: number;
             slug: components["schemas"]["Slug"];
+            /**
+             * @description The page's tags, in the order the frontmatter lists them.
+             * @example [
+             *       "rust",
+             *       "async"
+             *     ]
+             */
             tags: string[];
-            /** @example Rhizome */
+            /**
+             * @description The page's effective title: its frontmatter `title`, or failing that the
+             *     body's first heading, or failing that the slug.
+             * @example Async in Rust
+             */
             title: string;
             /**
              * @description Whether `title` was derived rather than stored — from the body's first
@@ -385,32 +520,66 @@ export interface components {
              *     the dashboard leaves its title field empty for exactly that reason.
              */
             title_derived: boolean;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description The file's modification time.
+             */
             updated: string;
         };
         /** @description A partial update. Omitted fields are left alone. */
         PatchPage: {
+            /**
+             * @description Replaces the whole body when present.
+             * @example # Async in Rust
+             *
+             *     Futures are lazy. See [[notes/rust/pinning]].
+             */
             content?: string | null;
+            /**
+             * @description Replaces the whole tag list when present.
+             * @example [
+             *       "rust",
+             *       "async"
+             *     ]
+             */
             tags?: string[] | null;
             /**
              * @description Omit to leave the title unchanged; send `null` to clear it and fall
              *     back to the heading or slug.
+             * @example Async in Rust
              */
             title?: string | null;
         };
         ReindexResponse: {
-            /** @description Pages on disk that could not be read, and so are not searchable. */
+            /**
+             * @description Pages on disk that could not be read, and so are not searchable.
+             * @example 0
+             */
             failed: number;
-            /** @description Pages read and written to the index. */
+            /**
+             * @description Pages read and written to the index.
+             * @example 6
+             */
             indexed: number;
-            /** @description Pages dropped because they are no longer on disk. */
+            /**
+             * @description Pages dropped because they are no longer on disk.
+             * @example 0
+             */
             removed: number;
-            /** @description Pages found on disk. */
+            /**
+             * @description Pages found on disk.
+             * @example 6
+             */
             scanned: number;
         };
         /** @description Markdown to render, with the context its links need. */
         RenderRequest: {
-            /** @description Markdown body, without frontmatter. */
+            /**
+             * @description Markdown body, without frontmatter.
+             * @example # Async in Rust
+             *
+             *     Futures are lazy. See [[notes/rust/pinning]].
+             */
             content: string;
             slug?: null | components["schemas"]["Slug"];
         };
@@ -419,18 +588,47 @@ export interface components {
             /**
              * @description The rendered body. Raw HTML in the source is dropped rather than passed
              *     through, and links to pages come back as browsable `/pages/...` URLs.
-             * @example <p>See <a href="/pages/notes/rhizome">notes/rhizome</a>.</p>
+             * @example <h1>Async in Rust</h1>
+             *     <p>Futures are lazy. See <a href="/pages/notes/rust/pinning" data-wikilink="true">notes/rust/pinning</a>.</p>
              */
             html: string;
         };
+        /** @description A whole page. Every field is replaced, including the ones left out. */
         ReplacePage: {
+            /**
+             * @description Markdown body, without frontmatter. Omitting this empties the page.
+             * @example # Async in Rust
+             *
+             *     Futures are lazy. See [[notes/rust/pinning]].
+             */
             content?: string;
+            /**
+             * @description Omitting this clears the page's tags. Use `PATCH` to leave them alone.
+             * @example [
+             *       "rust",
+             *       "async"
+             *     ]
+             */
             tags?: string[];
+            /**
+             * @description Send `null` to let the title follow the body's first heading. Sending a
+             *     title the server derived is what freezes it — see `title_derived`.
+             * @example Async in Rust
+             */
             title?: string | null;
         };
         RouteUsageView: {
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Calls since the wiki was created. Counts survive restarts; they live in
+             *     the durable half of the index, not the rebuildable half.
+             * @example 412
+             */
             count: number;
+            /**
+             * @description The HTTP method, uppercase.
+             * @example GET
+             */
             method: string;
             /**
              * @description The route template, as the OpenAPI document spells it.
@@ -442,6 +640,7 @@ export interface components {
             /**
              * Format: double
              * @description Relevance. Higher is better; comparable only within one result set.
+             * @example 1.87
              */
             score: number;
             slug: components["schemas"]["Slug"];
@@ -449,24 +648,52 @@ export interface components {
              * @description An excerpt of the body with matched terms wrapped in `<mark>`. This is
              *     here so a caller can judge which hits are worth fetching without
              *     pulling every body.
-             * @example knowledge branches off <mark>chaotically</mark>
+             *
+             *     Only the marks are markup: the text around them is the page body
+             *     verbatim and is **not** escaped, so a client rendering this as HTML
+             *     would be rendering whatever the page contains.
+             * @example Futures are <mark>lazy</mark>. See
              */
             snippet: string;
+            /**
+             * @description Its tags, so a caller can filter results without fetching each page.
+             * @example [
+             *       "rust",
+             *       "async"
+             *     ]
+             */
             tags: string[];
+            /**
+             * @description The page's effective title.
+             * @example Async in Rust
+             */
             title: string;
         };
         SearchResponse: {
+            /** @description Best first. */
             hits: components["schemas"]["SearchHitView"][];
+            /**
+             * @description The limit that was applied, after clamping.
+             * @example 20
+             */
             limit: number;
+            /**
+             * @description The offset that was applied.
+             * @example 0
+             */
             offset: number;
-            /** @description Total matches, not the number returned. */
+            /**
+             * @description Total matches, not the number returned.
+             * @example 3
+             */
             total: number;
         };
         /**
-         * @description A validated page identifier.
+         * @description A page's identifier: its path under the wiki root, `/`-separated, without the `.md` extension. `notes/rust/async.md` is `notes/rust/async`.
          *
-         *     The only way to construct one is [`Slug::parse`], so holding a `Slug` is
-         *     proof that the invariants below hold.
+         *     Slugs must not begin or end with `/`, contain an empty segment, `.`, `..`, a backslash, or any of `< > : " | ? *`. No segment may begin or end with a dot or whitespace, or be a reserved Windows device name such as `CON` or `LPT1` — a wiki written on one operating system stays valid on the other.
+         *
+         *     A rejected slug comes back as a `400` whose `details.rule` names which of these was broken.
          * @example notes/rust/async
          */
         Slug: string;
@@ -478,25 +705,47 @@ export interface components {
              * @description When the index was last reconciled with the wiki directory.
              */
             last_indexed?: string | null;
+            /** @description Link counts, split by where they point. */
             links: components["schemas"]["LinkTotalsView"];
             /** @description The most-linked-to pages, capped. */
             most_linked: components["schemas"]["LinkedPageView"][];
-            /** @description Pages nothing links to. */
+            /**
+             * @description Pages nothing links to.
+             * @example 1
+             */
             orphan_count: number;
             /** @description A sample of them, capped. */
             orphans: components["schemas"]["PageRefView"][];
+            /**
+             * @description Pages in the index.
+             * @example 6
+             */
             pages: number;
             /** @description Every tag, most-used first. */
             tag_counts: components["schemas"]["TagCountView"][];
+            /**
+             * @description Distinct tags across every page.
+             * @example 4
+             */
             tags: number;
             /** @description The most-referenced of them, capped. */
             wanted: components["schemas"]["WantedPageView"][];
-            /** @description Distinct slugs that are linked to but do not exist. */
+            /**
+             * @description Distinct slugs that are linked to but do not exist.
+             * @example 1
+             */
             wanted_count: number;
         };
         TagCountView: {
-            /** @description How many pages carry this tag. */
+            /**
+             * @description How many pages carry this tag.
+             * @example 4
+             */
             pages: number;
+            /**
+             * @description The tag, exactly as pages spell it. Tags are not normalised.
+             * @example rust
+             */
             tag: string;
         };
         TagsResponse: {
@@ -504,8 +753,15 @@ export interface components {
             tags: components["schemas"]["TagCountView"][];
         };
         WantedPageView: {
+            /**
+             * @description How many pages link to it — how badly it is wanted.
+             * @example 2
+             */
             referrers: number;
-            /** @description The slug that is linked to but does not exist. */
+            /**
+             * @description The slug that is linked to but does not exist.
+             * @example notes/rust/streams
+             */
             slug: string;
         };
     };
@@ -626,19 +882,37 @@ export interface operations {
     list: {
         parameters: {
             query?: {
-                /** @description Return only pages carrying this tag. */
+                /**
+                 * @description Return only pages carrying this tag.
+                 * @example rust
+                 */
                 tag?: string;
-                /** @description One of `slug`, `title`, `created`, `updated`. Defaults to `slug`. */
+                /**
+                 * @description One of `slug`, `title`, `created`, `updated`. Defaults to `slug`.
+                 * @example updated
+                 */
                 sort?: string;
-                /** @description `asc` or `desc`. Defaults to `asc`. */
+                /**
+                 * @description `asc` or `desc`. Defaults to `asc`.
+                 * @example desc
+                 */
                 order?: string;
                 /**
                  * @description Comma-separated subset of the summary fields to return, for cheap
-                 *     listings — for example `slug,title,tags`.
+                 *     listings. Naming an unknown field is refused, and the error lists the
+                 *     ones that would have worked.
+                 * @example slug,title,tags
                  */
                 fields?: string;
-                /** @description Defaults to 50, capped at 500. */
+                /**
+                 * @description Defaults to 50, capped at 500.
+                 * @example 50
+                 */
                 limit?: number;
+                /**
+                 * @description How many matches to skip. Pair it with `total` in the response.
+                 * @example 0
+                 */
                 offset?: number;
             };
             header?: never;
@@ -712,7 +986,11 @@ export interface operations {
     read: {
         parameters: {
             query?: {
-                /** @description Also return the body rendered to HTML, in an `html` field. */
+                /**
+                 * @description Also return the body rendered to HTML, in an `html` field. The markdown
+                 *     is still returned either way.
+                 * @example true
+                 */
                 render?: boolean;
             };
             header?: never;
@@ -963,11 +1241,18 @@ export interface operations {
                  * @description Terms to search for. Matched literally and combined with AND; a
                  *     trailing `*` on a term searches by prefix. Punctuation is safe to
                  *     include — it is never interpreted as query syntax.
-                 * @example rhizome branch*
+                 * @example futures lazy*
                  */
                 q: string;
-                /** @description Defaults to 20, capped at 100. */
+                /**
+                 * @description Defaults to 20, capped at 100.
+                 * @example 20
+                 */
                 limit?: number;
+                /**
+                 * @description How many matches to skip. Pair it with `total` in the response.
+                 * @example 0
+                 */
                 offset?: number;
             };
             header?: never;

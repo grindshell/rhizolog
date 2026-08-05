@@ -144,6 +144,74 @@ async fn unknown_routes_are_404() {
     assert_eq!(app.get("/api/nonsense").await.status, StatusCode::NOT_FOUND);
 }
 
+/// Usage counts are the one thing in the index that is *not* derived from the
+/// markdown beside it, so a rebuild cannot restore them. They live in the
+/// durable half of the schema, and shutdown flushes the in-memory tally into it
+/// — this is that round trip, minus the signal handler.
+#[tokio::test]
+async fn usage_counts_survive_a_restart() {
+    let wiki = TempDir::new().expect("wiki dir");
+    // Beside the wiki rather than inside it, so nothing here depends on how the
+    // page walker treats a stray file.
+    let state_dir = TempDir::new().expect("state dir");
+    let database = state_dir.path().join("index.db");
+
+    let health_calls = |body: &Value| -> u64 {
+        body["api_usage"]
+            .as_array()
+            .expect("api_usage")
+            .iter()
+            .find(|entry| entry["route"] == "/api/health")
+            .map(|entry| entry["count"].as_u64().expect("count"))
+            .unwrap_or(0)
+    };
+
+    // First run.
+    {
+        let store = Store::open(wiki.path()).await.expect("open store");
+        let index = Index::open(Some(&database)).await.expect("open index");
+        let usage = rhizowiki::UsageTally::new();
+        let app = App {
+            router: rhizowiki::router(AppState {
+                store,
+                index: index.clone(),
+                usage: usage.clone(),
+                assets: None,
+            }),
+            _directory: wiki,
+        };
+
+        for _ in 0..3 {
+            assert_eq!(app.get("/api/health").await.status, StatusCode::OK);
+        }
+        // Counted before anything is written: the tally is read back live.
+        assert_eq!(health_calls(&app.get("/api/stats").await.body), 3);
+
+        // What shutdown does.
+        rhizowiki::api::graph::flush_usage(&index, &usage).await;
+    }
+
+    // Second run, same database, a tally that has never seen a request.
+    let wiki = TempDir::new().expect("wiki dir");
+    let store = Store::open(wiki.path()).await.expect("open store");
+    let index = Index::open(Some(&database)).await.expect("reopen index");
+    let app = App {
+        router: rhizowiki::router(AppState {
+            store,
+            index,
+            usage: rhizowiki::UsageTally::new(),
+            assets: None,
+        }),
+        _directory: wiki,
+    };
+
+    assert_eq!(
+        health_calls(&app.get("/api/stats").await.body),
+        3,
+        "usage counts did not survive the restart"
+    );
+}
+
 // -------------------------------------------------------------- openapi
 
 #[tokio::test]
@@ -180,6 +248,60 @@ async fn every_api_route_is_documented() {
             assert!(
                 operation["description"].is_string() || operation["summary"].is_string(),
                 "{method} {path} has no description"
+            );
+        }
+    }
+}
+
+/// Doc comments are written for people reading the source. Some of them talk
+/// about Rust types and link to other items, and a rustdoc link on the wire is a
+/// dead reference — the reader has no crate to resolve it against. Where that
+/// happens the schema has to carry an explicit `description` instead.
+#[tokio::test]
+async fn schema_descriptions_do_not_leak_rustdoc_links() {
+    let app = App::new().await;
+
+    let spec = app.get("/api-docs/openapi.json").await.body;
+    let schemas = spec["components"]["schemas"]
+        .as_object()
+        .expect("spec has schemas");
+
+    for (name, schema) in schemas {
+        let rendered = schema.to_string();
+        assert!(
+            !rendered.contains("[`"),
+            "the {name} schema publishes a rustdoc link: {rendered}"
+        );
+    }
+}
+
+/// For a tool-using agent the examples are most of what the document teaches, so
+/// a field that carries none is a field it has to guess at.
+#[tokio::test]
+async fn the_page_schemas_carry_examples() {
+    let app = App::new().await;
+
+    let spec = app.get("/api-docs/openapi.json").await.body;
+    let schemas = &spec["components"]["schemas"];
+
+    for name in ["PageView", "PageSummary", "CreatePage", "SearchHitView"] {
+        let properties = schemas[name]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{name} has no properties"));
+
+        for (field, property) in properties {
+            // A `$ref` takes its example from the schema it points at, and
+            // booleans and timestamps are self-describing.
+            if property.get("$ref").is_some()
+                || property.get("oneOf").is_some()
+                || property["type"] == "boolean"
+                || property.get("format").is_some()
+            {
+                continue;
+            }
+            assert!(
+                property.get("example").is_some(),
+                "{name}.{field} has no example"
             );
         }
     }

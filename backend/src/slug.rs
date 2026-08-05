@@ -45,8 +45,26 @@ const FORBIDDEN_CHARS: [char; 7] = ['<', '>', ':', '"', '|', '?', '*'];
 ///
 /// The only way to construct one is [`Slug::parse`], so holding a `Slug` is
 /// proof that the invariants below hold.
+/// The `description` is set explicitly rather than taken from the doc comment
+/// above. That comment is for people reading this file — it talks about
+/// `Slug::parse` and about holding the type — and none of it means anything to
+/// somebody reading the OpenAPI document, where a rustdoc link is just a dead
+/// reference. What a caller needs is the format and the rules.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, ToSchema)]
-#[schema(value_type = String, example = "notes/rust/async")]
+#[schema(
+    value_type = String,
+    example = "notes/rust/async",
+    description = "A page's identifier: its path under the wiki root, `/`-separated, \
+                   without the `.md` extension. `notes/rust/async.md` is \
+                   `notes/rust/async`.\n\n\
+                   Slugs must not begin or end with `/`, contain an empty segment, \
+                   `.`, `..`, a backslash, or any of `< > : \" | ? *`. No segment may \
+                   begin or end with a dot or whitespace, or be a reserved Windows \
+                   device name such as `CON` or `LPT1` — a wiki written on one \
+                   operating system stays valid on the other.\n\n\
+                   A rejected slug comes back as a `400` whose `details.rule` names \
+                   which of these was broken."
+)]
 pub struct Slug(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
