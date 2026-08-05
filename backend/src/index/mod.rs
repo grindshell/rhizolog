@@ -62,6 +62,88 @@ pub struct SearchResults {
     pub total: usize,
 }
 
+/// A page's metadata, without its body. This is what listing returns — keeping
+/// content out is what makes a whole-wiki listing a reasonable first call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageRecord {
+    pub slug: Slug,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PageList {
+    pub pages: Vec<PageRecord>,
+    /// Total matching pages, not just the ones on this page of results.
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SortBy {
+    #[default]
+    Slug,
+    Title,
+    Created,
+    Updated,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SortOrder {
+    #[default]
+    Ascending,
+    Descending,
+}
+
+impl SortBy {
+    /// The column to sort on.
+    ///
+    /// A column name cannot be a bound parameter, so it is interpolated into
+    /// the SQL. Going through this enum is what keeps that safe: the only
+    /// strings that can reach the query are the four below.
+    fn column(self) -> &'static str {
+        match self {
+            Self::Slug => "slug",
+            Self::Title => "title",
+            Self::Created => "created",
+            Self::Updated => "updated",
+        }
+    }
+}
+
+impl SortOrder {
+    fn keyword(self) -> &'static str {
+        match self {
+            Self::Ascending => "asc",
+            Self::Descending => "desc",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ListOptions {
+    /// Restrict to pages carrying this tag.
+    pub tag: Option<String>,
+    pub sort: SortBy,
+    pub order: SortOrder,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+impl Default for ListOptions {
+    fn default() -> Self {
+        Self {
+            tag: None,
+            sort: SortBy::default(),
+            order: SortOrder::default(),
+            limit: 50,
+            offset: 0,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Index {
     connection: Arc<Mutex<Connection>>,
@@ -301,6 +383,86 @@ impl Index {
 
             Ok(SearchResults {
                 hits,
+                total: total as usize,
+            })
+        })
+        .await
+    }
+
+    /// List pages, newest-first by default, without their bodies.
+    pub async fn list(&self, options: ListOptions) -> Result<PageList, IndexError> {
+        let ListOptions {
+            tag,
+            sort,
+            order,
+            limit,
+            offset,
+        } = options;
+
+        self.with_connection(move |connection| {
+            // A single filter expression rather than a conditional join: when
+            // `tag` binds as NULL the first branch short-circuits and every
+            // page matches, so there is one query to read instead of two.
+            const TAG_FILTER: &str = "where (?1 is null or exists (
+                     select 1 from page_tags
+                     where page_tags.slug = pages.slug and page_tags.tag = ?1
+                 ))";
+
+            let total: i64 = connection.query_row(
+                &format!("select count(*) from pages {TAG_FILTER}"),
+                params![&tag],
+                |row| row.get(0),
+            )?;
+
+            let sql = format!(
+                "select slug, title, created, updated, size
+                 from pages
+                 {TAG_FILTER}
+                 order by {} {}, slug asc
+                 limit ?2 offset ?3",
+                sort.column(),
+                order.keyword(),
+            );
+            let mut statement = connection.prepare(&sql)?;
+
+            let rows = statement.query_map(params![&tag, limit as i64, offset as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?;
+
+            let mut pending = Vec::new();
+            for row in rows {
+                let (slug, title, created, updated, size) = row?;
+                let Ok(slug) = Slug::parse(&slug) else {
+                    continue;
+                };
+                pending.push((slug, title, created, updated, size));
+            }
+
+            let mut tags_of =
+                connection.prepare("select tag from page_tags where slug = ?1 order by tag")?;
+            let mut pages = Vec::with_capacity(pending.len());
+            for (slug, title, created, updated, size) in pending {
+                let tags = tags_of
+                    .query_map(params![slug.as_str()], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                pages.push(PageRecord {
+                    slug,
+                    title,
+                    tags,
+                    created: from_nanos(created),
+                    updated: from_nanos(updated),
+                    size: size as u64,
+                });
+            }
+
+            Ok(PageList {
+                pages,
                 total: total as usize,
             })
         })
@@ -632,6 +794,102 @@ mod tests {
         let stamp = stamps.get(&page.slug).expect("page is stamped");
         assert_eq!(stamp.updated, page.updated);
         assert_eq!(stamp.size, 4242);
+    }
+
+    #[tokio::test]
+    async fn lists_pages_without_their_bodies() {
+        let index = index().await;
+        index
+            .upsert(&page("notes/rhizome", "Rhizome", &["theory"], "Long body."))
+            .await
+            .unwrap();
+
+        let list = index.list(ListOptions::default()).await.unwrap();
+
+        assert_eq!(list.total, 1);
+        let record = &list.pages[0];
+        assert_eq!(record.slug.as_str(), "notes/rhizome");
+        assert_eq!(record.title, "Rhizome");
+        assert_eq!(record.tags, ["theory"]);
+    }
+
+    #[tokio::test]
+    async fn lists_filtered_by_tag() {
+        let index = index().await;
+        index
+            .upsert(&page("a", "A", &["theory", "shared"], "body"))
+            .await
+            .unwrap();
+        index
+            .upsert(&page("b", "B", &["shared"], "body"))
+            .await
+            .unwrap();
+
+        let theory = index
+            .list(ListOptions {
+                tag: Some("theory".to_owned()),
+                ..ListOptions::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(theory.total, 1);
+        assert_eq!(theory.pages[0].slug.as_str(), "a");
+
+        let shared = index
+            .list(ListOptions {
+                tag: Some("shared".to_owned()),
+                ..ListOptions::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(shared.total, 2);
+
+        let missing = index
+            .list(ListOptions {
+                tag: Some("nonexistent".to_owned()),
+                ..ListOptions::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(missing.total, 0);
+    }
+
+    #[tokio::test]
+    async fn lists_sorted_and_paginated() {
+        let index = index().await;
+        for (slug, title) in [("c", "Gamma"), ("a", "Alpha"), ("b", "Beta")] {
+            index.upsert(&page(slug, title, &[], "body")).await.unwrap();
+        }
+
+        let by_slug = index.list(ListOptions::default()).await.unwrap();
+        let slugs: Vec<&str> = by_slug.pages.iter().map(|p| p.slug.as_str()).collect();
+        assert_eq!(slugs, ["a", "b", "c"]);
+
+        let by_title_desc = index
+            .list(ListOptions {
+                sort: SortBy::Title,
+                order: SortOrder::Descending,
+                ..ListOptions::default()
+            })
+            .await
+            .unwrap();
+        let titles: Vec<&str> = by_title_desc
+            .pages
+            .iter()
+            .map(|p| p.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Gamma", "Beta", "Alpha"]);
+
+        let page_two = index
+            .list(ListOptions {
+                limit: 2,
+                offset: 2,
+                ..ListOptions::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page_two.pages.len(), 1);
+        assert_eq!(page_two.total, 3, "total counts every page, not the slice");
     }
 
     #[tokio::test]

@@ -14,19 +14,45 @@ storage model it sits on.
 | `PUT` | `/api/pages/{slug}` | Create or replace |
 | `PATCH` | `/api/pages/{slug}` | Partial update of title / tags / content |
 | `DELETE` | `/api/pages/{slug}` | Delete |
-| `POST` | `/api/pages/{slug}/move` | Move to a new slug |
-| `GET` | `/api/pages/{slug}/links` | Outbound links |
-| `GET` | `/api/pages/{slug}/backlinks` | Inbound links |
+| `POST` | `/api/move` | Move a page to a new slug |
+| `GET` | `/api/pages/{slug}/links` | Outbound links — *not yet built* |
+| `GET` | `/api/pages/{slug}/backlinks` | Inbound links — *not yet built* |
 | `GET` | `/api/search` | Full-text search with snippets |
-| `GET` | `/api/tags` | All tags with page counts |
-| `GET` | `/api/stats` | Meta-stats for the dashboard |
+| `GET` | `/api/tags` | All tags with page counts — *not yet built* |
+| `GET` | `/api/stats` | Meta-stats for the dashboard — *not yet built* |
 | `POST` | `/api/reindex` | Force a full rebuild of the index |
 | `GET` | `/api/health` | Liveness + index freshness |
 | `GET` | `/api-docs/openapi.json` | Generated OpenAPI document |
 | `GET` | `/swagger-ui` | Swagger UI |
 
-Slugs contain `/`, so the path parameter is a wildcard capture
-(`/api/pages/{*slug}` in axum 0.8) rather than a single segment.
+### Why moving a page is not `/api/pages/{slug}/move`
+
+Slugs contain `/`, so the page routes capture the rest of the URL
+(`/api/pages/{*slug}` in axum 0.8). `matchit` requires a catch-all to be the
+**final** segment, so `/api/pages/{*slug}/move` will not compile as a route at
+all.
+
+The obvious repair — a literal `/api/pages/move` — is worse than it looks. Path
+matching prefers the static segment, so `GET /api/pages/move` would resolve to
+the move route (which has no `GET`) and return 405, making a page actually
+slugged `move` permanently unreachable. `move` is a perfectly ordinary page
+name.
+
+So the operation lives at `/api/move`, outside the namespace slugs occupy, and
+takes `{from, to}` rather than reading one slug from the path. `/api/reindex`
+already has the same shape.
+
+### The wildcard does not appear in the spec
+
+`utoipa-axum` hands the path string from `#[utoipa::path]` straight to
+`axum::Router::route`, so the wildcard has to be written in the macro for
+nested slugs to route. But `{*slug}` is an axum spelling: left in the document
+it produces a parameter literally named `*slug`, which reads wrong in Swagger UI
+and would generate a mangled name in the typed client planned for M6.
+
+The router rewrites `{*slug}` back to `{slug}` in the published document. Routes
+and spec still come from one declaration; only the published spelling is
+normalised.
 
 ## Designing for agents
 
@@ -55,7 +81,34 @@ whole-wiki listing cheap enough to be a reasonable first call.
 ```
 
 For a bad slug, `details` names which rule was violated. An agent that typos a
-slug should be able to recover from the response alone.
+slug should be able to recover from the response alone. The same principle
+applies wherever a request is refused for being outside a fixed set: a bad
+`fields` or `sort` value comes back with the values that *would* have worked,
+not just a complaint.
+
+Codes in use so far:
+
+| Code | Status | Meaning |
+|---|---|---|
+| `page_not_found` | 404 | No page at that slug |
+| `page_already_exists` | 409 | Create or move onto an occupied slug |
+| `page_malformed` / `page_not_utf8` | 422 | The file exists but cannot be read |
+| `slug_*` | 400 | Which slug rule was broken (one code per rule) |
+| `invalid_request_body` | 400 | Body would not parse or validate |
+| `unknown_fields` | 400 | `fields` named something that is not a field |
+| `invalid_parameter` | 400 | `sort`/`order` outside its allowed set |
+| `index_error` / `io_error` / `internal_error` | 500 | The server's problem |
+
+**Extraction failures use the envelope too.** `axum::Json` rejects a bad body in
+its own format, which would leave the error a caller is most likely to hit while
+finding its footing looking nothing like every other error. A wrapping extractor
+converts those into the envelope, keeping serde's own message — which names the
+offending field and the rule it broke.
+
+That path returns **400, not axum's default 422**, so that a slug refused in a
+body and the same slug refused in a URL come back identically. A caller should
+not have to learn that one mistake has two statuses depending on where it
+appeared.
 
 **The OpenAPI document is documentation, not a schema dump.** Every operation
 and field carries a real `description` and a realistic `example`. This is the

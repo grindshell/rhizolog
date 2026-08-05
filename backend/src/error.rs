@@ -41,6 +41,29 @@ pub enum AppError {
     #[error(transparent)]
     Index(#[from] IndexError),
 
+    /// A request body that could not be parsed, or that failed validation
+    /// during deserialisation — a malformed slug, most often.
+    ///
+    /// This is a 400 rather than axum's default 422 so that a slug refused in a
+    /// body and the same slug refused in a URL come back the same way. A caller
+    /// should not have to learn that the identical mistake has two statuses
+    /// depending on where it appeared.
+    #[error("invalid request body: {message}")]
+    InvalidRequestBody { message: String, kind: &'static str },
+
+    #[error("unknown field(s): {}", .unknown.join(", "))]
+    UnknownFields {
+        unknown: Vec<String>,
+        valid: &'static [&'static str],
+    },
+
+    #[error("{parameter} must be one of: {}", .allowed.join(", "))]
+    InvalidParameter {
+        parameter: &'static str,
+        value: String,
+        allowed: &'static [&'static str],
+    },
+
     #[error("{message}")]
     Internal { message: String },
 }
@@ -64,6 +87,9 @@ impl AppError {
                 }
                 StoreError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
             },
+            Self::InvalidRequestBody { .. }
+            | Self::UnknownFields { .. }
+            | Self::InvalidParameter { .. } => StatusCode::BAD_REQUEST,
             // The index is derived and rebuildable, so a failure here is the
             // server's problem, never something the caller phrased wrong.
             Self::Index(_) | Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -84,6 +110,9 @@ impl AppError {
                 StoreError::Io(_) => "io_error",
             },
             Self::Index(_) => "index_error",
+            Self::InvalidRequestBody { .. } => "invalid_request_body",
+            Self::UnknownFields { .. } => "unknown_fields",
+            Self::InvalidParameter { .. } => "invalid_parameter",
             Self::Internal { .. } => "internal_error",
         }
     }
@@ -106,6 +135,23 @@ impl AppError {
                 })),
                 StoreError::Io(_) => None,
             },
+            Self::InvalidRequestBody { kind, .. } => Some(json!({ "kind": kind })),
+            // Both of these name what was accepted, not just what was refused:
+            // a caller that guessed a field or a sort key wrong can correct
+            // itself from the response instead of going back to the spec.
+            Self::UnknownFields { unknown, valid } => Some(json!({
+                "unknown": unknown,
+                "valid": valid,
+            })),
+            Self::InvalidParameter {
+                parameter,
+                value,
+                allowed,
+            } => Some(json!({
+                "parameter": parameter,
+                "value": value,
+                "allowed": allowed,
+            })),
             Self::Index(_) | Self::Internal { .. } => None,
         }
     }
