@@ -204,6 +204,12 @@ The stale `app/` references `CLAUDE.md` carried after the `backend/` rename in
 b2d2257 are corrected. The root `.gitignore` never needed changing — bare
 `target/` matches at any depth.
 
-Still open: the commit-subject scope for backend work is `app:`, which no
-longer matches any directory. Renaming it to `backend:` would be consistent,
-but no commit has used it yet, so it is left alone pending a call.
+Settled: the commit-subject scope for backend work was `app:`, which stopped
+matching any directory at the `backend/` rename in b2d2257. It is now
+`backend:`, and the history was rewritten to match rather than left as a
+seam — the repository has no remote and nothing had been published, so there
+was no hash out in the world for the rewrite to invalidate.
+
+Only the subject lines changed; every tree is byte-identical to what it was.
+The three commits preceding the first `app:` one were untouched and kept their
+hashes, which is why the reference to b2d2257 above still resolves.

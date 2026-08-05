@@ -57,9 +57,9 @@ deployment.
   its files. Pass `--vcs none` to `cargo new`/`cargo init` to avoid this.
 - **Main branch is `main`.** Commit directly to it or branch off it for
   larger work.
-- **Scope commit subjects** by the area touched: `app:` for backend, `ui:`
-  for frontend, `kb:` for knowledge base, `repo:` for root-level/tooling
-  changes. A commit may touch several areas; pick the dominant one.
+- **Scope commit subjects** by the area touched: `backend:`, `ui:` for
+  frontend, `kb:` for knowledge base, `repo:` for root-level/tooling changes.
+  A commit may touch several areas; pick the dominant one.
 - **The knowledge base is first-class.** When a design decision is made or an
   implementation approach changes, record it as a page in `knowledge-base/`
   in the same commit as the code where practical. `knowledge-base/index.md`
