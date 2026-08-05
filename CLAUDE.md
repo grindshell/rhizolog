@@ -89,9 +89,14 @@ pnpm typecheck   # tsc --noEmit
 pnpm gen:api     # regenerate API types from openapi.json
 ```
 
-`frontend/openapi.json` is dumped from a running backend
-(`curl http://127.0.0.1:3000/api-docs/openapi.json`) and is the input to
-`pnpm gen:api`. Refresh it when the API changes.
+`frontend/openapi.json` is dumped from a running backend and is the input to
+`pnpm gen:api`. Refresh it when the API changes, and download it as **bytes** —
+see the note under Environment notes for why `curl` will not do:
+
+```
+$data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/api-docs/openapi.json")
+[System.IO.File]::WriteAllBytes("$PWD\frontend\openapi.json", $data)
+```
 
 ## Environment notes
 
@@ -108,5 +113,17 @@ pnpm gen:api     # regenerate API types from openapi.json
   Use the editing tools. If a bulk edit is genuinely necessary, go through
   `[System.IO.File]::ReadAllText` / `WriteAllText` with
   `UTF8Encoding($false)`, and check the result for a BOM and for `â€`.
+- **Never save a downloaded file through a PowerShell string.** `curl` in 5.1
+  is an alias for `Invoke-WebRequest`, which decodes a response body as
+  Latin-1 when its `Content-Type` carries no charset — and the backend's
+  `application/json` does not. So `curl .../openapi.json > openapi.json`,
+  the obvious way to refresh the spec, turns every em-dash in it from
+  `E2 80 94` into `C3 A2 C2 80 C2 94`. The result is still valid JSON and
+  still one line, so the diff looks like a normal regeneration and nothing
+  catches it. Download bytes and write them verbatim
+  (`WebClient.DownloadData` + `[System.IO.File]::WriteAllBytes`), then check
+  the first non-ASCII bytes are `E2 80 94`. The same applies to `>` and
+  `Out-File` generally, which re-encode and add a BOM — `git show HEAD:f > tmp`
+  does not give you the committed bytes; `git checkout HEAD -- f` does.
 - Stop the server before `cargo build`: a running `rhizowiki.exe` is locked,
   and the build fails with "Access is denied" rather than anything informative.
