@@ -183,6 +183,10 @@ build time — a one-time hit on first compile, not a runtime dependency.
   reindex, and assert the index matches a from-scratch rebuild. That is the
   invariant the whole storage design rests on, and it is the one that will
   break quietly.
+- **Frontend:** Vitest over jsdom. Added after the MVP, which was a gap worth
+  admitting: through M8 the dashboard's only safety net was the typechecker and
+  a person clicking around. What it covers, and the two configuration traps it
+  needed, are in [The dashboard](dashboard.md).
 
 ## Risks
 

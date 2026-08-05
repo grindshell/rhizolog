@@ -70,6 +70,38 @@ client-side. Everything else gets `target="_blank"` and `rel="noopener
 noreferrer"` — nothing inside a page body should be able to navigate the
 dashboard's own tab.
 
+## Tests
+
+Vitest over jsdom, with `@solidjs/testing-library`. `vitest.config.ts` is
+deliberately separate from `vite.config.ts`: tests need `resolve.conditions` set
+to Solid's **development** build, which is precisely what a production bundle
+must not have. Two files means the test setup cannot leak into what `pnpm build`
+ships — checked by grepping the bundle for test code.
+
+Two settings there are not obvious. `solid({ hot: false })` disables
+solid-refresh, whose transform emits an import of `/@solid-refresh` — a
+dev-server virtual module that nothing resolves under the runner, so leaving it
+on fails every component file outright. And `src/test-setup.ts` stubs
+`window.scrollTo`, which jsdom does not implement and the router calls on every
+navigation.
+
+What is covered is the part where the bugs were, not the part that is easy:
+
+- **The rule about injecting HTML**, from both sides. `Snippet` is asserted to
+  produce no `script` or `img` element from a hostile page body, and to show the
+  markup as text instead. `Markdown` is asserted to run server HTML, send
+  in-wiki links through the router, and give everything else `target="_blank"`
+  and `rel="noopener noreferrer"` — including after its content is replaced.
+- **The derived-title fix**, both halves: the field is left empty when the title
+  is derived, and an empty field saves as `null` rather than `""`.
+- **Slug encoding**, round-tripped over every shape the backend allows.
+- **The error envelope**, including the transport cases and the one case that
+  must *not* become an `ApiError`: an abort, which is a caller who stopped
+  caring rather than a failure.
+
+Modified clicks are covered too, because intercepting one would break opening a
+page in a new tab, and nothing about the code makes that obvious.
+
 ## Link panels collapse to one row per page
 
 The graph holds two edges when a page is linked both as `[[a]]` and as

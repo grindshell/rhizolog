@@ -84,6 +84,7 @@ Frontend (run from `frontend/`):
 pnpm install     # install dependencies
 pnpm dev         # dev server with HMR, proxying /api to the backend
 pnpm build       # production build (output served by the backend)
+pnpm test        # vitest run (jsdom); `pnpm test:watch` to iterate
 pnpm typecheck   # tsc --noEmit
 pnpm gen:api     # regenerate API types from openapi.json
 ```

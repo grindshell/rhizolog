@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit --force",
     "gen:api": "openapi-typescript openapi.json -o src/api/schema.d.ts"
   },
@@ -15,14 +17,18 @@
     "solid-js": "^1.9.14"
   },
   "devDependencies": {
+    "@solidjs/testing-library": "^0.8.10",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/dom": "^10.4.1",
     "@types/node": "^24.13.3",
     "daisyui": "^5.7.16",
+    "jsdom": "^30.0.1",
     "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.2.0",
-    "vite-plugin-solid": "^2.11.13"
+    "vite-plugin-solid": "^2.11.13",
+    "vitest": "^4.1.10"
   }
 }

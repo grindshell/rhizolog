@@ -228,8 +228,13 @@ function LinkPanels(props: { links: PageLinksResponse }) {
   )
 }
 
-/** One entry per distinct key, keeping every `kind` that reached it. */
-function collapse<T extends { kind: string }>(
+/**
+ * One entry per distinct key, keeping every `kind` that reached it.
+ *
+ * Exported for its tests. It is the whole of the fix for a page appearing twice
+ * in a link panel, and the ordering it promises is load-bearing for reading.
+ */
+export function collapse<T extends { kind: string }>(
   links: T[],
   key: (link: T) => string,
 ): { first: T; kinds: string[] }[] {

@@ -141,6 +141,7 @@ Frontend, from `frontend/`:
 ```
 pnpm dev         # dev server with HMR, proxying /api to the backend
 pnpm build       # production build, which the backend serves
+pnpm test        # 48 tests
 pnpm typecheck
 ```
 
