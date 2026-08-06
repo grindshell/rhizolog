@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use rhizolog::{AppState, Index, Store};
+use rhizolog::{AppState, Index, Store, TimeStore};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -29,9 +29,11 @@ async fn app_with_assets() -> (TempDir, TempDir, Router) {
     .expect("write bundle");
 
     let store = Store::open(wiki.path()).await.expect("open store");
+    let times = TimeStore::open(wiki.path()).await.expect("open time log");
     let index = Index::open(None).await.expect("open index");
     let router = rhizolog::router(AppState {
         store,
+        times,
         index,
         usage: rhizolog::UsageTally::new(),
         assets: Some(assets.path().to_path_buf()),
@@ -244,9 +246,11 @@ async fn the_swagger_ui_link_in_the_navbar_resolves() {
 async fn a_missing_frontend_build_leaves_the_api_working() {
     let wiki = TempDir::new().expect("wiki dir");
     let store = Store::open(wiki.path()).await.expect("open store");
+    let times = TimeStore::open(wiki.path()).await.expect("open time log");
     let index = Index::open(None).await.expect("open index");
     let router = rhizolog::router(AppState {
         store,
+        times,
         index,
         usage: rhizolog::UsageTally::new(),
         assets: None,

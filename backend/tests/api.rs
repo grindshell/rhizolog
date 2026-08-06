@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use rhizolog::{AppState, Index, Store};
+use rhizolog::{AppState, Index, Store, TimeStore};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -33,12 +33,16 @@ impl App {
     async fn new() -> Self {
         let directory = TempDir::new().expect("temp dir");
         let store = Store::open(directory.path()).await.expect("open store");
+        let times = TimeStore::open(directory.path())
+            .await
+            .expect("open time log");
         // In-memory index: these tests are about the HTTP surface, not
         // persistence, which `index::sync` covers.
         let index = Index::open(None).await.expect("open index");
         Self {
             router: rhizolog::router(AppState {
                 store,
+                times,
                 index,
                 usage: rhizolog::UsageTally::new(),
                 // API-only: the SPA fallback is covered in tests/frontend.rs.
@@ -169,11 +173,13 @@ async fn usage_counts_survive_a_restart() {
     // First run.
     {
         let store = Store::open(wiki.path()).await.expect("open store");
+        let times = TimeStore::open(wiki.path()).await.expect("open time log");
         let index = Index::open(Some(&database)).await.expect("open index");
         let usage = rhizolog::UsageTally::new();
         let app = App {
             router: rhizolog::router(AppState {
                 store,
+                times,
                 index: index.clone(),
                 usage: usage.clone(),
                 assets: None,
@@ -194,10 +200,12 @@ async fn usage_counts_survive_a_restart() {
     // Second run, same database, a tally that has never seen a request.
     let wiki = TempDir::new().expect("wiki dir");
     let store = Store::open(wiki.path()).await.expect("open store");
+    let times = TimeStore::open(wiki.path()).await.expect("open time log");
     let index = Index::open(Some(&database)).await.expect("reopen index");
     let app = App {
         router: rhizolog::router(AppState {
             store,
+            times,
             index,
             usage: rhizolog::UsageTally::new(),
             assets: None,
@@ -1251,9 +1259,11 @@ async fn reindexing_rebuilds_from_disk() {
     let res = app.post("/api/reindex", json!({})).await;
 
     assert_eq!(res.status, StatusCode::OK);
-    assert_eq!(res.body["scanned"], 2);
-    assert_eq!(res.body["indexed"], 2);
-    assert_eq!(res.body["failed"], 0);
+    assert_eq!(res.body["pages"]["scanned"], 2);
+    assert_eq!(res.body["pages"]["indexed"], 2);
+    assert_eq!(res.body["pages"]["failed"], 0);
+    // The time log is scanned alongside the pages, and reported beside them.
+    assert_eq!(res.body["times"]["scanned"], 0);
     // Still searchable afterwards.
     assert_eq!(app.get("/api/search?q=rhizomes").await.body["total"], 2);
 }

@@ -23,6 +23,14 @@ storage model it sits on.
 | `GET` | `/api/pins` | Pinned pages, oldest first, with the limit |
 | `PUT` | `/api/pins/{slug}` | Pin a page; idempotent |
 | `DELETE` | `/api/pins/{slug}` | Unpin a page; the page is untouched |
+| `GET` | `/api/times` | Time entries, newest first; `?name=`, `?page=`, `?running=`, `?from=`, `?to=` |
+| `POST` | `/api/times` | Start a timer, or log time already spent |
+| `GET` | `/api/times/{id}` | One entry with its note; `?render=true` adds HTML |
+| `PATCH` | `/api/times/{id}` | Partial update; `end: null` sets it running again |
+| `DELETE` | `/api/times/{id}` | Delete an entry |
+| `POST` | `/api/times/{id}/stop` | Stop a running timer, now |
+| `GET` | `/api/time-groups` | Activity names with their totals |
+| `GET` | `/api/time-stats` | Day, week, month, year, and an hours heat map |
 | `POST` | `/api/reindex` | Force a full rebuild of the index |
 | `GET` | `/api/health` | Liveness + index freshness |
 | `GET` | `/api-docs/openapi.json` | Generated OpenAPI document |
@@ -52,6 +60,22 @@ files.
 `/api/search` takes none of them. Search answers "where is this word" and the
 listing answers "what is in here"; the dashboard picks one endpoint or the
 other rather than pretending the filters compose across both.
+
+### The time endpoints are the exception to the wildcard rule
+
+`/api/times/{id}/stop` has a static segment after its parameter, which the page
+routes cannot have. That is not an inconsistency: `matchit` refuses a catch-all
+anywhere but the final segment, and a slug needs a catch-all because it
+contains `/`. A time id cannot — it is twenty-five characters of digits and two
+separators — so it is an ordinary parameter and the restriction never applies.
+
+The two things a caller most wants from the time API are also why it looks the
+way it does. `POST /api/times` starts a timer *and* logs a finished entry,
+because a running entry is just one whose `end` has not been written yet, and
+an absent field says so more honestly than a mode flag would. `stop` is a
+separate endpoint because its entire content is the word "now", and a `PATCH`
+would make every client read its own clock. See
+[Time tracking](time-tracking.md).
 
 ### Why moving a page is not `/api/pages/{slug}/move`
 
@@ -114,6 +138,19 @@ That is a round-trip asymmetry in an API whose whole point is being written to b
 agents, so `PageView` carries `title_derived`. When it is true, a caller writing
 the page back should send `title: null`. The dashboard's editor leaves its title
 field empty in that case and shows the derived title as the placeholder.
+
+### A page's links endpoint reports time separately
+
+`GET /api/links/{slug}` returns `outbound`, `inbound`, and `times`. The third
+is a summary — a count, a total, and a capped sample — not a list, and it is
+not folded into `inbound`.
+
+The reason is that the two sides of the graph are counted in different orders
+of magnitude. A page might be linked from five others; a page you actually work
+on collects a time entry every time you start a timer. Reported as backlinks
+they would bury the backlinks, and `most_linked` in `/api/stats` would start
+ranking pages by how long you sat with them. One line with a total on it says
+the useful thing, and `GET /api/times?page={slug}` has the rest.
 
 ### One links endpoint, not two
 
@@ -251,6 +288,25 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
   are overkill for a single-user wiki.
 - `DELETE` on a missing page returns `404`, not a silent `204` — a deletion
   that did nothing is worth knowing about.
+- Listings sort ascending by default. `GET /api/times` is the one exception,
+  because a log is read from the end.
+- Durations are whole seconds, never a formatted string. Formatting is a
+  reader's business and `1h 14m` is not something a client can add up.
+
+### Regenerating the spec
+
+`cargo run --example dump-openapi` writes `frontend/openapi.json` straight from
+the compiled routes, with no server involved. It exists because the obvious
+way — `curl`ing a running backend — is a trap on Windows with two jaws, both
+documented in `CLAUDE.md`: PowerShell 5.1's `curl` decodes an uncharsetted
+`application/json` body as Latin-1, and `>` re-encodes it again with a BOM. The
+result is still valid JSON on one line, so the damage reads as a normal
+regeneration.
+
+Note that `ApiDoc::openapi()` is *not* the document — it is only the `info` and
+`tags` skeleton. Every path comes from the routes, so both the example and the
+server go through `api::openapi()`, and neither can describe something the
+other does not serve.
 
 ## Deliberately out of scope for the MVP
 

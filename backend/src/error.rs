@@ -16,6 +16,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -25,6 +26,7 @@ use crate::index::IndexError;
 use crate::page::PageError;
 use crate::slug::{Slug, SlugError};
 use crate::store::StoreError;
+use crate::times::{TimeId, TimeIdError, TimeStoreError};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -82,6 +84,35 @@ pub enum AppError {
     #[error("at most {limit} pages may be pinned")]
     TooManyPins { limit: usize },
 
+    #[error("invalid time id {raw:?}: {source}")]
+    InvalidTimeId {
+        raw: String,
+        #[source]
+        source: TimeIdError,
+    },
+
+    #[error(transparent)]
+    Times(#[from] TimeStoreError),
+
+    /// Stopping a timer that is already stopped.
+    ///
+    /// A conflict rather than a bad request: the request was well formed and
+    /// would have worked a moment earlier, which is exactly the case a caller
+    /// wants to tell apart from a typo.
+    #[error("{id} is not running")]
+    TimeNotRunning { id: TimeId },
+
+    /// An entry whose end precedes its start.
+    ///
+    /// Refused on the way in, so the API can never be the source of one. A file
+    /// edited by hand can still say it, and there it counts as zero rather than
+    /// subtracting from every total it appears in.
+    #[error("a time entry cannot end before it starts")]
+    TimeRangeInverted {
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    },
+
     #[error("{message}")]
     Internal { message: String },
 }
@@ -105,9 +136,21 @@ impl AppError {
                 }
                 StoreError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
             },
+            Self::Times(error) => match error {
+                TimeStoreError::NotFound { .. } => StatusCode::NOT_FOUND,
+                TimeStoreError::EscapesRoot { .. } => StatusCode::BAD_REQUEST,
+                TimeStoreError::NotUtf8 { .. } | TimeStoreError::Malformed { .. } => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                TimeStoreError::NoFreeId { .. } | TimeStoreError::Io(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            },
             Self::RouteNotFound { .. } | Self::PinNotFound { .. } => StatusCode::NOT_FOUND,
-            Self::TooManyPins { .. } => StatusCode::CONFLICT,
-            Self::InvalidRequestBody { .. }
+            Self::TooManyPins { .. } | Self::TimeNotRunning { .. } => StatusCode::CONFLICT,
+            Self::InvalidTimeId { .. }
+            | Self::TimeRangeInverted { .. }
+            | Self::InvalidRequestBody { .. }
             | Self::UnknownFields { .. }
             | Self::InvalidParameter { .. } => StatusCode::BAD_REQUEST,
             // The index is derived and rebuildable, so a failure here is the
@@ -130,6 +173,17 @@ impl AppError {
                 StoreError::Io(_) => "io_error",
             },
             Self::Index(_) => "index_error",
+            Self::Times(error) => match error {
+                TimeStoreError::NotFound { .. } => "time_not_found",
+                TimeStoreError::EscapesRoot { .. } => "time_escapes_root",
+                TimeStoreError::NotUtf8 { .. } => "time_not_utf8",
+                TimeStoreError::Malformed { .. } => "time_malformed",
+                TimeStoreError::NoFreeId { .. } => "time_id_exhausted",
+                TimeStoreError::Io(_) => "io_error",
+            },
+            Self::InvalidTimeId { .. } => "invalid_time_id",
+            Self::TimeNotRunning { .. } => "time_not_running",
+            Self::TimeRangeInverted { .. } => "time_range_inverted",
             Self::RouteNotFound { .. } => "route_not_found",
             Self::PinNotFound { .. } => "pin_not_found",
             Self::TooManyPins { .. } => "too_many_pins",
@@ -158,6 +212,26 @@ impl AppError {
                 })),
                 StoreError::Io(_) => None,
             },
+            Self::Times(error) => match error {
+                TimeStoreError::NotFound { id }
+                | TimeStoreError::EscapesRoot { id }
+                | TimeStoreError::NotUtf8 { id } => Some(json!({ "id": id })),
+                TimeStoreError::Malformed { id, source } => Some(json!({
+                    "id": id,
+                    "reason": source.to_string(),
+                })),
+                TimeStoreError::NoFreeId { start } => Some(json!({ "start": start })),
+                TimeStoreError::Io(_) => None,
+            },
+            Self::InvalidTimeId { raw, source } => Some(json!({
+                "id": raw,
+                "reason": source.to_string(),
+            })),
+            Self::TimeNotRunning { id } => Some(json!({ "id": id })),
+            Self::TimeRangeInverted { start, end } => Some(json!({
+                "start": start,
+                "end": end,
+            })),
             Self::RouteNotFound { path } => Some(json!({ "path": path })),
             Self::PinNotFound { slug } => Some(json!({ "slug": slug })),
             Self::TooManyPins { limit } => Some(json!({ "limit": limit })),
@@ -189,9 +263,10 @@ impl AppError {
     /// anyway. The full error goes to the log instead.
     fn public_message(&self) -> String {
         match self {
-            Self::Store(StoreError::Io(_)) | Self::Index(_) | Self::Internal { .. } => {
-                "the server failed to handle the request".to_owned()
-            }
+            Self::Store(StoreError::Io(_))
+            | Self::Times(TimeStoreError::Io(_))
+            | Self::Index(_)
+            | Self::Internal { .. } => "the server failed to handle the request".to_owned(),
             other => other.to_string(),
         }
     }

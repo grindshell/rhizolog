@@ -163,9 +163,9 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Rebuild the search index from the wiki directory.
-         * @description The index holds nothing that is not already on disk, so this is always safe
-         *     and never loses anything. It is the escape hatch for the one case
+         * Rebuild the index from the files on disk.
+         * @description The index holds nothing that is not already in a file, so this is always
+         *     safe and never loses anything. It is the escape hatch for the one case
          *     incremental scanning can miss: an edit that leaves both mtime and size
          *     unchanged.
          */
@@ -259,10 +259,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/time-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every group, with its totals.
+         * @description A group is an activity name. Nothing creates or deletes one: a group exists
+         *     because entries carry its name, and it is gone when the last of them is.
+         */
+        get: operations["list_time_groups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/time-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the time went: today, this week, this month, this year.
+         * @description Entries are split across bucket boundaries rather than attributed whole to
+         *     the bucket they started in, so an overnight session lands on both days and
+         *     lights every hour it touched on the heat map.
+         */
+        get: operations["time_statistics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/times": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List time entries, without their notes. */
+        get: operations["list_times"];
+        put?: never;
+        /** Start a timer, or log time that is already over. */
+        post: operations["create_time"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/times/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch one entry, with its note. */
+        get: operations["read_time"];
+        put?: never;
+        post?: never;
+        /** Delete a time entry. */
+        delete: operations["delete_time"];
+        options?: never;
+        head?: never;
+        /** Update part of an entry, leaving the rest alone. */
+        patch: operations["patch_time"];
+        trace?: never;
+    };
+    "/api/times/{id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a running timer, now.
+         * @description A `409` if it has already stopped, rather than a silent success: a stop that
+         *     did nothing usually means a second tab got there first, and a caller that
+         *     could not tell would show the wrong duration.
+         */
+        post: operations["stop_time"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        BucketView: {
+            /**
+             * Format: int64
+             * @example 3600
+             */
+            seconds: number;
+            /**
+             * Format: date-time
+             * @description The instant the bucket opens. Buckets are contiguous and equal in
+             *     calendar terms, not necessarily in length.
+             */
+            start: string;
+        };
         CreatePage: {
             /**
              * @description Markdown body, without frontmatter.
@@ -288,6 +403,38 @@ export interface components {
              * @example Async in Rust
              */
             title?: string | null;
+        };
+        /** @description A new entry. With no `start` it begins now; with no `end` it keeps running. */
+        CreateTime: {
+            /**
+             * Format: date-time
+             * @description Omit it to start a timer; send it to log time that is already over.
+             */
+            end?: string | null;
+            /**
+             * @description The activity. Entries are grouped by this, and it is not normalised —
+             *     `Deep work` and `deep work` are two groups, the same way two tags spelled
+             *     differently are two tags.
+             * @example Deep work
+             */
+            name: string;
+            /**
+             * @description A markdown note, without frontmatter.
+             * @example Chased down a lifetime error in the poll loop.
+             */
+            note?: string;
+            /**
+             * @description Pages this time was spent on. They need not exist yet.
+             * @example [
+             *       "notes/rust/async"
+             *     ]
+             */
+            pages?: components["schemas"]["Slug"][];
+            /**
+             * Format: date-time
+             * @description Defaults to now, which is what starting a timer means.
+             */
+            start?: string | null;
         };
         ErrorDetail: {
             /**
@@ -317,7 +464,7 @@ export interface components {
         Health: {
             /**
              * Format: date-time
-             * @description When the index was last reconciled with the wiki directory. Null if it
+             * @description When the index was last reconciled with the files on disk. Null if it
              *     has not been scanned yet.
              */
             last_indexed?: string | null;
@@ -327,10 +474,20 @@ export interface components {
              */
             pages: number;
             /**
+             * @description Timers running right now. Several may run at once.
+             * @example 1
+             */
+            running_timers: number;
+            /**
              * @description Always `"ok"` — a response at all is the liveness signal.
              * @example ok
              */
             status: string;
+            /**
+             * @description Number of time entries currently indexed.
+             * @example 312
+             */
+            times: number;
             /**
              * @description The running Rhizolog version.
              * @example 0.1.0
@@ -341,6 +498,39 @@ export interface components {
              * @example /home/tim/wiki
              */
             wiki_root: string;
+        };
+        HeatCellView: {
+            /**
+             * Format: int32
+             * @description Local hour, 0 to 23.
+             * @example 14
+             */
+            hour: number;
+            /**
+             * Format: int64
+             * @example 5400
+             */
+            seconds: number;
+            /**
+             * Format: int32
+             * @description 0 is Monday, matching the week the periods use.
+             * @example 3
+             */
+            weekday: number;
+        };
+        HeatmapView: {
+            /**
+             * @description All 168 cells, including the empty ones, so a client can draw the grid
+             *     without filling gaps itself. Monday 00:00 first, then by hour.
+             */
+            cells: components["schemas"]["HeatCellView"][];
+            /**
+             * Format: date-time
+             * @description The window the map covers: the same one as the `year` period.
+             */
+            from: string;
+            /** Format: date-time */
+            to: string;
         };
         InboundLinkView: {
             /**
@@ -402,6 +592,17 @@ export interface components {
             /** @description Where it goes. `409` if that slug is taken. */
             to: components["schemas"]["Slug"];
         };
+        NameTotalView: {
+            /** @example 3 */
+            entries: number;
+            /** @example Deep work */
+            name: string;
+            /**
+             * Format: int64
+             * @example 7200
+             */
+            seconds: number;
+        };
         OutboundLinkView: {
             /**
              * @description The link's text, when it says something other than the target.
@@ -439,6 +640,16 @@ export interface components {
             outbound: components["schemas"]["OutboundLinkView"][];
             /** @description The slug that was asked about. */
             slug: components["schemas"]["Slug"];
+            /**
+             * @description Time tracked against this page.
+             *
+             *     A different kind of edge, and deliberately not one of the `inbound`
+             *     links: a page you work on collects one of these every time a timer
+             *     starts, so hundreds is ordinary and mixing them in would bury the
+             *     backlinks. Summarised here instead, with `GET /api/times?page={slug}`
+             *     for the full list.
+             */
+            times: components["schemas"]["PageTimesView"];
         };
         PageListResponse: {
             /**
@@ -503,6 +714,51 @@ export interface components {
              * @description The file's modification time.
              */
             updated: string;
+        };
+        /**
+         * @description The time tracked against a page.
+         *
+         *     A summary and a sample, not a list. A page you actually work on collects a
+         *     time entry every time you start a timer, so hundreds is ordinary — which is
+         *     exactly why these are not `inbound` links. Mixed into the backlinks they
+         *     would bury them; reported here they are one line with a total on it.
+         */
+        PageTimesView: {
+            /**
+             * @description Entries attached to this page.
+             * @example 143
+             */
+            entries: number;
+            /**
+             * @description Distinct activity names tracked against this page.
+             * @example 4
+             */
+            groups: number;
+            /** @description The most recent few, capped. `GET /api/times?page={slug}` has the rest. */
+            recent: components["schemas"]["TimeRefView"][];
+            /**
+             * @description How many of them are running right now.
+             * @example 1
+             */
+            running: number;
+            /**
+             * Format: int64
+             * @description Total tracked, with running entries counted up to now.
+             * @example 97920
+             */
+            seconds: number;
+        };
+        PageTotalView: {
+            /** @example 3 */
+            entries: number;
+            /**
+             * Format: int64
+             * @example 7200
+             */
+            seconds: number;
+            slug: components["schemas"]["Slug"];
+            /** @example Async in Rust */
+            title: string;
         };
         /** @description A page and its content. */
         PageView: {
@@ -594,6 +850,60 @@ export interface components {
              */
             title?: string | null;
         };
+        /** @description A partial update. Omitted fields are left alone. */
+        PatchTime: {
+            /**
+             * Format: date-time
+             * @description Omit to leave the end alone; send `null` to clear it, which sets the
+             *     entry running again.
+             */
+            end?: string | null;
+            /** @example Deep work */
+            name?: string | null;
+            /** @example Chased down a lifetime error in the poll loop. */
+            note?: string | null;
+            /**
+             * @description Replaces the whole list when present.
+             * @example [
+             *       "notes/rust/async"
+             *     ]
+             */
+            pages?: components["schemas"]["Slug"][] | null;
+            /** Format: date-time */
+            start?: string | null;
+        };
+        PeriodStatsView: {
+            /** @description Hours for a day, days for a week or a month, months for a year. */
+            buckets: components["schemas"]["BucketView"][];
+            /**
+             * @description Entries overlapping the window at all.
+             * @example 24
+             */
+            entries: number;
+            /**
+             * Format: date-time
+             * @description The window, in UTC. Its edges are local midnights in the offset given.
+             */
+            from: string;
+            /** @description The most-used activities, busiest first. */
+            names: components["schemas"]["NameTotalView"][];
+            /** @description The pages the most time was attached to. */
+            pages: components["schemas"]["PageTotalView"][];
+            /**
+             * @description `day`, `week`, `month` or `year`.
+             * @example week
+             */
+            period: string;
+            /**
+             * Format: int64
+             * @description Time falling inside the window, not the full length of every entry that
+             *     touches it: a session spanning midnight is split between the two days.
+             * @example 68400
+             */
+            seconds: number;
+            /** Format: date-time */
+            to: string;
+        };
         PinView: {
             /**
              * @description Whether a page still exists at this slug.
@@ -629,26 +939,13 @@ export interface components {
             pins: components["schemas"]["PinView"][];
         };
         ReindexResponse: {
+            /** @description The markdown pages. */
+            pages: components["schemas"]["SyncCountsView"];
             /**
-             * @description Pages on disk that could not be read, and so are not searchable.
-             * @example 0
+             * @description The time log under `.rhizolog/times/`, which is scanned the same way
+             *     and for the same reason.
              */
-            failed: number;
-            /**
-             * @description Pages read and written to the index.
-             * @example 6
-             */
-            indexed: number;
-            /**
-             * @description Pages dropped because they are no longer on disk.
-             * @example 0
-             */
-            removed: number;
-            /**
-             * @description Pages found on disk.
-             * @example 6
-             */
-            scanned: number;
+            times: components["schemas"]["SyncCountsView"];
         };
         /** @description Markdown to render, with the context its links need. */
         RenderRequest: {
@@ -814,6 +1111,34 @@ export interface components {
              */
             wanted_count: number;
         };
+        /** @description What one scan of one tree found. */
+        SyncCountsView: {
+            /**
+             * @description Files on disk that could not be read, and so are not in the index.
+             * @example 0
+             */
+            failed: number;
+            /**
+             * @description Files read and written to the index.
+             * @example 6
+             */
+            indexed: number;
+            /**
+             * @description Rows dropped because the file is no longer on disk.
+             * @example 0
+             */
+            removed: number;
+            /**
+             * @description Files found on disk.
+             * @example 6
+             */
+            scanned: number;
+            /**
+             * @description Files already indexed with a matching mtime and size.
+             * @example 0
+             */
+            unchanged: number;
+        };
         TagCountView: {
             /**
              * @description How many pages carry this tag.
@@ -829,6 +1154,215 @@ export interface components {
         TagsResponse: {
             /** @description Most-used first. */
             tags: components["schemas"]["TagCountView"][];
+        };
+        TimeGroupView: {
+            /** @example 42 */
+            entries: number;
+            /** Format: date-time */
+            first_start: string;
+            /** Format: date-time */
+            last_start: string;
+            /**
+             * @description The activity name, which is the group.
+             * @example Deep work
+             */
+            name: string;
+            /**
+             * @description How many of this group's entries are running.
+             * @example 1
+             */
+            running: number;
+            /**
+             * Format: int64
+             * @description Total tracked, with running entries counted up to now.
+             * @example 151200
+             */
+            seconds: number;
+        };
+        TimeGroupsResponse: {
+            /** @description Most time first. */
+            groups: components["schemas"]["TimeGroupView"][];
+            /** @description Every group, every entry, all of it. */
+            totals: components["schemas"]["TimeTotalsView"];
+        };
+        /**
+         * @description A time entry's identifier: the UTC instant it was first recorded for, compacted, plus nanoseconds. `20260806T142530-123456789`.
+         *
+         *     Ids are generated by the server, never chosen by a caller, and they sort chronologically as plain text.
+         * @example 20260806T142530-123456789
+         */
+        TimeId: string;
+        TimeListResponse: {
+            /**
+             * @description The limit that was applied, after clamping.
+             * @example 50
+             */
+            limit: number;
+            /** @example 0 */
+            offset: number;
+            /** @description Notes are never included here. Newest first unless you say otherwise. */
+            times: components["schemas"]["TimeSummary"][];
+            /**
+             * @description Total matching entries, not the number returned.
+             * @example 312
+             */
+            total: number;
+        };
+        /** @description A page a time entry is attached to. */
+        TimePageView: {
+            /**
+             * @description Whether a page exists at that slug.
+             *
+             *     Time can be tracked against a page before it is written, exactly as a
+             *     link can point at one. It attaches itself when the page appears, with
+             *     nothing to reindex.
+             */
+            exists: boolean;
+            slug: components["schemas"]["Slug"];
+            /**
+             * @description The page's title, or `null` if nothing is written there yet.
+             * @example Async in Rust
+             */
+            title?: string | null;
+        };
+        TimeRefView: {
+            /**
+             * Format: date-time
+             * @description `null` while the timer is running.
+             */
+            end?: string | null;
+            id: components["schemas"]["TimeId"];
+            /**
+             * @description The activity this time was tracked under.
+             * @example Deep work
+             */
+            name: string;
+            /**
+             * Format: int64
+             * @example 4470
+             */
+            seconds: number;
+            /** Format: date-time */
+            start: string;
+        };
+        TimeStatsResponse: {
+            /** @description The whole log, ignoring windows. */
+            all_time: components["schemas"]["TimeTotalsView"];
+            /**
+             * Format: date-time
+             * @description The instant everything was computed against. Running entries are
+             *     counted up to here.
+             */
+            at: string;
+            /** @description When the hours actually go, over the year. */
+            heatmap: components["schemas"]["HeatmapView"];
+            /**
+             * Format: int32
+             * @description The offset the windows were cut in, as it was applied after clamping.
+             * @example -420
+             */
+            offset_minutes: number;
+            /** @description Today, this week, this month and this year, in that order. */
+            periods: components["schemas"]["PeriodStatsView"][];
+        };
+        /** @description A time entry without its note. */
+        TimeSummary: {
+            /**
+             * Format: date-time
+             * @description `null` while the timer is running.
+             */
+            end?: string | null;
+            /** @description Whether the entry carries a note. Fetch the entry itself to read it. */
+            has_note: boolean;
+            id: components["schemas"]["TimeId"];
+            /**
+             * @description The activity. Entries are grouped by this, spelled exactly as written.
+             * @example Deep work
+             */
+            name: string;
+            /** @description The pages this time is attached to. */
+            pages: components["schemas"]["TimePageView"][];
+            /**
+             * @description Whether the timer is still running. Several may run at once, and they
+             *     are allowed to overlap.
+             */
+            running: boolean;
+            /**
+             * Format: int64
+             * @description Elapsed seconds, counting up to now while the entry runs.
+             * @example 4470
+             */
+            seconds: number;
+            /**
+             * Format: int64
+             * @description Size of the entry's file on disk, in bytes.
+             * @example 148
+             */
+            size: number;
+            /** Format: date-time */
+            start: string;
+            /**
+             * Format: date-time
+             * @description The file's modification time.
+             */
+            updated: string;
+        };
+        TimeTotalsView: {
+            /** @example 312 */
+            entries: number;
+            /**
+             * Format: date-time
+             * @description The earliest entry's start, or `null` for an empty log.
+             */
+            first_start?: string | null;
+            /**
+             * @description Distinct activity names.
+             * @example 9
+             */
+            groups: number;
+            /** Format: date-time */
+            last_start?: string | null;
+            /** @example 1 */
+            running: number;
+            /**
+             * Format: int64
+             * @example 1512000
+             */
+            seconds: number;
+        };
+        /** @description A time entry and its note. */
+        TimeView: {
+            /** Format: date-time */
+            end?: string | null;
+            /**
+             * @description The note rendered to HTML. Present only when `render=true` was asked
+             *     for. Wikilinks in a note resolve like anywhere else.
+             */
+            html?: string | null;
+            id: components["schemas"]["TimeId"];
+            /** @example Deep work */
+            name: string;
+            /**
+             * @description The note as markdown, without its frontmatter. Usually empty.
+             * @example Chased down a lifetime error in the poll loop.
+             */
+            note: string;
+            pages: components["schemas"]["TimePageView"][];
+            running: boolean;
+            /**
+             * Format: int64
+             * @example 4470
+             */
+            seconds: number;
+            /**
+             * Format: int64
+             * @example 148
+             */
+            size: number;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            updated: string;
         };
         WantedPageView: {
             /**
@@ -1521,6 +2055,368 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TagsResponse"];
+                };
+            };
+        };
+    };
+    list_time_groups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Groups, most time first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeGroupsResponse"];
+                };
+            };
+        };
+    };
+    time_statistics: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Minutes **east** of UTC, which is `-new Date().getTimezoneOffset()` in a
+                 *     browser. Defaults to 0.
+                 *
+                 *     Entries are stored in UTC, but "today" and "when do I usually work" are
+                 *     questions about a wall clock, so every window and every heat map row is
+                 *     cut in this offset. It is a fixed offset rather than a timezone: a
+                 *     window straddling a daylight-saving change is bucketed throughout with
+                 *     the offset you sent, which can make one past day an hour short or long.
+                 * @example -420
+                 */
+                offset?: number;
+                /**
+                 * @description The instant to compute against. Defaults to now; useful for asking what
+                 *     last Tuesday looked like.
+                 */
+                at?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Time statistics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeStatsResponse"];
+                };
+            };
+        };
+    };
+    list_times: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Only entries in this group, matched exactly.
+                 * @example Deep work
+                 */
+                name?: string;
+                /**
+                 * @description Only entries attached to this page.
+                 * @example notes/rust/async
+                 */
+                page?: string;
+                /**
+                 * @description `true` for running entries only, `false` for finished ones.
+                 * @example true
+                 */
+                running?: boolean;
+                /**
+                 * @description Only entries **overlapping** `[from, to)`, not only those starting
+                 *     inside it — a session that began last night and is still going is time
+                 *     being spent today.
+                 */
+                from?: string;
+                to?: string;
+                /**
+                 * @description One of `start`, `name`, `duration`. Defaults to `start`.
+                 * @example start
+                 */
+                sort?: string;
+                /**
+                 * @description `asc` or `desc`. Defaults to `desc`, because a log reads newest first.
+                 * @example desc
+                 */
+                order?: string;
+                /**
+                 * @description Defaults to 50, capped at 500.
+                 * @example 50
+                 */
+                limit?: number;
+                /** @example 0 */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Matching entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeListResponse"];
+                };
+            };
+            /** @description Unknown sort key or order */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_time: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTime"];
+            };
+        };
+        responses: {
+            /** @description The entry as written */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeView"];
+                };
+            };
+            /** @description The name, a slug, or the range is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_time: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Also return the note rendered to HTML, in an `html` field.
+                 * @example true
+                 */
+                render?: boolean;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Time entry id
+                 * @example 20260806T142530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeView"];
+                };
+            };
+            /** @description The id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No entry with that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The entry exists but could not be parsed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_time: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Time entry id
+                 * @example 20260806T142530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry was deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No entry with that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    patch_time: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Time entry id
+                 * @example 20260806T142530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchTime"];
+            };
+        };
+        responses: {
+            /** @description The entry as updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeView"];
+                };
+            };
+            /** @description The id, the name, or the range is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No entry with that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    stop_time: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Time entry id
+                 * @example 20260806T142530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry, now finished */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeView"];
+                };
+            };
+            /** @description The id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No entry with that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description That entry was not running */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

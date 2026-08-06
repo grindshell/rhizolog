@@ -1,9 +1,10 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createResource, createSignal } from 'solid-js'
 import { A } from '@solidjs/router'
-import { health, pageHref, reindex, stats, tagHref } from '../api/client'
+import { health, pageHref, reindex, stats, tagHref, timeStats } from '../api/client'
 import type { StatsResponse } from '../api/client'
 import { Async, ErrorNotice } from '../components/Async'
+import TimeStats from '../components/TimeStats'
 import { formatDate } from './PageDetail'
 
 /**
@@ -17,6 +18,10 @@ import { formatDate } from './PageDetail'
 export default function Dashboard() {
   const [live] = createResource(() => health())
   const [graph, { refetch }] = createResource(() => stats())
+  // Its own request rather than a block on `/api/stats`: the wiki's shape and
+  // where the hours went are two questions, the second one needs the reader's
+  // timezone to mean anything, and only one of them changes minute to minute.
+  const [time, { refetch: refetchTime }] = createResource(() => timeStats())
   const [rebuilding, setRebuilding] = createSignal(false)
   const [failure, setFailure] = createSignal<unknown>()
 
@@ -26,6 +31,7 @@ export default function Dashboard() {
     try {
       await reindex()
       await refetch()
+      await refetchTime()
     } catch (error) {
       setFailure(error)
     } finally {
@@ -77,6 +83,15 @@ export default function Dashboard() {
               </div>
             </div>
             <div class="stat">
+              <div class="stat-title">Tracked</div>
+              <div class="stat-value text-2xl">{server.times}</div>
+              <div class="stat-desc">
+                {server.running_timers > 0
+                  ? `${server.running_timers} running`
+                  : 'time entries'}
+              </div>
+            </div>
+            <div class="stat">
               <div class="stat-title">Wiki root</div>
               <div class="stat-desc font-mono break-all">{server.wiki_root}</div>
             </div>
@@ -85,6 +100,8 @@ export default function Dashboard() {
       </Async>
 
       <Async resource={graph}>{(data) => <Graph data={data} />}</Async>
+
+      <Async resource={time}>{(data) => <TimeStats stats={data} />}</Async>
     </div>
   )
 }

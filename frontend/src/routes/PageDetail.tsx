@@ -5,8 +5,10 @@ import {
   decodeSlug,
   editHref,
   getPage,
+  groupHref,
   pageHref,
   pageLinks,
+  pageTimesHref,
   prefixHref,
   segmentHref,
   slugSegments,
@@ -15,8 +17,10 @@ import {
 import type { PageLinksResponse } from '../api/client'
 import { pins } from '../api/pins'
 import { Async, ErrorNotice } from '../components/Async'
+import Duration, { formatDuration } from '../components/Duration'
 import Markdown from '../components/Markdown'
 import SlugPath from '../components/SlugPath'
+import { PageTimerButton } from '../components/TimerMenu'
 
 /**
  * Read one page.
@@ -52,7 +56,9 @@ export default function PageDetail() {
   }
 
   const [page] = createResource(slug, (target) => getPage(target, { render: true }))
-  const [links] = createResource(slug, (target) => pageLinks(target))
+  const [links, { refetch: refetchLinks }] = createResource(slug, (target) =>
+    pageLinks(target),
+  )
 
   /**
    * A slug with no page is not an error here. Something linked to it, which is
@@ -125,7 +131,17 @@ export default function PageDetail() {
               <div class="card-body">
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <h1 class="card-title text-2xl">{loaded().title}</h1>
-                  <div class="flex gap-2">
+                  <div class="flex items-center gap-2">
+                    {/*
+                      Starting a timer here rather than only on the Time screen:
+                      the moment you know what you are working on is the moment
+                      you are looking at it.
+                    */}
+                    <PageTimerButton
+                      slug={loaded().slug}
+                      title={loaded().title}
+                      onChange={() => void refetchLinks()}
+                    />
                     <button
                       class="btn btn-sm"
                       classList={{
@@ -233,6 +249,8 @@ function LinkPanels(props: { links: PageLinksResponse }) {
   const inbound = () => collapse(props.links.inbound, (link) => link.slug)
 
   return (
+    <>
+    <TimePanel links={props.links} />
     <div class="grid gap-4 sm:grid-cols-2">
       <section class="card bg-base-100 shadow">
         <div class="card-body">
@@ -301,6 +319,78 @@ function LinkPanels(props: { links: PageLinksResponse }) {
         </div>
       </section>
     </div>
+    </>
+  )
+}
+
+/**
+ * The time tracked against this page.
+ *
+ * Not a third link panel, and deliberately shaped nothing like one. A page you
+ * actually work on collects a time entry every time a timer starts, so this
+ * side of the graph is counted in hundreds where the other two are counted in
+ * ones — which is exactly why the API keeps them in separate tables. Rendered
+ * as backlinks they would bury the backlinks; rendered as a total with a few
+ * recent entries under it, they say the thing worth knowing in one line.
+ *
+ * Absent entirely when nothing has been tracked, so a wiki nobody times looks
+ * exactly as it did before.
+ */
+function TimePanel(props: { links: PageLinksResponse }) {
+  const times = () => props.links.times
+
+  return (
+    <Show when={times().entries > 0}>
+      <section class="card bg-base-100 shadow">
+        <div class="card-body gap-3">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 class="card-title text-base">
+              Time on this page
+              <Show when={times().running > 0}>
+                <span class="badge badge-secondary badge-sm">
+                  {times().running} running
+                </span>
+              </Show>
+            </h2>
+            <div class="text-sm">
+              <span class="font-mono text-lg">{formatDuration(times().seconds)}</span>
+              <span class="opacity-60">
+                {' '}
+                across {times().entries}{' '}
+                {times().entries === 1 ? 'entry' : 'entries'} in {times().groups}{' '}
+                {times().groups === 1 ? 'group' : 'groups'}
+              </span>
+            </div>
+          </div>
+
+          <ul class="flex flex-col gap-1 text-sm">
+            <For each={times().recent}>
+              {(entry) => (
+                <li class="flex items-baseline justify-between gap-2">
+                  <A class="link min-w-0 truncate" href={groupHref(entry.name)}>
+                    {entry.name}
+                  </A>
+                  <span class="flex items-baseline gap-3 whitespace-nowrap">
+                    <span class="text-xs opacity-60">{formatDate(entry.start)}</span>
+                    <Duration
+                      class="font-mono text-xs"
+                      seconds={entry.seconds}
+                      runningSince={entry.end ? null : entry.start}
+                    />
+                  </span>
+                </li>
+              )}
+            </For>
+          </ul>
+
+          <Show when={times().entries > times().recent.length}>
+            <A class="link text-xs" href={pageTimesHref(props.links.slug)}>
+              All {times().entries} entries
+            </A>
+          </Show>
+        </div>
+      </section>
+    </Show>
   )
 }
 

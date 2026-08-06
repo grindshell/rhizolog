@@ -13,7 +13,7 @@
 
 /// Bump this whenever [`CREATE_DERIVED`] changes. The next startup will notice,
 /// drop the derived tables, and rebuild them from disk.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -117,6 +117,53 @@ create virtual table pages_fts using fts5(
     body,
     tokenize = 'unicode61'
 );
+
+-- Time entries, derived from `.rhizolog/times/` exactly as `pages` is derived
+-- from the markdown beside it. The files are the log; this is only an index
+-- over them, and deleting the database loses nothing.
+--
+-- `started` and `ended` rather than `start` and `end`: `end` is a keyword in
+-- SQLite (it closes a `case`), and a column that has to be quoted in every
+-- query it appears in is a column that will eventually not be.
+--
+-- `has_note` is a flag rather than the note itself. A listing wants to show
+-- that an entry has something to say without carrying every note in the wiki,
+-- and the note comes from disk when one is actually read.
+create table times (
+    id       text    primary key,
+    name     text    not null,
+    started  integer not null,
+    ended    integer,
+    has_note integer not null,
+    updated  integer not null,
+    size     integer not null
+) strict;
+
+create index times_by_start on times(started);
+
+-- The grouping. Entries are grouped by name spelled exactly as written, the
+-- same way tags are not normalised.
+create index times_by_name on times(name);
+
+-- The link between a time entry and the pages it was spent on.
+--
+-- Deliberately not a row in `links`. A page may collect hundreds of these, and
+-- mixing them into the link graph would drown its backlinks, inflate its
+-- referrer count, and make a page with a busy timer look like the most
+-- important page in the wiki. They are a different kind of edge and they live
+-- in a different table, which is what lets a page report them as one summary
+-- line instead of a hundred rows.
+--
+-- `target` is a slug as written and is resolved by joining `pages` at query
+-- time, the same as `links.target`: time can be tracked against a page that
+-- does not exist yet, and it starts resolving the moment someone writes it.
+create table time_pages (
+    time_id text not null references times(id) on delete cascade,
+    target  text not null,
+    primary key (time_id, target)
+) strict;
+
+create index time_pages_by_target on time_pages(target);
 ";
 
 /// Dropped in dependency order so the foreign keys never block.
@@ -126,4 +173,6 @@ drop table if exists page_tags;
 drop table if exists page_segments;
 drop table if exists pages_fts;
 drop table if exists pages;
+drop table if exists time_pages;
+drop table if exists times;
 ";

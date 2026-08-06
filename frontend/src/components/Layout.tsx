@@ -1,6 +1,7 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { A } from '@solidjs/router'
 import PinsMenu from './PinsMenu'
+import TimerMenu from './TimerMenu'
 
 /** The app shell: navigation, and the width everything else is read at. */
 export default function Layout(props: RouteSectionProps) {
@@ -26,6 +27,9 @@ export default function Layout(props: RouteSectionProps) {
               <A href="/tags">Tags</A>
             </li>
             <li>
+              <A href="/times">Time</A>
+            </li>
+            <li>
               {/*
                 A plain anchor, not `A`: Swagger UI is served by the backend,
                 not by this app, so it must be a real navigation.
@@ -35,6 +39,12 @@ export default function Layout(props: RouteSectionProps) {
               </a>
             </li>
           </ul>
+          {/*
+            Before the pins menu because it is the one that can be *wrong*: a
+            pin left in place is harmless, a timer left running overnight is
+            not, so the thing that needs noticing sits where the eye lands.
+          */}
+          <TimerMenu />
           <PinsMenu />
           <A class="btn btn-primary btn-sm" href="/new">
             New

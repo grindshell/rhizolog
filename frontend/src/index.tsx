@@ -9,6 +9,7 @@ import PagesBrowse from './routes/PagesBrowse'
 import PageDetail from './routes/PageDetail'
 import Editor from './routes/Editor'
 import Tags from './routes/Tags'
+import Times from './routes/Times'
 import NotFound from './routes/NotFound'
 
 const root = document.getElementById('root')
@@ -35,6 +36,12 @@ render(
       <Route path="/new" component={Editor} />
       <Route path="/edit/*slug" component={Editor} />
       <Route path="/tags" component={Tags} />
+      {/*
+        No `/times/:id` route. A time entry is read and edited in the log
+        itself, and an id is a machine's handle rather than something anyone
+        would link to — unlike a slug, which is the whole point of a page.
+      */}
+      <Route path="/times" component={Times} />
       <Route path="/*404" component={NotFound} />
     </Router>
   ),

@@ -27,8 +27,13 @@ This is a **git monorepo with a single `.git` at the root**.
 | `CLAUDE.md` | This file |
 
 `backend/wiki/` is the default `RHIZOLOG_ROOT` and is gitignored, as is
-`.rhizolog/` anywhere. Do not develop against `example-wiki/` — it is a
+`.rhizolog/index.db` anywhere. Do not develop against `example-wiki/` — it is a
 fixture, and changing it changes what the docs claim.
+
+**`.rhizolog/` is not all disposable.** `index.db` is derived and rebuilds on
+startup; `.rhizolog/times/` beside it is the time log, which is authored data
+with no other copy. That is why the gitignore names the database rather than
+the directory. See `knowledge-base/time-tracking.md`.
 
 ## Tech stack
 
@@ -89,9 +94,17 @@ pnpm typecheck   # tsc --noEmit
 pnpm gen:api     # regenerate API types from openapi.json
 ```
 
-`frontend/openapi.json` is dumped from a running backend and is the input to
-`pnpm gen:api`. Refresh it when the API changes, and download it as **bytes** —
-see the note under Environment notes for why `curl` will not do:
+`frontend/openapi.json` is the input to `pnpm gen:api`. Refresh it from
+`backend/` with:
+
+```
+cargo run --example dump-openapi
+```
+
+That writes the file straight from the compiled routes — no server, no HTTP,
+and none of the encoding hazards below. Do **not** refresh it with `curl`; see
+the note under Environment notes for what that does. If you fetch it over HTTP
+anyway, download it as **bytes**:
 
 ```
 $data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/api-docs/openapi.json")
@@ -120,7 +133,8 @@ $data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/ap
   the obvious way to refresh the spec, turns every em-dash in it from
   `E2 80 94` into `C3 A2 C2 80 C2 94`. The result is still valid JSON and
   still one line, so the diff looks like a normal regeneration and nothing
-  catches it. Download bytes and write them verbatim
+  catches it. Use `cargo run --example dump-openapi`, which sidesteps HTTP
+  entirely; failing that, download bytes and write them verbatim
   (`WebClient.DownloadData` + `[System.IO.File]::WriteAllBytes`), then check
   the first non-ASCII bytes are `E2 80 94`. The same applies to `>` and
   `Out-File` generally, which re-encode and add a BOM — `git show HEAD:f > tmp`

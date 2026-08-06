@@ -260,7 +260,7 @@ pub struct PatchPage {
 /// Plain `Option<T>` collapses the two, which for PATCH would mean there is no
 /// way to clear a title — omitting it and nulling it would both read as
 /// `None`. The outer `Option` is absence; the inner is the value.
-fn present_or_absent<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+pub(crate) fn present_or_absent<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: Deserialize<'de>,
     D: Deserializer<'de>,

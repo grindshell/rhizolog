@@ -21,6 +21,11 @@ What makes it different from the wikis you already know:
 - **Single user.** No accounts, no roles, no tenancy. It binds to loopback and
   it has no authentication, deliberately — this is a developer tool for
   managing a knowledge base, not a public wiki engine.
+- **It tracks time, too.** Timers you can start and stop, entries you can type
+  in after the fact, and a note on any of them. Attach an entry to the pages it
+  was spent on and the dashboard will tell you where the hours went. Entries
+  are files as well, so `git log` gives you a history of your time nobody had
+  to build.
 
 ## Quick start
 
@@ -96,6 +101,45 @@ it shows up on the dashboard, and it starts working the moment somebody writes
 it — no reindex. Links inside code fences are not links, because they are pulled
 out of the parsed document rather than scanned for.
 
+## Time
+
+A time entry has a name, a start, usually an end, and optionally a markdown
+note and a list of pages it was spent on. Entries are grouped by name — there
+is nothing to create or delete, a group exists because entries carry its name.
+
+```markdown
+---
+name: Deep work
+start: 2026-08-06T14:25:30Z
+end: 2026-08-06T15:40:00Z
+pages:
+  - notes/rust/async
+---
+
+Chased down a lifetime error in the poll loop.
+```
+
+They live in `<root>/.rhizolog/times/<YYYY-MM>/`, beside the derived index but
+**not** derived: that directory is the only copy, so ignore
+`.rhizolog/index.db` in git rather than the whole directory. They are not
+pages — they will not appear in a listing or in search.
+
+Start one from the top bar, from any page, or with
+`POST /api/times {"name": "Deep work"}`. Several can run at once and they are
+allowed to overlap, because attention is not exclusive and a tracker that
+insisted otherwise would be asking you to lie to it.
+
+The dashboard's time section splits day, week, month and year, ranks the
+activities and the pages the hours went to, and draws a heat map of every hour
+of the week. A session that ran past midnight is split across both days and
+lights every hour it touched, rather than being filed under the hour it started
+in.
+
+Time attached to a page shows on that page as one line with a total on it, not
+as backlinks. That is deliberate: a page you actually work on collects an entry
+every time you start a timer, and folding hundreds of them into the link graph
+would bury the links.
+
 ## Configuration
 
 All optional, all environment variables.
@@ -104,6 +148,7 @@ All optional, all environment variables.
 |---|---|---|
 | `RHIZOLOG_ROOT` | `./wiki` | The wiki directory. Created if missing. |
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | The derived index. Safe to delete. |
+| — | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000` | Where to listen. |
 | `RHIZOLOG_ASSETS` | `../frontend/dist` | The built dashboard. Missing is fine. |
 | `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter. |
@@ -132,7 +177,7 @@ Backend, from `backend/`:
 
 ```
 cargo run        # start the server
-cargo test       # 199 tests
+cargo test       # 314 tests
 cargo fmt
 cargo clippy
 ```
@@ -142,7 +187,7 @@ Frontend, from `frontend/`:
 ```
 pnpm dev         # dev server with HMR, proxying /api to the backend
 pnpm build       # production build, which the backend serves
-pnpm test        # 56 tests
+pnpm test        # 92 tests
 pnpm typecheck
 ```
 
@@ -151,27 +196,34 @@ pnpm typecheck
 
 The frontend's API types are generated from the OpenAPI document rather than
 written by hand, so a backend change that breaks a caller becomes a type error
-instead of a runtime surprise. After changing the API, with the server running:
+instead of a runtime surprise. After changing the API:
+
+```
+cd backend; cargo run --example dump-openapi
+cd ../frontend; pnpm gen:api
+```
+
+No server needs to be running: the example writes the spec straight from the
+compiled routes.
+
+That exists because downloading it is a trap on Windows, and the obvious way is
+the one that does not work. `curl` in PowerShell 5.1 is an alias for
+`Invoke-WebRequest`, which decodes a body as Latin-1 when its `Content-Type`
+carries no charset — and `application/json` from here carries none. Every
+em-dash in the spec turns from `E2 80 94` into `C3 A2 C2 80 C2 94`. The file
+stays valid JSON, stays one line, and the diff still reads like an ordinary
+regeneration, so nothing catches it. `>` and `Out-File` are no better; they
+re-encode too, and add a BOM.
+
+If you do fetch it over HTTP, download bytes and write them verbatim:
 
 ```powershell
 $data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/api-docs/openapi.json")
 [System.IO.File]::WriteAllBytes("$PWD\frontend\openapi.json", $data)
 ```
 
-Then `pnpm gen:api` from `frontend/`.
-
-The spec has to be downloaded as bytes and written verbatim, which is why that
-is two lines of .NET rather than one of `curl`. `curl` is the obvious thing to
-reach for and is the one thing that does not work: in PowerShell 5.1 it is an
-alias for `Invoke-WebRequest`, which decodes a body as Latin-1 when its
-`Content-Type` carries no charset — and `application/json` from here carries
-none. Every em-dash in the spec turns from `E2 80 94` into `C3 A2 C2 80 C2 94`.
-The file stays valid JSON, stays one line, and the diff still reads like an
-ordinary regeneration, so nothing catches it. `>` and `Out-File` are no better;
-they re-encode too, and add a BOM.
-
-Worth checking after a refresh: the file should have no BOM, and its first
-non-ASCII bytes should be `E2 80 94`.
+Worth checking after a refresh either way: the file should have no BOM, and its
+first non-ASCII bytes should be `E2 80 94`.
 
 Windows PowerShell 5.1 has no `&&`; use `;` to chain. And do not round-trip a
 source file through `Get-Content` and `Set-Content` — 5.1 reads as ANSI and
@@ -190,7 +242,9 @@ was taken to mean concretely.
 ## Status
 
 The MVP is complete: pages, search, tags, the link graph, meta-stats, live
-pickup of outside edits, and a dashboard you can write in.
+pickup of outside edits, and a dashboard you can write in. Time tracking is in
+too: timers, manual entries, notes, groups, and the statistics section.
 
 Not implemented, on purpose: page history and diffs, authentication, anything
-multi-user, link rewriting on move, file attachments, and transclusion.
+multi-user, link rewriting on move, file attachments, transclusion, and
+full-text search over time notes.

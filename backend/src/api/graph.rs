@@ -50,6 +50,43 @@ pub struct InboundLinkView {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct TimeRefView {
+    pub id: crate::times::TimeId,
+    /// The activity this time was tracked under.
+    #[schema(example = "Deep work")]
+    pub name: String,
+    pub start: DateTime<Utc>,
+    /// `null` while the timer is running.
+    pub end: Option<DateTime<Utc>>,
+    #[schema(example = 4470)]
+    pub seconds: u64,
+}
+
+/// The time tracked against a page.
+///
+/// A summary and a sample, not a list. A page you actually work on collects a
+/// time entry every time you start a timer, so hundreds is ordinary — which is
+/// exactly why these are not `inbound` links. Mixed into the backlinks they
+/// would bury them; reported here they are one line with a total on it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PageTimesView {
+    /// Entries attached to this page.
+    #[schema(example = 143)]
+    pub entries: usize,
+    /// Total tracked, with running entries counted up to now.
+    #[schema(example = 97920)]
+    pub seconds: u64,
+    /// How many of them are running right now.
+    #[schema(example = 1)]
+    pub running: usize,
+    /// Distinct activity names tracked against this page.
+    #[schema(example = 4)]
+    pub groups: usize,
+    /// The most recent few, capped. `GET /api/times?page={slug}` has the rest.
+    pub recent: Vec<TimeRefView>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PageLinksResponse {
     /// The slug that was asked about.
     pub slug: Slug,
@@ -59,6 +96,14 @@ pub struct PageLinksResponse {
     pub outbound: Vec<OutboundLinkView>,
     /// Pages that link here — the backlinks.
     pub inbound: Vec<InboundLinkView>,
+    /// Time tracked against this page.
+    ///
+    /// A different kind of edge, and deliberately not one of the `inbound`
+    /// links: a page you work on collects one of these every time a timer
+    /// starts, so hundreds is ordinary and mixing them in would bury the
+    /// backlinks. Summarised here instead, with `GET /api/times?page={slug}`
+    /// for the full list.
+    pub times: PageTimesView,
 }
 
 /// Both directions of a page's links.
@@ -87,10 +132,28 @@ pub async fn links(
     let slug = parse_slug(&raw)?;
     let links = state.index.links_for(&slug).await?;
     let exists = state.store.exists(&slug).await?;
+    let times = state.index.page_times(&slug, Utc::now()).await?;
 
     Ok(Json(PageLinksResponse {
         slug,
         exists,
+        times: PageTimesView {
+            entries: times.entries,
+            seconds: times.seconds,
+            running: times.running,
+            groups: times.groups,
+            recent: times
+                .recent
+                .into_iter()
+                .map(|entry| TimeRefView {
+                    id: entry.id,
+                    name: entry.name,
+                    start: entry.start,
+                    end: entry.end,
+                    seconds: entry.seconds,
+                })
+                .collect(),
+        },
         outbound: links
             .outbound
             .into_iter()

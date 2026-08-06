@@ -12,6 +12,7 @@ pub mod graph;
 pub mod pins;
 pub mod schema;
 pub mod sync;
+pub mod times;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -30,7 +31,11 @@ pub use graph::{
     TagCount, WantedPage,
 };
 pub use pins::Pin;
-pub use sync::{SyncReport, sync};
+pub use sync::{SyncCounts, SyncReport, sync};
+pub use times::{
+    PageTimes, TimeGroup, TimeList, TimeListOptions, TimePageRef, TimeRecord, TimeRef, TimeSortBy,
+    TimeTotals,
+};
 
 #[derive(Debug, Error)]
 pub enum IndexError {
@@ -549,7 +554,11 @@ impl Index {
         .await
     }
 
-    /// Drop every indexed page, so the next scan rebuilds from scratch.
+    /// Drop everything derived from the wiki, so the next scan rebuilds it.
+    ///
+    /// Times go too. Unlike pins, they are derived — from the files in
+    /// `.rhizolog/times/` rather than from the markdown, but derived all the
+    /// same, so the scan has somewhere to get them back from.
     pub async fn clear(&self) -> Result<(), IndexError> {
         self.with_connection(|connection| {
             let transaction = connection.transaction()?;
@@ -558,6 +567,8 @@ impl Index {
             transaction.execute("delete from page_segments", [])?;
             transaction.execute("delete from links", [])?;
             transaction.execute("delete from pages_fts", [])?;
+            transaction.execute("delete from time_pages", [])?;
+            transaction.execute("delete from times", [])?;
             transaction.commit()?;
             Ok(())
         })

@@ -5,7 +5,7 @@ use rhizolog::api::graph::flush_usage;
 use rhizolog::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
 use rhizolog::index::sync;
 use rhizolog::watcher;
-use rhizolog::{AppState, Config, Index, Store, UsageTally};
+use rhizolog::{AppState, Config, Index, Store, TimeStore, UsageTally};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -25,25 +25,36 @@ async fn main() -> ExitCode {
 async fn run() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let store = Store::open(&config.root).await?;
+    let times = TimeStore::open(&config.root).await?;
     let index = Index::open(Some(&config.database)).await?;
 
     tracing::info!(wiki_root = %store.root_display(), "opened wiki");
+    tracing::info!(time_log = %times.root_display(), "opened time log");
 
     // Reconcile before serving: the wiki may have been edited, or the whole
     // index deleted, while the server was down.
-    let report = sync(&store, &index).await?;
+    let report = sync(&store, &times, &index).await?;
     tracing::info!(
-        scanned = report.scanned,
-        indexed = report.indexed,
-        unchanged = report.unchanged,
-        removed = report.removed,
-        failed = report.failed,
-        "index synchronised"
+        scanned = report.pages.scanned,
+        indexed = report.pages.indexed,
+        unchanged = report.pages.unchanged,
+        removed = report.pages.removed,
+        failed = report.pages.failed,
+        "pages synchronised"
     );
-    if report.failed > 0 {
+    tracing::info!(
+        scanned = report.times.scanned,
+        indexed = report.times.indexed,
+        unchanged = report.times.unchanged,
+        removed = report.times.removed,
+        failed = report.times.failed,
+        "time log synchronised"
+    );
+    let failed = report.pages.failed + report.times.failed;
+    if failed > 0 {
         tracing::warn!(
-            failed = report.failed,
-            "some pages could not be indexed; they will not appear in search"
+            failed,
+            "some files could not be indexed; they will not appear in search or in the time log"
         );
     }
 
@@ -57,7 +68,7 @@ async fn run() -> anyhow::Result<()> {
 
     // Started after the initial scan, so it only ever reports genuinely new
     // changes rather than racing the reconciliation that just ran.
-    watcher::spawn(store.clone(), index.clone());
+    watcher::spawn(store.clone(), times.clone(), index.clone());
 
     // A missing build is normal during frontend development, when `pnpm dev`
     // serves the UI itself and proxies the API here.
@@ -77,6 +88,7 @@ async fn run() -> anyhow::Result<()> {
 
     let state = AppState {
         store,
+        times,
         index,
         usage: UsageTally::new(),
         assets,

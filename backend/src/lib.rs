@@ -7,11 +7,13 @@
 pub mod api;
 pub mod config;
 pub mod error;
+pub mod frontmatter;
 pub mod index;
 pub mod markdown;
 pub mod page;
 pub mod slug;
 pub mod store;
+pub mod times;
 pub mod watcher;
 
 pub use api::usage::UsageTally;
@@ -22,3 +24,4 @@ pub use index::{Index, IndexError, SyncReport};
 pub use page::{Frontmatter, Page, PageError};
 pub use slug::{Slug, SlugError};
 pub use store::{Store, StoreError};
+pub use times::{TimeEntry, TimeId, TimeStore, TimeStoreError};

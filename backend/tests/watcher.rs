@@ -8,7 +8,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use rhizolog::{Index, Store, watcher};
+use rhizolog::{Index, Store, TimeStore, watcher};
 use tempfile::TempDir;
 
 /// Generous on purpose: the debounce window is 500ms, and a loaded machine can
@@ -20,14 +20,22 @@ const PATIENCE: Duration = Duration::from_secs(15);
 const STARTUP: Duration = Duration::from_millis(500);
 
 async fn watched() -> (TempDir, Store, Index) {
+    let (directory, store, _times, index) = watched_with_times().await;
+    (directory, store, index)
+}
+
+async fn watched_with_times() -> (TempDir, Store, TimeStore, Index) {
     let directory = TempDir::new().expect("temp dir");
     let store = Store::open(directory.path()).await.expect("open store");
+    let times = TimeStore::open(directory.path())
+        .await
+        .expect("open time log");
     let index = Index::open(None).await.expect("open index");
 
-    watcher::spawn(store.clone(), index.clone());
+    watcher::spawn(store.clone(), times.clone(), index.clone());
     tokio::time::sleep(STARTUP).await;
 
-    (directory, store, index)
+    (directory, store, times, index)
 }
 
 /// Poll `condition` until it holds or [`PATIENCE`] runs out.
@@ -68,6 +76,66 @@ async fn picks_up_a_page_created_outside_the_api() {
     assert_eq!(hits.total, 1);
     assert_eq!(hits.hits[0].slug.as_str(), "external");
     assert_eq!(hits.hits[0].title, "External");
+}
+
+/// The time log is files too, and it lives inside `.rhizolog/` — the one
+/// directory the watcher used to ignore wholesale. A hand-written entry has to
+/// arrive the same way a hand-written page does.
+#[tokio::test]
+async fn picks_up_a_time_entry_written_outside_the_api() {
+    let (_directory, _store, times, index) = watched_with_times().await;
+    let month = times.root().join("2026-08");
+    tokio::fs::create_dir_all(&month)
+        .await
+        .expect("month directory");
+    let path = month.join("20260806T090000-000000000.md");
+
+    tokio::fs::write(
+        &path,
+        "---\nname: By hand\nstart: 2026-08-06T09:00:00Z\nend: 2026-08-06T11:00:00Z\n---\n",
+    )
+    .await
+    .expect("write entry");
+
+    eventually("the new entry to be indexed", || async {
+        index.count_times().await.unwrap_or(0) == 1
+    })
+    .await;
+
+    tokio::fs::remove_file(&path).await.expect("remove entry");
+
+    eventually("the removal to be picked up", || async {
+        index.count_times().await.unwrap_or(1) == 0
+    })
+    .await;
+}
+
+/// The database sits beside the time log, and the two must not share a fate:
+/// the server writes to it constantly, and reacting to that would be a loop.
+#[tokio::test]
+async fn the_index_database_beside_the_time_log_is_still_ignored() {
+    let (directory, _store, _times, index) = watched_with_times().await;
+    let internal = directory.path().join(".rhizolog");
+    tokio::fs::create_dir_all(&internal)
+        .await
+        .expect("internal directory");
+
+    tokio::fs::write(internal.join("index.db"), "not a real database")
+        .await
+        .expect("write database");
+    tokio::fs::write(directory.path().join("page.md"), "Body about rhizomes.\n")
+        .await
+        .expect("write page");
+
+    eventually("the page to be indexed", || async {
+        index.search("rhizomes", 10, 0).await.unwrap().total == 1
+    })
+    .await;
+    assert_eq!(
+        index.count_times().await.unwrap(),
+        0,
+        "the database was mistaken for a time entry"
+    );
 }
 
 #[tokio::test]

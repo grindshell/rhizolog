@@ -7,6 +7,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::api::AppState;
 use crate::error::AppResult;
+use crate::index::SyncCounts;
 use crate::index::sync::rebuild;
 use crate::slug::Slug;
 
@@ -104,26 +105,51 @@ pub async fn search(
     }))
 }
 
+/// What one scan of one tree found.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct ReindexResponse {
-    /// Pages found on disk.
+pub struct SyncCountsView {
+    /// Files found on disk.
     #[schema(example = 6)]
     pub scanned: usize,
-    /// Pages read and written to the index.
+    /// Files read and written to the index.
     #[schema(example = 6)]
     pub indexed: usize,
-    /// Pages dropped because they are no longer on disk.
+    /// Files already indexed with a matching mtime and size.
+    #[schema(example = 0)]
+    pub unchanged: usize,
+    /// Rows dropped because the file is no longer on disk.
     #[schema(example = 0)]
     pub removed: usize,
-    /// Pages on disk that could not be read, and so are not searchable.
+    /// Files on disk that could not be read, and so are not in the index.
     #[schema(example = 0)]
     pub failed: usize,
 }
 
-/// Rebuild the search index from the wiki directory.
+impl From<SyncCounts> for SyncCountsView {
+    fn from(counts: SyncCounts) -> Self {
+        Self {
+            scanned: counts.scanned,
+            indexed: counts.indexed,
+            unchanged: counts.unchanged,
+            removed: counts.removed,
+            failed: counts.failed,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReindexResponse {
+    /// The markdown pages.
+    pub pages: SyncCountsView,
+    /// The time log under `.rhizolog/times/`, which is scanned the same way
+    /// and for the same reason.
+    pub times: SyncCountsView,
+}
+
+/// Rebuild the index from the files on disk.
 ///
-/// The index holds nothing that is not already on disk, so this is always safe
-/// and never loses anything. It is the escape hatch for the one case
+/// The index holds nothing that is not already in a file, so this is always
+/// safe and never loses anything. It is the escape hatch for the one case
 /// incremental scanning can miss: an edit that leaves both mtime and size
 /// unchanged.
 #[utoipa::path(
@@ -135,20 +161,18 @@ pub struct ReindexResponse {
     ),
 )]
 pub async fn reindex(State(state): State<AppState>) -> AppResult<Json<ReindexResponse>> {
-    let report = rebuild(&state.store, &state.index).await?;
+    let report = rebuild(&state.store, &state.times, &state.index).await?;
 
     tracing::info!(
-        scanned = report.scanned,
-        indexed = report.indexed,
-        removed = report.removed,
-        failed = report.failed,
+        pages = report.pages.indexed,
+        times = report.times.indexed,
+        removed = report.pages.removed + report.times.removed,
+        failed = report.pages.failed + report.times.failed,
         "index rebuilt on request"
     );
 
     Ok(Json(ReindexResponse {
-        scanned: report.scanned,
-        indexed: report.indexed,
-        removed: report.removed,
-        failed: report.failed,
+        pages: report.pages.into(),
+        times: report.times.into(),
     }))
 }

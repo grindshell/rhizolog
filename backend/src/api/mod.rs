@@ -11,6 +11,7 @@ pub mod meta;
 pub mod pages;
 pub mod pins;
 pub mod search;
+pub mod times;
 pub mod usage;
 
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::index::Index;
 use crate::store::Store;
+use crate::times::TimeStore;
 
 pub const OPENAPI_PATH: &str = "/api-docs/openapi.json";
 pub const SWAGGER_UI_PATH: &str = "/swagger-ui";
@@ -40,7 +42,10 @@ pub const SWAGGER_UI_PATH: &str = "/swagger-ui";
 pub struct AppState {
     /// The wiki directory: the source of truth.
     pub store: Store,
-    /// The derived index. Everything in it can be rebuilt from `store`.
+    /// The time log under `.rhizolog/times/`. Also files, also authoritative.
+    pub times: TimeStore,
+    /// The derived index. Everything in it can be rebuilt from `store` and
+    /// `times`.
     pub index: Index,
     /// API calls since the last flush to the index.
     pub usage: usage::UsageTally,
@@ -68,34 +73,27 @@ pub struct AppState {
         (name = "search", description = "Full-text search and index maintenance"),
         (name = "graph", description = "Links between pages, tags, and meta-stats"),
         (name = "pins", description = "Pages kept within reach"),
+        (name = "times", description = "Time tracking: timers, entries, groups, and statistics"),
         (name = "meta", description = "Server and index status"),
     ),
 )]
 pub struct ApiDoc;
 
+/// The published OpenAPI document, with no server and no state.
+///
+/// Exists so the spec can be written out of a checkout that has never been run
+/// — see `examples/dump-openapi.rs` for why fetching it over HTTP on Windows
+/// is a trap. `ApiDoc::openapi()` on its own is **not** the document: it is
+/// only the `info` and `tags` skeleton, and every path comes from the routes
+/// registered below. Building it through the same function the server uses is
+/// what stops the written spec and the served one drifting apart.
+pub fn openapi() -> OpenApiDocument {
+    parts().1
+}
+
 /// Build the application router, including Swagger UI and the OpenAPI document.
 pub fn router(state: AppState) -> Router {
-    let (router, mut api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .routes(routes!(meta::health))
-        .routes(routes!(pages::list, pages::create))
-        .routes(routes!(
-            pages::read,
-            pages::replace,
-            pages::patch,
-            pages::delete
-        ))
-        .routes(routes!(pages::move_page))
-        .routes(routes!(pages::render_markdown))
-        .routes(routes!(search::search))
-        .routes(routes!(search::reindex))
-        .routes(routes!(graph::links))
-        .routes(routes!(graph::tags))
-        .routes(routes!(graph::stats))
-        .routes(routes!(pins::list_pins))
-        .routes(routes!(pins::pin_page, pins::unpin_page))
-        .split_for_parts();
-
-    normalize_wildcard_paths(&mut api);
+    let (router, api) = parts();
 
     // Registered explicitly rather than left to the fallback: with the SPA
     // mounted as the fallback, an unmatched `/api` path would otherwise be
@@ -121,6 +119,45 @@ pub fn router(state: AppState) -> Router {
         ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// The routes and the document they describe, built together so neither can
+/// exist without the other.
+fn parts() -> (Router<AppState>, OpenApiDocument) {
+    let (router, mut api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .routes(routes!(meta::health))
+        .routes(routes!(pages::list, pages::create))
+        .routes(routes!(
+            pages::read,
+            pages::replace,
+            pages::patch,
+            pages::delete
+        ))
+        .routes(routes!(pages::move_page))
+        .routes(routes!(pages::render_markdown))
+        .routes(routes!(search::search))
+        .routes(routes!(search::reindex))
+        .routes(routes!(graph::links))
+        .routes(routes!(graph::tags))
+        .routes(routes!(graph::stats))
+        .routes(routes!(pins::list_pins))
+        .routes(routes!(pins::pin_page, pins::unpin_page))
+        .routes(routes!(times::list_times, times::create_time))
+        .routes(routes!(
+            times::read_time,
+            times::patch_time,
+            times::delete_time
+        ))
+        // A static segment after the id, which the page routes cannot have:
+        // a time id contains no `/`, so it is an ordinary parameter rather
+        // than the catch-all a slug needs.
+        .routes(routes!(times::stop_time))
+        .routes(routes!(times::list_time_groups))
+        .routes(routes!(times::time_statistics))
+        .split_for_parts();
+
+    normalize_wildcard_paths(&mut api);
+    (router, api)
 }
 
 /// Serve the built frontend, falling back to `index.html`.

@@ -27,6 +27,25 @@ export type TagsResponse = Schemas['TagsResponse']
 export type TagCountView = Schemas['TagCountView']
 export type PinView = Schemas['PinView']
 export type PinsResponse = Schemas['PinsResponse']
+export type PageTimesView = Schemas['PageTimesView']
+export type TimeRefView = Schemas['TimeRefView']
+export type TimeId = Schemas['TimeId']
+export type TimeSummary = Schemas['TimeSummary']
+export type TimeView = Schemas['TimeView']
+export type TimePageView = Schemas['TimePageView']
+export type TimeListResponse = Schemas['TimeListResponse']
+export type CreateTime = Schemas['CreateTime']
+export type PatchTime = Schemas['PatchTime']
+export type TimeGroupView = Schemas['TimeGroupView']
+export type TimeGroupsResponse = Schemas['TimeGroupsResponse']
+export type TimeTotalsView = Schemas['TimeTotalsView']
+export type TimeStatsResponse = Schemas['TimeStatsResponse']
+export type PeriodStatsView = Schemas['PeriodStatsView']
+export type BucketView = Schemas['BucketView']
+export type NameTotalView = Schemas['NameTotalView']
+export type PageTotalView = Schemas['PageTotalView']
+export type HeatCellView = Schemas['HeatCellView']
+export type HeatmapView = Schemas['HeatmapView']
 export type StatsResponse = Schemas['StatsResponse']
 export type RenderRequest = Schemas['RenderRequest']
 export type RenderedHtml = Schemas['RenderedHtml']
@@ -39,6 +58,8 @@ export type ErrorDetail = Schemas['ErrorDetail']
 export type ListPagesQuery = NonNullable<operations['list']['parameters']['query']>
 export type SearchQuery = operations['search']['parameters']['query']
 export type ReadPageQuery = NonNullable<operations['read']['parameters']['query']>
+export type ListTimesQuery = NonNullable<operations['list_times']['parameters']['query']>
+export type TimeStatsQuery = NonNullable<operations['time_statistics']['parameters']['query']>
 
 /**
  * Every failure the API reports, whatever the status, arrives as
@@ -354,6 +375,110 @@ export function pinPage(slug: string, signal?: AbortSignal): Promise<PinView> {
  */
 export function unpinPage(slug: string, signal?: AbortSignal): Promise<void> {
   return request<void>(`/pins/${encodeSlug(slug)}`, { method: 'DELETE', signal })
+}
+
+/* ---------------------------------------------------------------- times -- */
+
+/** Where a group's entries are browsed. */
+export function groupHref(name: string): string {
+  return `/times?name=${encodeURIComponent(name)}`
+}
+
+/** Where the time tracked against a page is browsed. */
+export function pageTimesHref(slug: string): string {
+  return `/times?page=${encodeURIComponent(slug)}`
+}
+
+/**
+ * The browser's offset from UTC, in minutes **east** — the sign the API wants.
+ *
+ * `getTimezoneOffset` reports minutes to *add to local time to get UTC*, which
+ * is the opposite sign to every other convention, so this is negated exactly
+ * once and in one place.
+ */
+export function utcOffsetMinutes(at: Date = new Date()): number {
+  return -at.getTimezoneOffset()
+}
+
+/** `GET /api/times` — entries without their notes, newest first. */
+export function listTimes(
+  query?: ListTimesQuery,
+  signal?: AbortSignal,
+): Promise<TimeListResponse> {
+  return request<TimeListResponse>('/times', { query, signal })
+}
+
+/**
+ * `POST /api/times` — start a timer, or log time that is already over.
+ *
+ * With only a `name` it starts now and keeps running. With a `start` and an
+ * `end` it records a finished entry. There is no separate start endpoint
+ * because there is no separate thing: a running entry is one whose end has not
+ * been written yet.
+ */
+export function createTime(body: CreateTime, signal?: AbortSignal): Promise<TimeView> {
+  return request<TimeView>('/times', { method: 'POST', body, signal })
+}
+
+/** `GET /api/times/{id}` — one entry, with its note. */
+export function getTime(
+  id: string,
+  query?: { render?: boolean },
+  signal?: AbortSignal,
+): Promise<TimeView> {
+  return request<TimeView>(`/times/${encodeURIComponent(id)}`, { query, signal })
+}
+
+/** `PATCH /api/times/{id}` — merge only the fields present. `end: null` restarts it. */
+export function patchTime(
+  id: string,
+  body: PatchTime,
+  signal?: AbortSignal,
+): Promise<TimeView> {
+  return request<TimeView>(`/times/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body,
+    signal,
+  })
+}
+
+/**
+ * `POST /api/times/{id}/stop` — stop a running timer, now.
+ *
+ * `409` (`time_not_running`) if it had already stopped, which usually means
+ * another tab got there first.
+ */
+export function stopTime(id: string, signal?: AbortSignal): Promise<TimeView> {
+  return request<TimeView>(`/times/${encodeURIComponent(id)}/stop`, {
+    method: 'POST',
+    signal,
+  })
+}
+
+/** `DELETE /api/times/{id}` — 204, or 404 (`time_not_found`). */
+export function deleteTime(id: string, signal?: AbortSignal): Promise<void> {
+  return request<void>(`/times/${encodeURIComponent(id)}`, { method: 'DELETE', signal })
+}
+
+/** `GET /api/time-groups` — every activity name with its totals. */
+export function timeGroups(signal?: AbortSignal): Promise<TimeGroupsResponse> {
+  return request<TimeGroupsResponse>('/time-groups', { signal })
+}
+
+/**
+ * `GET /api/time-stats` — day, week, month and year at once, plus the heat map.
+ *
+ * The offset defaults to this browser's, because every window the server cuts
+ * is a local one and the server has no way to guess.
+ */
+export function timeStats(
+  query: TimeStatsQuery = {},
+  signal?: AbortSignal,
+): Promise<TimeStatsResponse> {
+  return request<TimeStatsResponse>('/time-stats', {
+    query: { offset: utcOffsetMinutes(), ...query },
+    signal,
+  })
 }
 
 /* ----------------------------------------------------------------- meta -- */

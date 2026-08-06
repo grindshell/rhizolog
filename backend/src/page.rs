@@ -23,9 +23,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::frontmatter::{self, FrontmatterError};
 use crate::slug::Slug;
-
-const DELIMITER: &str = "---";
 
 /// The frontmatter block, exactly as it appears in the file.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +73,15 @@ pub enum PageError {
     InvalidFrontmatter(#[from] serde_yaml_ng::Error),
 }
 
+impl From<FrontmatterError> for PageError {
+    fn from(error: FrontmatterError) -> Self {
+        match error {
+            FrontmatterError::Unterminated => Self::UnterminatedFrontmatter,
+            FrontmatterError::InvalidYaml(source) => Self::InvalidFrontmatter(source),
+        }
+    }
+}
+
 impl Page {
     /// Parse the text of a page file.
     pub fn from_markdown(
@@ -86,10 +94,10 @@ impl Page {
         // startup scan compares against the filesystem.
         let size = text.len() as u64;
 
-        let text = strip_bom(text);
+        let text = frontmatter::strip_bom(text);
 
-        let (frontmatter, body) = match split_frontmatter(text)? {
-            Some((yaml, body)) => (parse_frontmatter(yaml)?, body),
+        let (frontmatter, body) = match frontmatter::split(text)? {
+            Some((yaml, body)) => (frontmatter::parse(yaml)?, body),
             None => (Frontmatter::default(), text),
         };
 
@@ -113,17 +121,7 @@ impl Page {
         let yaml = serde_yaml_ng::to_string(&self.frontmatter)
             .expect("frontmatter is a plain struct of strings and timestamps");
 
-        let mut out = String::with_capacity(yaml.len() + self.body.len() + 16);
-        out.push_str(DELIMITER);
-        out.push('\n');
-        out.push_str(&yaml);
-        if !yaml.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str(DELIMITER);
-        out.push('\n');
-        out.push_str(&self.body);
-        out
+        frontmatter::compose(&yaml, &self.body)
     }
 
     /// The page's display title.
@@ -163,62 +161,6 @@ impl Page {
     pub fn created(&self) -> DateTime<Utc> {
         self.frontmatter.created.unwrap_or(self.updated)
     }
-}
-
-/// Split leading frontmatter from the body.
-///
-/// Returns `Ok(None)` when the text does not open with a frontmatter fence at
-/// all, which is the ordinary case for a hand-written file.
-fn split_frontmatter(text: &str) -> Result<Option<(&str, &str)>, PageError> {
-    let Some(after_open) = text.strip_prefix(DELIMITER).and_then(strip_one_line_ending) else {
-        return Ok(None);
-    };
-
-    let mut offset = 0;
-    for line in after_open.split_inclusive('\n') {
-        if line.trim_end_matches(['\r', '\n']) == DELIMITER {
-            let yaml = &after_open[..offset];
-            let body = &after_open[offset + line.len()..];
-            return Ok(Some((yaml, body)));
-        }
-        offset += line.len();
-    }
-
-    Err(PageError::UnterminatedFrontmatter)
-}
-
-fn parse_frontmatter(yaml: &str) -> Result<Frontmatter, PageError> {
-    // An empty block is legal and means "no fields", but YAML parses the empty
-    // document as null rather than as an empty mapping.
-    if yaml.trim().is_empty() {
-        return Ok(Frontmatter::default());
-    }
-    Ok(serde_yaml_ng::from_str(yaml)?)
-}
-
-fn strip_one_line_ending(text: &str) -> Option<&str> {
-    text.strip_prefix("\r\n")
-        .or_else(|| text.strip_prefix('\n'))
-}
-
-/// Drop a leading UTF-8 byte order mark.
-///
-/// `read_to_string` keeps the BOM — U+FEFF is a perfectly valid character — so
-/// a file saved by Notepad, by PowerShell's `Set-Content -Encoding utf8`, or by
-/// an editor set to "UTF-8 with BOM" begins with three bytes that are invisible
-/// to a person and fatal to frontmatter detection: the text no longer starts
-/// with `---`, the whole block is read as body, and the title, tags, and
-/// creation date are silently lost.
-///
-/// Development is on Windows, where writing a BOM is the *default* for several
-/// common tools, so this is the likeliest way for a hand-authored page to be
-/// misparsed — and it fails quietly, which is what makes it worth handling here
-/// rather than expecting an author to notice.
-///
-/// The BOM is not written back: a page that round-trips through the API comes
-/// out normalised without one.
-fn strip_bom(text: &str) -> &str {
-    text.strip_prefix('\u{feff}').unwrap_or(text)
 }
 
 /// The first ATX level-one heading, skipping fenced code blocks so that a `#`

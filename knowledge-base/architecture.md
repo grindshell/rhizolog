@@ -34,11 +34,20 @@ harmless and needs no suppression logic.
   notes/
     rust/async.md
   .rhizolog/
-    index.db        # derived; safe to delete
+    index.db                              # derived; safe to delete
+    times/
+      2026-08/
+        20260806T142530-123456789.md      # NOT derived; the only copy
 ```
 
 The walker skips any directory beginning with `.`, which keeps `.rhizolog/`
 and `.git/` out of the wiki.
+
+`.rhizolog/` is therefore **not all disposable**, despite what its name
+suggests. The database is; the time log beside it is authored data with no
+other copy. See [Time tracking](time-tracking.md) for why it sits under a
+dot-directory rather than in plain sight, and ignore `.rhizolog/index.db` by
+name rather than the whole directory in a wiki kept in git.
 
 ## Page identity
 
@@ -207,7 +216,22 @@ page_tags(slug, tag)
 page_segments(slug, segment, depth)     -- the directories a page sits in
 links(src_slug, target, display, kind)  -- kind: wiki | internal | external
 pages_fts                               -- FTS5 over (slug unindexed, title, body)
+times(id PK, name, started, ended, has_note, updated, size)
+time_pages(time_id, target)             -- the pages an entry was spent on
 ```
+
+`times` is derived from the files under `.rhizolog/times/`, exactly as `pages`
+is derived from the markdown beside them, so the startup scan has two trees to
+reconcile rather than one and a version bump rebuilds both.
+
+`time_pages` is deliberately **not** rows in `links`. A page collects one of
+these every time a timer starts, so hundreds is ordinary, and mixing them in
+would drown its backlinks and make it the most-linked page in the wiki. See
+[Time tracking](time-tracking.md).
+
+`ended` and `started`, not `end` and `start`: `end` closes a `case` in SQLite,
+and a column that must be quoted in every query it appears in is a column that
+eventually will not be.
 
 `page_segments` is redundant with the slug in `pages` and exists only to make
 "every page in a `rust` directory" an indexed lookup instead of a scan. `depth`
@@ -316,13 +340,20 @@ src/
   config.rs      env-driven config
   error.rs       AppError -> one JSON error shape
   slug.rs        Slug newtype + validation
+  frontmatter.rs splitting a YAML block from the markdown after it
   page.rs        Page, Frontmatter, parse/serialize round-trip
   markdown.rs    comrak render, link extraction, wikilink rewriting
   store.rs       filesystem read/write/list/delete/move
-  index/         SQLite: schema, migrations, upsert, search, links, tags, stats
+  times/         TimeId, TimeEntry, the time log on disk, statistics
+  index/         SQLite: schema, upsert, search, links, tags, times, stats
   watcher.rs     notify -> reindex queue
   api/           route handlers + OpenApi assembly
 ```
+
+`frontmatter.rs` exists because a page and a time entry are both "a small YAML
+header, then prose". The answers to what counts as a fence, what a BOM does,
+and how the two halves go back together belong in one place — the second copy
+is where they quietly diverge.
 
 ## Configuration
 

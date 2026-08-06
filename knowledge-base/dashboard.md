@@ -8,18 +8,27 @@ Setup and versions live in [Tech stack](tech-stack.md).
 
 | Route | What it is |
 |---|---|
-| `/` | Stats: counts, orphans, wanted pages, tag histogram, API usage |
+| `/` | Stats: counts, orphans, wanted pages, tag histogram, API usage, and where the time went |
 | `/pages` | Listing, or search results when there is a `?q=`; narrowed by `?tag=`, `?prefix=`, `?segment=` |
-| `/pages/*slug` | One page, rendered, with both directions of its links |
+| `/pages/*slug` | One page, rendered, with both directions of its links and the time spent on it |
 | `/new`, `/edit/*slug` | The editor |
 | `/tags` | Every tag, linking into the filtered listing |
+| `/times` | The time log: running timers, entries, groups; narrowed by `?name=`, `?page=` |
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
 
-The app shell also carries a **Pins** dropdown — the one part of the chrome that
-is not navigation. It and the Pin toggle on a page share one store rather than
-holding a resource each, so pinning from either is visible in both immediately.
-The design is in [Pins](pins.md).
+There is deliberately no `/times/:id`. An id is a machine's handle — unlike a
+slug it is not something anyone would link to — so an entry is read and edited
+in the log itself.
+
+The app shell carries two dropdowns that are not navigation. **Pins** is
+described in [Pins](pins.md). **Timers** sits before it and shows the
+longest-running timer's clock rather than a count, because a count tells you
+something is running and a clock tells you whether it should be; a pin left in
+place is harmless and a timer left running overnight is not. Both follow the
+same pattern — one shared store rather than a resource per component, so
+starting a timer from a page is visible in the top bar immediately. See
+[Time tracking](time-tracking.md).
 
 ## Every part of a slug is a place you can go
 
@@ -163,6 +172,13 @@ What is covered is the part where the bugs were, not the part that is easy:
 - **The pin store's writes**, which update the list locally rather than
   refetching: that a new pin appends, that re-pinning keeps its position, and
   that a refused pin reaches the caller instead of silently doing nothing.
+- **The timer store**, for the same reasons and one more: that a backend which
+  is merely down leaves the list empty rather than throwing out of the navbar.
+  The guard on `resource.latest` is what makes that true and it is invisible in
+  the source.
+- **Duration formatting**, which has three spellings on purpose — a list drops
+  seconds, a running clock keeps them, an axis label uses hours — and none of
+  them may render a negative.
 - **The error envelope**, including the transport cases and the one case that
   must *not* become an `ApiError`: an abort, which is a caller who stopped
   caring rather than a failure.
@@ -176,3 +192,25 @@ The graph holds two edges when a page is linked both as `[[a]]` and as
 `[a](a.md)`, and `/api/links` is right to report both. Rendering the same page
 twice under the same title just reads as a bug, so the panels group by target
 and keep the kinds as badges.
+
+The time panel above them is shaped differently on purpose, and it is not a
+third link panel — see [Time tracking](time-tracking.md) for why a hundred time
+entries have to be one line with a total on it. It is absent entirely when
+nothing has been tracked, so a wiki nobody times looks exactly as it did.
+
+## The time section draws its own charts
+
+A bar chart of at most thirty-one bars and a 7×24 grid of squares, both plain
+divs. A charting library would add a dependency and a second way for the
+dashboard to fail, in exchange for nothing this needs.
+
+Two details are load-bearing. An empty bucket still gets two pixels of height,
+so it reads as a column rather than a gap in the axis. And the heat map shades
+by share of its own busiest cell rather than by an absolute scale, because the
+question it answers is *when*, not *how much* — on an absolute scale a light
+week is indistinguishable from an empty one.
+
+The clock on a running timer is recomputed locally from its `start` rather than
+re-fetched, which is the same arithmetic the server does; only the *set* of
+running timers is polled, because a second tab or a hand-edited file can change
+it and nothing would otherwise say so.

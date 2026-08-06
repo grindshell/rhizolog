@@ -27,7 +27,15 @@ pub struct Health {
     #[schema(example = 42)]
     pub pages: usize,
 
-    /// When the index was last reconciled with the wiki directory. Null if it
+    /// Number of time entries currently indexed.
+    #[schema(example = 312)]
+    pub times: usize,
+
+    /// Timers running right now. Several may run at once.
+    #[schema(example = 1)]
+    pub running_timers: usize,
+
+    /// When the index was last reconciled with the files on disk. Null if it
     /// has not been scanned yet.
     pub last_indexed: Option<DateTime<Utc>>,
 }
@@ -43,11 +51,15 @@ pub struct Health {
     ),
 )]
 pub async fn health(State(state): State<AppState>) -> AppResult<Json<Health>> {
+    let totals = state.index.time_totals(Utc::now()).await?;
+
     Ok(Json(Health {
         status: "ok".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         wiki_root: state.store.root_display(),
         pages: state.index.count().await?,
+        times: totals.entries,
+        running_timers: totals.running,
         last_indexed: state.index.last_sync().await?,
     }))
 }

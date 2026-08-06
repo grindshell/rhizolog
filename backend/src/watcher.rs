@@ -3,7 +3,9 @@
 //! Files are the source of truth, which means an editor, a `git checkout`, or
 //! an agent writing markdown directly are all first-class ways to change the
 //! wiki. The startup scan catches whatever happened while the server was down;
-//! this catches what happens while it is up.
+//! this catches what happens while it is up. It covers the time log for the
+//! same reason it covers the pages: both are files, so both can be edited
+//! behind the server's back.
 //!
 //! ## Why there is no echo suppression
 //!
@@ -30,7 +32,8 @@ use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 
 use crate::index::{Index, sync::sync};
 use crate::slug::Slug;
-use crate::store::Store;
+use crate::store::{INTERNAL_DIR, Store};
+use crate::times::{TIMES_DIR, TimeId, TimeStore};
 
 /// How long to wait for a burst of events to settle.
 ///
@@ -41,10 +44,13 @@ const DEBOUNCE: Duration = Duration::from_millis(500);
 /// What a batch of filesystem events asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reindex {
-    /// Re-read these specific pages.
-    Pages(BTreeSet<Slug>),
-    /// Something happened that cannot be attributed to individual pages — a
-    /// directory was renamed or deleted, say. Rescan the wiki.
+    /// Re-read these specific files.
+    Targets {
+        pages: BTreeSet<Slug>,
+        times: BTreeSet<TimeId>,
+    },
+    /// Something happened that cannot be attributed to individual files — a
+    /// directory was renamed or deleted, say. Rescan everything.
     Everything,
 }
 
@@ -52,7 +58,7 @@ pub enum Reindex {
 ///
 /// Failure is reported, not fatal: a wiki on a filesystem that cannot be
 /// watched should still be served, just without live pickup of external edits.
-pub fn spawn(store: Store, index: Index) {
+pub fn spawn(store: Store, times: TimeStore, index: Index) {
     let root = store.root().to_path_buf();
     let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -101,11 +107,22 @@ pub fn spawn(store: Store, index: Index) {
                 continue;
             };
 
-            apply(&store, &index, plan).await;
+            apply(&store, &times, &index, plan).await;
         }
 
         tracing::debug!("file watcher stopped");
     });
+}
+
+/// What one changed path turns out to be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Change {
+    /// Not ours: the index database, a temporary file, `.git`.
+    Ignore,
+    Page(Slug),
+    Time(TimeId),
+    /// Something whose effects cannot be enumerated from the event alone.
+    Rescan,
 }
 
 /// Decide what a batch of changed paths requires.
@@ -116,6 +133,7 @@ pub fn spawn(store: Store, index: Index) {
 /// have this chasing its own tail.
 pub fn plan<'a>(root: &Path, paths: impl Iterator<Item = &'a Path>) -> Option<Reindex> {
     let mut pages = BTreeSet::new();
+    let mut times = BTreeSet::new();
     let mut rescan = false;
 
     for path in paths {
@@ -123,51 +141,126 @@ pub fn plan<'a>(root: &Path, paths: impl Iterator<Item = &'a Path>) -> Option<Re
             // Outside the wiki entirely; not ours to care about.
             continue;
         };
-        if is_hidden(relative) {
-            continue;
-        }
 
-        match Slug::from_relative_path(relative) {
-            Some(slug) => {
+        match classify(relative) {
+            Change::Ignore => {}
+            Change::Page(slug) => {
                 pages.insert(slug);
             }
-            None => {
-                // A directory, or a file that is not a page. A directory rename
-                // or delete can take many pages with it and arrives as a single
-                // event naming only the directory, so the safe reading is that
-                // we no longer know what changed. A rescan is cheap when
-                // nothing did — it compares mtimes and reads nothing.
-                rescan = true;
+            Change::Time(id) => {
+                times.insert(id);
             }
+            Change::Rescan => rescan = true,
         }
     }
 
     if rescan {
         Some(Reindex::Everything)
-    } else if pages.is_empty() {
+    } else if pages.is_empty() && times.is_empty() {
         None
     } else {
-        Some(Reindex::Pages(pages))
+        Some(Reindex::Targets { pages, times })
     }
 }
 
-async fn apply(store: &Store, index: &Index, plan: Reindex) {
+/// Work out what a path relative to the wiki root is.
+fn classify(relative: &Path) -> Change {
+    let Some(segments) = segments(relative) else {
+        // A path we cannot read as text is a path we cannot address.
+        return Change::Rescan;
+    };
+
+    // The temporary files an atomic write goes through, in either tree.
+    if segments
+        .last()
+        .is_some_and(|name| name.starts_with('.') && name.ends_with(".tmp"))
+    {
+        return Change::Ignore;
+    }
+
+    if segments.first() == Some(&INTERNAL_DIR) {
+        return classify_internal(&segments[1..]);
+    }
+
+    // `.git`, and anything else hidden by convention. Slug validation rejects
+    // dot-segments too, so these could never be addressed as pages anyway.
+    if segments.iter().any(|name| name.starts_with('.')) {
+        return Change::Ignore;
+    }
+
+    match Slug::from_relative_path(relative) {
+        Some(slug) => Change::Page(slug),
+        // A directory, or a file that is not a page. A directory rename or
+        // delete can take many pages with it and arrives as a single event
+        // naming only the directory, so the safe reading is that we no longer
+        // know what changed. A rescan is cheap when nothing did — it compares
+        // mtimes and reads nothing.
+        None => Change::Rescan,
+    }
+}
+
+/// Work out what a path inside `.rhizolog/` is.
+///
+/// Almost everything here is the server's own business — the database and its
+/// write-ahead log, which is what the blanket "ignore hidden paths" rule used
+/// to be for. The exception is the time log, which is authored data that
+/// happens to live in the same directory, and which therefore has to be watched
+/// exactly as the pages are.
+fn classify_internal(rest: &[&str]) -> Change {
+    if rest.first() != Some(&TIMES_DIR) {
+        return Change::Ignore;
+    }
+
+    match rest.len() {
+        // The times directory itself was created, moved or removed.
+        1 => Change::Rescan,
+        3 => match TimeId::from_relative_path(Path::new(rest[1]).join(rest[2]).as_path()) {
+            Some(id) => Change::Time(id),
+            None => Change::Rescan,
+        },
+        // A month directory, or something nested deeper than an entry can be.
+        _ => Change::Rescan,
+    }
+}
+
+/// A relative path as text segments, or `None` if it holds anything that is not
+/// a plain name.
+fn segments(relative: &Path) -> Option<Vec<&str>> {
+    relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn apply(store: &Store, times: &TimeStore, index: &Index, plan: Reindex) {
     match plan {
-        Reindex::Everything => match sync(store, index).await {
+        Reindex::Everything => match sync(store, times, index).await {
             Ok(report) if report.changed_anything() => {
                 tracing::info!(
-                    indexed = report.indexed,
-                    removed = report.removed,
+                    pages = report.pages.indexed,
+                    times = report.times.indexed,
+                    removed = report.pages.removed + report.times.removed,
                     "picked up external changes"
                 );
             }
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "could not rescan the wiki"),
         },
-        Reindex::Pages(slugs) => {
-            for slug in slugs {
+        Reindex::Targets {
+            pages,
+            times: changed,
+        } => {
+            for slug in pages {
                 if let Err(error) = reindex_page(store, index, &slug).await {
                     tracing::warn!(%slug, %error, "could not reindex a changed page");
+                }
+            }
+            for id in changed {
+                if let Err(error) = reindex_time(times, index, &id).await {
+                    tracing::warn!(%id, %error, "could not reindex a changed time entry");
                 }
             }
         }
@@ -201,15 +294,23 @@ async fn reindex_page(
     Ok(())
 }
 
-/// Whether any component of a relative path is a dot-entry.
-///
-/// Catches `.rhizolog/index.db` and the `.page.md.tmp` files atomic writes go
-/// through, which are the two ways the server's own activity shows up here.
-fn is_hidden(relative: &Path) -> bool {
-    relative.components().any(|component| {
-        matches!(component, Component::Normal(name)
-            if name.to_str().is_some_and(|name| name.starts_with('.')))
-    })
+/// The same, for one time entry.
+async fn reindex_time(
+    times: &TimeStore,
+    index: &Index,
+    id: &TimeId,
+) -> Result<(), crate::index::IndexError> {
+    match times.read(id).await {
+        Ok(entry) => {
+            index.upsert_time(&entry).await?;
+            tracing::debug!(%id, "reindexed a time entry after an external edit");
+        }
+        Err(error) => {
+            tracing::debug!(%id, %error, "dropping a time entry that could not be read");
+            index.remove_time(id).await?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -227,7 +328,17 @@ mod tests {
     }
 
     fn slugs(raw: &[&str]) -> Reindex {
-        Reindex::Pages(raw.iter().map(|s| Slug::parse(s).unwrap()).collect())
+        Reindex::Targets {
+            pages: raw.iter().map(|s| Slug::parse(s).unwrap()).collect(),
+            times: BTreeSet::new(),
+        }
+    }
+
+    fn ids(raw: &[&str]) -> Reindex {
+        Reindex::Targets {
+            pages: BTreeSet::new(),
+            times: raw.iter().map(|s| TimeId::parse(s).unwrap()).collect(),
+        }
     }
 
     #[test]
@@ -253,11 +364,52 @@ mod tests {
     fn the_servers_own_files_are_ignored() {
         assert_eq!(planned(&[".rhizolog/index.db"]), None);
         assert_eq!(planned(&[".rhizolog/index.db-wal"]), None);
-        // Temporary files from an atomic write.
+        // Temporary files from an atomic write, in either tree.
         assert_eq!(planned(&[".notes.md.tmp"]), None);
         assert_eq!(planned(&["notes/.rhizome.md.tmp"]), None);
+        assert_eq!(
+            planned(&[".rhizolog/times/2026-08/.20260806T090000-000000000.md.tmp"]),
+            None
+        );
         // And anything else hidden, like a git checkout touching .git.
         assert_eq!(planned(&[".git/index"]), None);
+    }
+
+    /// The time log shares a directory with the database, and the two must not
+    /// share a fate: one is ours to ignore, the other is authored data.
+    #[test]
+    fn a_changed_time_entry_reindexes_just_that_entry() {
+        assert_eq!(
+            planned(&[".rhizolog/times/2026-08/20260806T090000-000000000.md"]),
+            Some(ids(&["20260806T090000-000000000"]))
+        );
+    }
+
+    #[test]
+    fn pages_and_times_can_change_in_the_same_batch() {
+        assert_eq!(
+            planned(&[
+                "notes/rhizome.md",
+                ".rhizolog/times/2026-08/20260806T090000-000000000.md",
+            ]),
+            Some(Reindex::Targets {
+                pages: [Slug::parse("notes/rhizome").unwrap()].into(),
+                times: [TimeId::parse("20260806T090000-000000000").unwrap()].into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_stray_file_in_the_time_log_forces_a_rescan_rather_than_being_guessed_at() {
+        assert_eq!(
+            planned(&[".rhizolog/times/2026-08/notes.md"]),
+            Some(Reindex::Everything)
+        );
+        assert_eq!(
+            planned(&[".rhizolog/times/2026-08"]),
+            Some(Reindex::Everything)
+        );
+        assert_eq!(planned(&[".rhizolog/times"]), Some(Reindex::Everything));
     }
 
     #[test]

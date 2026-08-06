@@ -309,7 +309,8 @@ fn file_name_starts_with_dot(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with('.'))
 }
 
-fn modified_at(metadata: &std::fs::Metadata) -> Result<DateTime<Utc>, StoreError> {
+/// A file's mtime, as the index records it.
+pub(crate) fn modified_at(metadata: &std::fs::Metadata) -> io::Result<DateTime<Utc>> {
     Ok(metadata.modified()?.into())
 }
 
@@ -332,7 +333,7 @@ pub fn display_path(path: &Path) -> String {
 ///
 /// Same directory because a rename across volumes is not atomic; a leading dot
 /// so that a temporary left behind by a crash is invisible to the walker.
-async fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
+pub(crate) async fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
     let directory = path.parent().unwrap_or(Path::new("."));
     let file_name = path
         .file_name()
