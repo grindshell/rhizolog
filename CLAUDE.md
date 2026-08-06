@@ -55,7 +55,7 @@ deployment.
   creates a `.git` inside `backend/` or elsewhere, delete it — otherwise the root
   repo treats that directory as an opaque embedded repo and stops tracking
   its files. Pass `--vcs none` to `cargo new`/`cargo init` to avoid this.
-- **Main branch is `main`.** Commit directly to it or branch off it for
+- **Main branch is `master`.** Commit directly to it or branch off it for
   larger work.
 - **Scope commit subjects** by the area touched: `backend:`, `ui:` for
   frontend, `kb:` for knowledge base, `repo:` for root-level/tooling changes.
@@ -125,5 +125,14 @@ $data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/ap
   the first non-ASCII bytes are `E2 80 94`. The same applies to `>` and
   `Out-File` generally, which re-encode and add a BOM — `git show HEAD:f > tmp`
   does not give you the committed bytes; `git checkout HEAD -- f` does.
+- **Never pass a quoted string straight to a native command.** 5.1 re-parses an
+  argument on its way to a native executable and strips the double quotes it
+  takes for delimiters, so `git commit -m @'...'@` commits the message with
+  every `"` silently removed — a single-quoted here-string stops `$` expansion
+  but not this, because the mangling happens at the native-command boundary,
+  after the here-string has already been resolved. The commit succeeds and
+  nothing warns you; it shows up only if you read the message back with
+  `git log -1 --format=%B`. Write the message to a file and use
+  `git commit -F <file>`, which carries quotes and em-dashes through intact.
 - Stop the server before `cargo build`: a running `rhizolog.exe` is locked,
   and the build fails with "Access is denied" rather than anything informative.
