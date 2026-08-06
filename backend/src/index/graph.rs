@@ -10,8 +10,10 @@
 //! Together with orphans (pages nothing links to) that is the main thing
 //! `/api/stats` is for.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
 use chrono::{DateTime, Utc};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::index::schema::{KEY_LAST_SYNC, TOP_N};
 use crate::index::{Index, IndexError, from_nanos};
@@ -117,6 +119,75 @@ pub struct Stats {
     pub last_indexed: Option<DateTime<Utc>>,
 }
 
+/// How a whole-graph query is narrowed. Every field intersects.
+#[derive(Debug, Clone)]
+pub struct GraphOptions {
+    /// Only pages carrying this tag.
+    pub tag: Option<String>,
+    /// Only pages at or under this slug path, hierarchically.
+    pub prefix: Option<String>,
+    /// Walk outward from this slug instead of taking the whole wiki.
+    pub root: Option<String>,
+    /// How many hops out from `root` the walk covers. Ignored without one.
+    pub depth: usize,
+    /// Whether pages that are linked to but not written are nodes.
+    pub wanted: bool,
+    /// How many *pages* the view may carry. The best-connected survive.
+    pub limit: usize,
+}
+
+impl Default for GraphOptions {
+    fn default() -> Self {
+        Self {
+            tag: None,
+            prefix: None,
+            root: None,
+            depth: 2,
+            wanted: true,
+            limit: 500,
+        }
+    }
+}
+
+/// A page in the graph — possibly one nobody has written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphNode {
+    pub slug: String,
+    /// The page's title, or the slug itself when there is no page.
+    pub title: String,
+    pub exists: bool,
+    /// Distinct pages linking here, counted across the **whole wiki** rather
+    /// than the view. A hub therefore still looks like one inside a filter, and
+    /// the gap between this number and the lines actually drawn at the node is
+    /// itself the useful signal: it says the branch reaches outside.
+    pub inbound: usize,
+    /// Distinct pages this one links to, likewise wiki-wide.
+    pub outbound: usize,
+    pub tags: Vec<String>,
+    /// Hops from `root`, when the query had one.
+    pub distance: Option<usize>,
+}
+
+/// One line to draw: every link from `source` to `target`, collapsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+    /// The kinds that reached it. Two, when a page is linked both as `[[a]]`
+    /// and as `[a](a.md)` — which is two rows in `links` and one line to draw.
+    pub kinds: Vec<LinkKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Graph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    /// Pages that matched the filters, before `limit` was applied.
+    pub matched: usize,
+    /// Whether `limit` dropped any of them.
+    pub truncated: bool,
+}
+
 /// Only wiki and internal links are part of the page graph.
 const IS_PAGE_LINK: &str = "links.kind != 'external'";
 
@@ -190,6 +261,206 @@ impl Index {
                 .collect();
 
             Ok(PageLinks { outbound, inbound })
+        })
+        .await
+    }
+
+    /// The link graph as nodes and edges, narrowed by [`GraphOptions`].
+    ///
+    /// Three rules decide what comes back, and the third is the one that is not
+    /// obvious:
+    ///
+    /// 1. The filters select **pages**.
+    /// 2. An edge is drawn when both of its ends survived.
+    /// 3. **A wanted page is not a page.** It has no row anywhere — no tags, no
+    ///    path on disk, nothing a filter could ask about — so the filters
+    ///    cannot apply to it. It is drawn wherever a link in the view reaches
+    ///    it, and that is the whole reason it is worth drawing: it is a branch
+    ///    someone gestured at, and a view that hid it would be claiming the
+    ///    links in it all land somewhere.
+    ///
+    /// The one thing a wanted page is still subject to is the walk: with a
+    /// `root`, everything drawn is within `depth` hops of it, or the promise the
+    /// parameter makes would be false at the edges.
+    pub async fn graph(&self, options: GraphOptions) -> Result<Graph, IndexError> {
+        self.with_connection(move |connection| {
+            let GraphOptions {
+                tag,
+                prefix,
+                root,
+                depth,
+                wanted,
+                limit,
+            } = options;
+
+            // Every page link in the wiki, collapsed to one entry per ordered
+            // pair. Loaded whole rather than filtered in SQL because the
+            // degrees below count the whole wiki, so a filtered query would
+            // only have to be run a second time unfiltered.
+            let mut collapsed: BTreeMap<(String, String), Vec<LinkKind>> = BTreeMap::new();
+            {
+                let mut query = connection.prepare(&format!(
+                    "select src_slug, target, kind from links
+                     where {IS_PAGE_LINK}
+                     order by src_slug, target, kind"
+                ))?;
+                let rows = query.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (source, target, kind) = row?;
+                    let Some(kind) = LinkKind::parse(&kind) else {
+                        continue;
+                    };
+                    collapsed.entry((source, target)).or_default().push(kind);
+                }
+            }
+
+            // (inbound, outbound), wiki-wide, counted over collapsed pairs so a
+            // page linked twice over is one referrer rather than two.
+            let mut degrees: HashMap<String, (usize, usize)> = HashMap::new();
+            for (source, target) in collapsed.keys() {
+                degrees.entry(source.clone()).or_default().1 += 1;
+                degrees.entry(target.clone()).or_default().0 += 1;
+            }
+
+            // Doubles as the set of slugs that name a page that exists, which
+            // is what separates "excluded by a filter" from "never written".
+            let mut titles: HashMap<String, String> = HashMap::new();
+            {
+                let mut query = connection.prepare("select slug, title from pages")?;
+                let rows = query.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                for row in rows {
+                    let (slug, title) = row?;
+                    titles.insert(slug, title);
+                }
+            }
+
+            let distances = match &root {
+                Some(root) => Some(walk_from(connection, root, depth)?),
+                None => None,
+            };
+
+            // The same filter expression the listing uses, and for the same
+            // reasons — `substr` rather than `like` because slugs are
+            // case-sensitive and a prefix has to stop at the separator.
+            let mut matched: Vec<String> = {
+                let mut query = connection.prepare(
+                    "select slug from pages
+                     where (?1 is null or exists (
+                              select 1 from page_tags
+                              where page_tags.slug = pages.slug and page_tags.tag = ?1
+                          ))
+                       and (?2 is null
+                            or slug = ?2
+                            or substr(slug, 1, length(?2) + 1) = ?2 || '/')
+                     order by slug",
+                )?;
+                query
+                    .query_map(params![&tag, &prefix], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+
+            if let Some(distances) = &distances {
+                matched.retain(|slug| distances.contains_key(slug));
+            }
+
+            let matched_count = matched.len();
+            let truncated = matched_count > limit;
+            if truncated {
+                // Drop leaves, not hubs. A graph cut down to its least
+                // connected pages is a scatter of dots that says nothing.
+                let degree = |slug: &String| {
+                    degrees
+                        .get(slug)
+                        .map_or(0, |(inbound, outbound)| inbound + outbound)
+                };
+                matched.sort_by(|a, b| degree(b).cmp(&degree(a)).then_with(|| a.cmp(b)));
+                matched.truncate(limit);
+                matched.sort();
+            }
+
+            let pages: BTreeSet<String> = matched.into_iter().collect();
+
+            let mut edges = Vec::new();
+            let mut unwritten: BTreeSet<String> = BTreeSet::new();
+            for ((source, target), kinds) in &collapsed {
+                if !pages.contains(source) {
+                    continue;
+                }
+
+                if !pages.contains(target) {
+                    // A page that exists but the filters excluded: its edge is
+                    // out of the view, not a want.
+                    if titles.contains_key(target) || !wanted {
+                        continue;
+                    }
+                    if distances
+                        .as_ref()
+                        .is_some_and(|reached| !reached.contains_key(target))
+                    {
+                        continue;
+                    }
+                    unwritten.insert(target.clone());
+                }
+
+                edges.push(GraphEdge {
+                    source: source.clone(),
+                    target: target.clone(),
+                    kinds: kinds.clone(),
+                });
+            }
+
+            let mut tags_of: HashMap<String, Vec<String>> = HashMap::new();
+            {
+                let mut query =
+                    connection.prepare("select slug, tag from page_tags order by slug, tag")?;
+                let rows = query.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                for row in rows {
+                    let (slug, tag) = row?;
+                    tags_of.entry(slug).or_default().push(tag);
+                }
+            }
+
+            let node = |slug: String, exists: bool| {
+                let (inbound, outbound) = degrees.get(&slug).copied().unwrap_or_default();
+                GraphNode {
+                    title: match exists {
+                        true => titles.get(&slug).cloned().unwrap_or_else(|| slug.clone()),
+                        false => slug.clone(),
+                    },
+                    exists,
+                    inbound,
+                    outbound,
+                    tags: tags_of.get(&slug).cloned().unwrap_or_default(),
+                    distance: distances
+                        .as_ref()
+                        .and_then(|reached| reached.get(&slug).copied()),
+                    slug,
+                }
+            };
+
+            let mut nodes: Vec<GraphNode> = pages
+                .into_iter()
+                .map(|slug| node(slug, true))
+                .chain(unwritten.into_iter().map(|slug| node(slug, false)))
+                .collect();
+            nodes.sort_by(|a, b| a.slug.cmp(&b.slug));
+
+            Ok(Graph {
+                nodes,
+                edges,
+                matched: matched_count,
+                truncated,
+            })
         })
         .await
     }
@@ -435,6 +706,51 @@ impl Index {
     }
 }
 
+/// Every slug within `depth` hops of `root`, with the fewest hops that reaches
+/// it.
+///
+/// Direction is ignored on purpose. A page's neighbourhood is what it points at
+/// *and* what points at it — the same reason `/api/links/{slug}` returns both
+/// directions from one call — so the walk crosses every edge either way.
+///
+/// The root need not name a page that exists: a wanted page has a
+/// neighbourhood, and it is exactly the set of pages waiting on it.
+fn walk_from(
+    connection: &Connection,
+    root: &str,
+    depth: usize,
+) -> Result<HashMap<String, usize>, IndexError> {
+    // `union` rather than `union all` is what stops a cycle looping forever:
+    // it drops rows already produced. A node can still be reached at two
+    // different distances, which is why the outer query takes the smaller.
+    let mut query = connection.prepare(&format!(
+        "with recursive walk(slug, distance) as (
+             select ?1, 0
+             union
+             select case when links.src_slug = walk.slug
+                         then links.target
+                         else links.src_slug
+                    end,
+                    walk.distance + 1
+             from links
+             join walk on links.src_slug = walk.slug or links.target = walk.slug
+             where {IS_PAGE_LINK} and walk.distance < ?2
+         )
+         select slug, min(distance) from walk group by slug"
+    ))?;
+
+    let rows = query.query_map(params![root, depth as i64], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+
+    let mut reached = HashMap::new();
+    for row in rows {
+        let (slug, distance) = row?;
+        reached.insert(slug, distance.max(0) as usize);
+    }
+    Ok(reached)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,6 +975,325 @@ mod tests {
         assert!(stats.orphans.is_empty());
         assert!(stats.wanted.is_empty());
         assert!(stats.tag_counts.is_empty());
+    }
+
+    /// A wiki with a hub, a leaf hanging off it, a want, and an island.
+    async fn graph_index() -> Index {
+        let index = index().await;
+        seed(
+            &index,
+            "index",
+            "See [[notes/rust]] and [[notes/rhizome]].\n",
+        )
+        .await;
+        seed(
+            &index,
+            "notes/rust",
+            "Async is [[notes/rust/async]], and [[notes/rust/streams]] is not written.\n",
+        )
+        .await;
+        seed(&index, "notes/rust/async", "Back to [[notes/rust]].\n").await;
+        seed(&index, "notes/rhizome", "Theory.\n").await;
+        seed(
+            &index,
+            "scratch/inbox",
+            "Nothing links here and it links nowhere.\n",
+        )
+        .await;
+        index
+    }
+
+    fn slugs(graph: &Graph) -> Vec<&str> {
+        graph.nodes.iter().map(|node| node.slug.as_str()).collect()
+    }
+
+    fn pairs(graph: &Graph) -> Vec<(&str, &str)> {
+        graph
+            .edges
+            .iter()
+            .map(|edge| (edge.source.as_str(), edge.target.as_str()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_whole_graph_carries_orphans_and_wants_alike() {
+        let graph = graph_index()
+            .await
+            .graph(GraphOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            slugs(&graph),
+            [
+                "index",
+                "notes/rhizome",
+                "notes/rust",
+                "notes/rust/async",
+                "notes/rust/streams",
+                "scratch/inbox",
+            ],
+            "an orphan is a node with no lines at it, not an absent node"
+        );
+
+        let streams = &graph.nodes[4];
+        assert!(!streams.exists, "nobody has written it");
+        assert_eq!(streams.inbound, 1);
+        assert_eq!(streams.outbound, 0);
+
+        assert_eq!(
+            pairs(&graph),
+            [
+                ("index", "notes/rhizome"),
+                ("index", "notes/rust"),
+                ("notes/rust", "notes/rust/async"),
+                ("notes/rust", "notes/rust/streams"),
+                ("notes/rust/async", "notes/rust"),
+            ],
+            "a mutual pair is two directed edges, not one"
+        );
+    }
+
+    #[tokio::test]
+    async fn links_of_two_kinds_between_one_pair_are_one_edge() {
+        let index = index().await;
+        seed(&index, "b", "Target.\n").await;
+        seed(&index, "a", "Both [[b]] and [b](b.md).\n").await;
+
+        let graph = index.graph(GraphOptions::default()).await.unwrap();
+
+        assert_eq!(graph.edges.len(), 1, "one line to draw");
+        assert_eq!(graph.edges[0].kinds, [LinkKind::Internal, LinkKind::Wiki]);
+        // ...and it is one referrer, not two, so the degree matches the picture.
+        let b = graph.nodes.iter().find(|node| node.slug == "b").unwrap();
+        assert_eq!(b.inbound, 1);
+    }
+
+    #[tokio::test]
+    async fn a_filter_selects_pages_and_edges_need_both_ends() {
+        let graph = graph_index()
+            .await
+            .graph(GraphOptions {
+                prefix: Some("notes/rust".to_owned()),
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            slugs(&graph),
+            ["notes/rust", "notes/rust/async", "notes/rust/streams"]
+        );
+        // `index` links to `notes/rust`, and that edge is out of the view
+        // because only one of its ends is in it.
+        assert_eq!(
+            pairs(&graph),
+            [
+                ("notes/rust", "notes/rust/async"),
+                ("notes/rust", "notes/rust/streams"),
+                ("notes/rust/async", "notes/rust"),
+            ]
+        );
+
+        // The degree still counts the whole wiki, which is what says the branch
+        // is not closed: one line arrives at `notes/rust` in the picture, and
+        // two pages link to it.
+        let rust = &graph.nodes[0];
+        assert_eq!(rust.inbound, 2);
+    }
+
+    /// The rule that is not obvious: a wanted page has nothing to filter on.
+    #[tokio::test]
+    async fn a_wanted_page_is_not_filtered_because_it_is_not_a_page() {
+        let index = index().await;
+        index
+            .upsert(&page(
+                "notes/rust",
+                &["rust"],
+                "Wants [[code/rust/streams]].\n",
+            ))
+            .await
+            .unwrap();
+        index
+            .upsert(&page("notes/rhizome", &[], "Untagged.\n"))
+            .await
+            .unwrap();
+
+        let graph = index
+            .graph(GraphOptions {
+                tag: Some("rust".to_owned()),
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+
+        // The want survives a tag filter it could never satisfy, and a prefix
+        // it sits outside of. Hiding it would claim every link in the view
+        // lands somewhere.
+        assert_eq!(slugs(&graph), ["code/rust/streams", "notes/rust"]);
+    }
+
+    #[tokio::test]
+    async fn wants_can_be_left_out() {
+        let graph = graph_index()
+            .await
+            .graph(GraphOptions {
+                wanted: false,
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(!slugs(&graph).contains(&"notes/rust/streams"));
+        assert!(
+            !pairs(&graph).contains(&("notes/rust", "notes/rust/streams")),
+            "an edge to a node nobody drew is a line into empty space"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_walk_goes_both_ways_and_stops_at_the_depth() {
+        let index = graph_index().await;
+
+        let one = index
+            .graph(GraphOptions {
+                root: Some("notes/rust/async".to_owned()),
+                depth: 1,
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(slugs(&one), ["notes/rust", "notes/rust/async"]);
+
+        // Two hops reaches `index` — which `notes/rust` does not link to, and
+        // which links to it. A walk that only followed arrows forward would
+        // never find it, and a page's neighbourhood is both directions.
+        let two = index
+            .graph(GraphOptions {
+                root: Some("notes/rust/async".to_owned()),
+                depth: 2,
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            slugs(&two),
+            [
+                "index",
+                "notes/rust",
+                "notes/rust/async",
+                "notes/rust/streams"
+            ]
+        );
+
+        let distances: Vec<Option<usize>> = two.nodes.iter().map(|node| node.distance).collect();
+        assert_eq!(distances, [Some(2), Some(1), Some(0), Some(2)]);
+        assert!(
+            !slugs(&two).contains(&"notes/rhizome"),
+            "three hops away, and the depth was two"
+        );
+    }
+
+    /// A wanted page is exempt from the filters but not from the walk, or
+    /// `depth` would be a promise the edges break.
+    #[tokio::test]
+    async fn a_walk_bounds_wants_too() {
+        let index = graph_index().await;
+
+        let one = index
+            .graph(GraphOptions {
+                root: Some("index".to_owned()),
+                depth: 1,
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(slugs(&one), ["index", "notes/rhizome", "notes/rust"]);
+        assert!(
+            !slugs(&one).contains(&"notes/rust/streams"),
+            "two hops out, reached through a page that is one hop out"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wanted_page_has_a_neighbourhood_of_its_own() {
+        let graph = graph_index()
+            .await
+            .graph(GraphOptions {
+                root: Some("notes/rust/streams".to_owned()),
+                depth: 1,
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(slugs(&graph), ["notes/rust", "notes/rust/streams"]);
+        assert!(!graph.nodes[1].exists);
+    }
+
+    #[tokio::test]
+    async fn truncation_keeps_the_hubs() {
+        let graph = graph_index()
+            .await
+            .graph(GraphOptions {
+                limit: 2,
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(graph.truncated);
+        assert_eq!(graph.matched, 5, "matched counts before the cap");
+        // `notes/rust` (four) and `index` (two) are the best-connected; the
+        // island goes first.
+        assert_eq!(slugs(&graph), ["index", "notes/rust", "notes/rust/streams"]);
+        assert!(!slugs(&graph).contains(&"scratch/inbox"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_wiki_draws_nothing() {
+        let graph = index().await.graph(GraphOptions::default()).await.unwrap();
+
+        assert!(graph.nodes.is_empty());
+        assert!(graph.edges.is_empty());
+        assert!(!graph.truncated);
+    }
+
+    #[tokio::test]
+    async fn a_root_nothing_knows_about_is_a_graph_of_one() {
+        let graph = graph_index()
+            .await
+            .graph(GraphOptions {
+                root: Some("nowhere".to_owned()),
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(graph.nodes.is_empty(), "no page, and nothing points at it");
+        assert!(graph.edges.is_empty());
+    }
+
+    /// A page linking to itself is a cycle of length one, and the walk has to
+    /// terminate on it rather than recursing to the depth limit forever.
+    #[tokio::test]
+    async fn a_self_link_terminates() {
+        let index = index().await;
+        seed(&index, "a", "See [[a]].\n").await;
+
+        let graph = index
+            .graph(GraphOptions {
+                root: Some("a".to_owned()),
+                depth: 4,
+                ..GraphOptions::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(slugs(&graph), ["a"]);
+        assert_eq!(graph.nodes[0].distance, Some(0));
+        assert_eq!(pairs(&graph), [("a", "a")]);
     }
 
     #[tokio::test]

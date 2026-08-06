@@ -13,6 +13,7 @@ Setup and versions live in [Tech stack](tech-stack.md).
 | `/pages/*slug` | One page, rendered, with both directions of its links and the time spent on it |
 | `/new`, `/edit/*slug` | The editor |
 | `/tags` | Every tag, linking into the filtered listing |
+| `/graph` | The link graph, drawn; narrowed by `?root=`, `?depth=`, `?prefix=`, `?tag=`, `?wanted=` |
 | `/times` | The time log: running timers, entries, groups; narrowed by `?q=`, `?name=`, `?page=` |
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
@@ -201,6 +202,16 @@ What is covered is the part where the bugs were, not the part that is easy:
   is merely down leaves the list empty rather than throwing out of the navbar.
   The guard on `resource.latest` is what makes that true and it is invisible in
   the source.
+- **The graph layout's determinism**, from both ends: the same graph twice, and
+  the same graph with its nodes in reverse order, must produce identical
+  coordinates. Also the three cases that produce `NaN` if the forces are written
+  naively — nodes seeded on the same point, an edge naming a node nobody drew,
+  and a page that links to itself — and that an orphan stays in frame, which is
+  the whole job of the gravity term.
+- **What the graph draws**, since none of it is legible from the markup: a
+  wanted page is a node rather than an absence, the root of a walk is ringed,
+  the `viewBox` is four finite numbers, and labels are rationed once the graph
+  outgrows reading them all.
 - **Duration formatting**, which has three spellings on purpose — a list drops
   seconds, a running clock keeps them, an axis label uses hours — and none of
   them may render a negative.
@@ -222,6 +233,21 @@ The time panel above them is shaped differently on purpose, and it is not a
 third link panel — see [Time tracking](time-tracking.md) for why a hundred time
 entries have to be one line with a total on it. It is absent entirely when
 nothing has been tracked, so a wiki nobody times looks exactly as it did.
+
+## The graph screen draws its own layout, too
+
+For the same reason the charts below do, plus one the charts do not have: the
+layout has to be **deterministic**, and no published force layout is. Seeds come
+from a hash of the slug rather than `Math.random()`, so the same wiki draws the
+same picture every visit and a changed shape means the wiki changed. That is the
+whole argument for the screen existing, and it is in
+[Drawing the link graph](link-graph.md) along with what the three node
+appearances mean, why edges bow, and why labels are rationed.
+
+Selection is a signal rather than a URL parameter, unlike every filter on the
+screen. The filters say what is drawn and are worth linking to; which node you
+happen to be pointing at is not, and putting it in the URL would push a history
+entry on every click.
 
 ## The time section draws its own charts
 

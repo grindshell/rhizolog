@@ -27,6 +27,9 @@ export default function Layout(props: RouteSectionProps) {
               <A href="/tags">Tags</A>
             </li>
             <li>
+              <A href="/graph">Graph</A>
+            </li>
+            <li>
               <A href="/times">Time</A>
             </li>
             <li>

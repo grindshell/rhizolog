@@ -27,8 +27,8 @@ use crate::slug::Slug;
 use schema::{FTS_BODY_COLUMN, KEY_LAST_SYNC, KEY_SCHEMA_VERSION, SCHEMA_VERSION};
 
 pub use graph::{
-    InboundLink, LinkTotals, LinkedPage, OutboundLink, PageLinks, PageRef, RouteUsage, Stats,
-    TagCount, WantedPage,
+    Graph, GraphEdge, GraphNode, GraphOptions, InboundLink, LinkTotals, LinkedPage, OutboundLink,
+    PageLinks, PageRef, RouteUsage, Stats, TagCount, WantedPage,
 };
 pub use pins::Pin;
 pub use sync::{SyncCounts, SyncReport, sync};

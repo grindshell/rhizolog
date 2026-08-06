@@ -103,6 +103,22 @@ it shows up on the dashboard, and it starts working the moment somebody writes
 it — no reindex. Links inside code fences are not links, because they are pulled
 out of the parsed document rather than scanned for.
 
+## The graph
+
+`/graph` draws the pages and the links between them, and `GET /api/graph`
+returns the same thing as nodes and edges. Wanted pages are drawn too, as dashed
+rings — they are branches the wiki has reached for, and leaving them out would
+make it look tidier than it is.
+
+Narrow it with `?root=` for one page's neighbourhood (a walk of `?depth=` hops,
+following links in both directions), or with the same `?prefix=` and `?tag=`
+filters the page listing takes. Every page links to its own neighbourhood from
+its Graph button.
+
+The layout is deterministic: node positions come from a hash of the slug rather
+than a random seed, so the same wiki draws the same picture every time and a
+shape that changed means the wiki changed.
+
 ## Time
 
 A time entry has a name, a start, usually an end, and optionally a markdown

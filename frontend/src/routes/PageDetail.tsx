@@ -5,6 +5,7 @@ import {
   decodeSlug,
   editHref,
   getPage,
+  graphHref,
   groupHref,
   pageHref,
   pageLinks,
@@ -114,9 +115,18 @@ export default function PageDetail() {
                 show up as wanted — the link starts working the moment the page
                 exists, with no reindex.
               </p>
-              <A class="btn btn-primary btn-sm" href={`/new?slug=${encodeURIComponent(slug())}`}>
-                Write this page
-              </A>
+              <div class="flex flex-wrap gap-2">
+                <A class="btn btn-primary btn-sm" href={`/new?slug=${encodeURIComponent(slug())}`}>
+                  Write this page
+                </A>
+                {/*
+                  A wanted page has a neighbourhood too, and it is the whole
+                  reason to write one: the pages already reaching for it.
+                */}
+                <A class="btn btn-sm" href={graphHref(slug())}>
+                  What reaches for it
+                </A>
+              </div>
             </div>
           </div>
         </Match>
@@ -158,6 +168,18 @@ export default function PageDetail() {
                     >
                       {pins.isPinned(loaded().slug) ? 'Pinned' : 'Pin'}
                     </button>
+                    {/*
+                      The link panels below say what this page reaches in one
+                      hop. This is the same question asked two hops out, where
+                      a list stops being readable and a picture starts.
+                    */}
+                    <A
+                      class="btn btn-ghost btn-sm"
+                      href={graphHref(loaded().slug)}
+                      title="Draw this page's neighbourhood"
+                    >
+                      Graph
+                    </A>
                     <button
                       class="btn btn-ghost btn-sm"
                       onClick={() => setShowSource((shown) => !shown)}

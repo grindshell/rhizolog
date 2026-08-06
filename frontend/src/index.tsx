@@ -8,6 +8,7 @@ import Dashboard from './routes/Dashboard'
 import PagesBrowse from './routes/PagesBrowse'
 import PageDetail from './routes/PageDetail'
 import Editor from './routes/Editor'
+import GraphView from './routes/GraphView'
 import Tags from './routes/Tags'
 import Times from './routes/Times'
 import NotFound from './routes/NotFound'
@@ -36,6 +37,13 @@ render(
       <Route path="/new" component={Editor} />
       <Route path="/edit/*slug" component={Editor} />
       <Route path="/tags" component={Tags} />
+      {/*
+        `/graph`, and the page it is drawn around is `?root=` rather than a
+        path segment. A root is a filter like `?prefix=` and `?tag=` beside it,
+        composes with them, and is often absent — and a splat here would have
+        made `/graph` itself a different route from `/graph/notes/rust/async`.
+      */}
+      <Route path="/graph" component={GraphView} />
       {/*
         No `/times/:id` route. A time entry is read and edited in the log
         itself, and an id is a machine's handle rather than something anyone

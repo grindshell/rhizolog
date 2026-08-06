@@ -138,6 +138,7 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         .routes(routes!(search::search))
         .routes(routes!(search::reindex))
         .routes(routes!(graph::links))
+        .routes(routes!(graph::link_graph))
         .routes(routes!(graph::tags))
         .routes(routes!(graph::stats))
         .routes(routes!(pins::list_pins))

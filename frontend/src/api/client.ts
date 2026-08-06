@@ -25,6 +25,9 @@ export type OutboundLinkView = Schemas['OutboundLinkView']
 export type InboundLinkView = Schemas['InboundLinkView']
 export type TagsResponse = Schemas['TagsResponse']
 export type TagCountView = Schemas['TagCountView']
+export type GraphResponse = Schemas['GraphResponse']
+export type GraphNodeView = Schemas['GraphNodeView']
+export type GraphEdgeView = Schemas['GraphEdgeView']
 export type PinView = Schemas['PinView']
 export type PinsResponse = Schemas['PinsResponse']
 export type PageTimesView = Schemas['PageTimesView']
@@ -58,6 +61,7 @@ export type ErrorDetail = Schemas['ErrorDetail']
 export type ListPagesQuery = NonNullable<operations['list']['parameters']['query']>
 export type SearchQuery = operations['search']['parameters']['query']
 export type ReadPageQuery = NonNullable<operations['read']['parameters']['query']>
+export type GraphQuery = NonNullable<operations['link_graph']['parameters']['query']>
 export type ListTimesQuery = NonNullable<operations['list_times']['parameters']['query']>
 export type TimeStatsQuery = NonNullable<operations['time_statistics']['parameters']['query']>
 
@@ -345,6 +349,25 @@ export function pageLinks(slug: string, signal?: AbortSignal): Promise<PageLinks
 /** `GET /api/tags` — every tag with its page count, most-used first. */
 export function tags(signal?: AbortSignal): Promise<TagsResponse> {
   return request<TagsResponse>('/tags', { signal })
+}
+
+/**
+ * `GET /api/graph` — the whole link graph, as nodes and edges.
+ *
+ * `pageLinks` answers "where does this page sit"; this answers "what shape is
+ * the wiki". Nodes include pages nobody has written, which is most of the point
+ * of drawing it at all.
+ */
+export function linkGraph(
+  query?: GraphQuery,
+  signal?: AbortSignal,
+): Promise<GraphResponse> {
+  return request<GraphResponse>('/graph', { query, signal })
+}
+
+/** Where a page's neighbourhood is drawn. */
+export function graphHref(slug: string): string {
+  return `/graph?root=${encodeURIComponent(slug)}`
 }
 
 /** `GET /api/stats` — meta-stats for the dashboard. */

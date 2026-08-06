@@ -17,6 +17,7 @@ storage model it sits on.
 | `POST` | `/api/move` | Move a page to a new slug |
 | `POST` | `/api/render` | Render markdown that has not been saved |
 | `GET` | `/api/links/{slug}` | Links in **both** directions |
+| `GET` | `/api/graph` | The link graph as nodes and edges; `?root=`, `?depth=`, `?prefix=`, `?tag=`, `?wanted=`, `?limit=` |
 | `GET` | `/api/search` | Full-text search with snippets |
 | `GET` | `/api/tags` | All tags with page counts |
 | `GET` | `/api/stats` | Meta-stats for the dashboard |
@@ -162,6 +163,15 @@ on collects a time entry every time you start a timer. Reported as backlinks
 they would bury the backlinks, and `most_linked` in `/api/stats` would start
 ranking pages by how long you sat with them. One line with a total on it says
 the useful thing, and `GET /api/times?page={slug}` has the rest.
+
+### `/api/graph` answers a different question from `/api/links/{slug}`
+
+One says where a page sits; the other says what shape the wiki is. They are not
+the same call with a different limit, and the difference shows up in what a
+filter is allowed to remove: a wanted page has no row anywhere, so no filter can
+apply to it, and it comes back wherever a link in the view reaches it. See
+[Drawing the link graph](link-graph.md) for that rule and the two beside it,
+and for why a node's degree counts the whole wiki rather than the view.
 
 ### One links endpoint, not two
 

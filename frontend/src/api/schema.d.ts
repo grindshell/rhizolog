@@ -4,6 +4,42 @@
  */
 
 export interface paths {
+    "/api/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The link graph, as something you can draw.
+         * @description `/api/links/{slug}` answers "where does this page sit"; this answers "what
+         *     shape is the wiki". Nodes are pages — **including ones nobody has written**,
+         *     which are the branches the wiki has gestured at and the reason the picture is
+         *     worth looking at.
+         *
+         *     Three rules decide what comes back:
+         *
+         *     1. `tag` and `prefix` select pages, and `root` narrows to a neighbourhood.
+         *        They intersect.
+         *     2. An edge is returned when both of its ends survived.
+         *     3. A wanted page is not a page. It has no tags and no path on disk, so no
+         *        filter can apply to it; it is returned wherever a link in the view
+         *        reaches it. The one thing it obeys is the walk, or `depth` would be a
+         *        promise broken at the edges.
+         *
+         *     Time is not in here at all. A page collects a time entry every time a timer
+         *     starts, so those edges would drown the links — see `/api/times?page=`.
+         */
+        get: operations["link_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -464,6 +500,85 @@ export interface components {
              *     `error.code`.
              */
             error: components["schemas"]["ErrorDetail"];
+        };
+        GraphEdgeView: {
+            /**
+             * @description `wiki`, `internal`, or both when the same page is linked twice over.
+             *     One line to draw either way.
+             * @example [
+             *       "wiki"
+             *     ]
+             */
+            kinds: string[];
+            /** @example notes/rust/async */
+            source: string;
+            /** @example notes/rust/pinning */
+            target: string;
+        };
+        GraphNodeView: {
+            /**
+             * @description Hops from `root`, or `null` when the query had none.
+             * @example 1
+             */
+            distance?: number | null;
+            /** @description `false` for a wanted page. Not an error — see `/api/stats`. */
+            exists: boolean;
+            /**
+             * @description Distinct pages linking here, across the **whole wiki** rather than this
+             *     view. A hub therefore still reads as one inside a filter, and the gap
+             *     between this and the edges actually returned says the branch reaches
+             *     outside what was asked for.
+             * @example 3
+             */
+            inbound: number;
+            /**
+             * @description Distinct pages this one links to, likewise wiki-wide.
+             * @example 2
+             */
+            outbound: number;
+            /** @example notes/rust/async */
+            slug: string;
+            /**
+             * @description Empty for a wanted page, which has no frontmatter to carry any.
+             * @example [
+             *       "rust",
+             *       "async"
+             *     ]
+             */
+            tags: string[];
+            /**
+             * @description The page's title, or the slug itself when nothing has been written
+             *     there.
+             * @example Async in Rust
+             */
+            title: string;
+        };
+        GraphResponse: {
+            /**
+             * @description The depth that was applied, after clamping. `null` without a root.
+             * @example 2
+             */
+            depth?: number | null;
+            /**
+             * @description Directed. A mutual pair is two edges, because which way a link points is
+             *     most of what the graph has to say.
+             */
+            edges: components["schemas"]["GraphEdgeView"][];
+            /**
+             * @description The limit that was applied, after clamping.
+             * @example 400
+             */
+            limit: number;
+            /**
+             * @description Pages that matched the filters, before `limit` was applied.
+             * @example 6
+             */
+            matched: number;
+            /** @description Sorted by slug, so the same wiki always arrives in the same order. */
+            nodes: components["schemas"]["GraphNodeView"][];
+            root?: null | components["schemas"]["Slug"];
+            /** @description Whether `limit` dropped any of them. */
+            truncated: boolean;
         };
         Health: {
             /**
@@ -1400,6 +1515,78 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    link_graph: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Only pages carrying this tag.
+                 * @example rust
+                 */
+                tag?: string;
+                /**
+                 * @description Only pages at or under this slug path. Hierarchical and stops at the
+                 *     separator, exactly as on `GET /api/pages`.
+                 * @example notes/rust
+                 */
+                prefix?: string;
+                /**
+                 * @description Walk outward from this page rather than drawing the whole wiki.
+                 *
+                 *     The walk follows links in **both** directions, because a page's
+                 *     neighbourhood is what it points at and what points at it. The slug need
+                 *     not name a page that exists: a wanted page's neighbourhood is the set of
+                 *     pages waiting on it.
+                 * @example notes/rust/async
+                 */
+                root?: string;
+                /**
+                 * @description How many hops out the walk goes. Defaults to 2, capped at 6, and means
+                 *     nothing without a `root`.
+                 * @example 2
+                 */
+                depth?: number;
+                /**
+                 * @description Whether pages that are linked to but not written are nodes. Defaults to
+                 *     true — they are the branches the wiki has gestured at, and usually the
+                 *     most interesting thing in the picture.
+                 */
+                wanted?: boolean;
+                /**
+                 * @description How many **pages** the view may carry, capped at 2000. Wanted pages hang
+                 *     off the survivors and are not counted against it.
+                 *
+                 *     When it bites, the best-connected pages survive: a graph cut down to its
+                 *     least connected pages is a scatter of dots that says nothing.
+                 * @example 400
+                 */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Nodes and edges */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphResponse"];
+                };
+            };
+            /** @description `root` is not a valid slug */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     health: {
         parameters: {
             query?: never;

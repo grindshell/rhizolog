@@ -1223,6 +1223,107 @@ async fn api_usage_is_counted_per_route_template() {
 }
 
 #[tokio::test]
+async fn the_graph_comes_back_as_something_drawable() {
+    let app = App::new().await;
+    app.seed("index", json!({ "content": "See [[notes/rust]].\n" }))
+        .await;
+    app.seed(
+        "notes/rust",
+        json!({ "tags": ["rust"], "content": "Both [[notes/rust/async]] and [a](rust/async.md), plus [[notes/rust/streams]] and [out](https://example.com).\n" }),
+    )
+    .await;
+    app.seed("notes/rust/async", json!({ "content": "A page.\n" }))
+        .await;
+
+    let res = app.get("/api/graph").await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    let slugs: Vec<&str> = res.body["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        slugs,
+        [
+            "index",
+            "notes/rust",
+            "notes/rust/async",
+            "notes/rust/streams"
+        ]
+    );
+
+    // The unwritten page is a node, and says so rather than being absent.
+    assert_eq!(res.body["nodes"][3]["exists"], false);
+    assert_eq!(res.body["nodes"][3]["title"], "notes/rust/streams");
+
+    // Linked as `[[a]]` and as `[a](a.md)`: two rows in the index, one line to
+    // draw, and one referrer.
+    let doubled = res.body["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|edge| edge["target"] == "notes/rust/async")
+        .expect("the doubled edge");
+    assert_eq!(doubled["kinds"], json!(["internal", "wiki"]));
+    assert_eq!(res.body["nodes"][2]["inbound"], 1);
+
+    // Nothing that leaves the wiki. An external link has no node to land on.
+    for edge in res.body["edges"].as_array().unwrap() {
+        assert!(
+            !edge["target"].as_str().unwrap().starts_with("http"),
+            "an external link reached the graph: {edge}"
+        );
+    }
+
+    assert_eq!(res.body["matched"], 3, "wants are not pages");
+    assert_eq!(res.body["truncated"], false);
+    assert_eq!(res.body["root"], Value::Null);
+    assert_eq!(res.body["depth"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_graph_can_be_walked_out_from_one_page() {
+    let app = App::new().await;
+    app.seed("index", json!({ "content": "See [[a]].\n" }))
+        .await;
+    app.seed("a", json!({ "content": "See [[b]].\n" })).await;
+    app.seed("b", json!({ "content": "The far end.\n" })).await;
+
+    let res = app.get("/api/graph?root=a&depth=1").await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["root"], "a");
+    assert_eq!(res.body["depth"], 1);
+    let slugs: Vec<&str> = res.body["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["slug"].as_str().unwrap())
+        .collect();
+    // Both directions: `index` points at `a`, and `a` points at `b`.
+    assert_eq!(slugs, ["a", "b", "index"]);
+    assert_eq!(res.body["nodes"][0]["distance"], 0);
+    assert_eq!(res.body["nodes"][2]["distance"], 1);
+
+    // The depth is clamped rather than refused, like every other numeric bound
+    // in this API.
+    let deep = app.get("/api/graph?root=a&depth=99").await;
+    assert_eq!(deep.body["depth"], 6);
+}
+
+#[tokio::test]
+async fn a_graph_root_that_is_not_a_slug_is_refused() {
+    let app = App::new().await;
+
+    let res = app.get("/api/graph?root=notes/../../etc").await;
+
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.code(), "slug_relative_segment");
+}
+
+#[tokio::test]
 async fn links_for_an_invalid_slug_are_refused() {
     let app = App::new().await;
 

@@ -3,16 +3,28 @@
 use std::collections::HashMap;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 
 use crate::api::AppState;
 use crate::api::pages::parse_slug;
 use crate::error::AppResult;
-use crate::index::{self, RouteUsage};
+use crate::index::{self, GraphOptions, RouteUsage};
 use crate::slug::Slug;
+
+/// How many pages one graph carries when nobody says otherwise.
+///
+/// Enough that an ordinary wiki arrives whole, and small enough that the first
+/// call from a large one still draws something readable rather than a hairball.
+const DEFAULT_NODES: usize = 400;
+const MAX_NODES: usize = 2000;
+
+const DEFAULT_DEPTH: usize = 2;
+/// Past this a walk has usually crossed the whole wiki anyway, and the query
+/// that finds out is the expensive one.
+const MAX_DEPTH: usize = 6;
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct OutboundLinkView {
@@ -175,6 +187,188 @@ pub async fn links(
                 kind: link.kind.as_str().to_owned(),
             })
             .collect(),
+    }))
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct GraphQuery {
+    /// Only pages carrying this tag.
+    #[param(example = "rust")]
+    pub tag: Option<String>,
+    /// Only pages at or under this slug path. Hierarchical and stops at the
+    /// separator, exactly as on `GET /api/pages`.
+    #[param(example = "notes/rust")]
+    pub prefix: Option<String>,
+    /// Walk outward from this page rather than drawing the whole wiki.
+    ///
+    /// The walk follows links in **both** directions, because a page's
+    /// neighbourhood is what it points at and what points at it. The slug need
+    /// not name a page that exists: a wanted page's neighbourhood is the set of
+    /// pages waiting on it.
+    #[param(example = "notes/rust/async")]
+    pub root: Option<String>,
+    /// How many hops out the walk goes. Defaults to 2, capped at 6, and means
+    /// nothing without a `root`.
+    #[param(example = 2, minimum = 0, maximum = 6)]
+    pub depth: Option<usize>,
+    /// Whether pages that are linked to but not written are nodes. Defaults to
+    /// true — they are the branches the wiki has gestured at, and usually the
+    /// most interesting thing in the picture.
+    pub wanted: Option<bool>,
+    /// How many **pages** the view may carry, capped at 2000. Wanted pages hang
+    /// off the survivors and are not counted against it.
+    ///
+    /// When it bites, the best-connected pages survive: a graph cut down to its
+    /// least connected pages is a scatter of dots that says nothing.
+    #[param(example = 400)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GraphNodeView {
+    #[schema(example = "notes/rust/async")]
+    pub slug: String,
+    /// The page's title, or the slug itself when nothing has been written
+    /// there.
+    #[schema(example = "Async in Rust")]
+    pub title: String,
+    /// `false` for a wanted page. Not an error — see `/api/stats`.
+    pub exists: bool,
+    /// Distinct pages linking here, across the **whole wiki** rather than this
+    /// view. A hub therefore still reads as one inside a filter, and the gap
+    /// between this and the edges actually returned says the branch reaches
+    /// outside what was asked for.
+    #[schema(example = 3)]
+    pub inbound: usize,
+    /// Distinct pages this one links to, likewise wiki-wide.
+    #[schema(example = 2)]
+    pub outbound: usize,
+    /// Empty for a wanted page, which has no frontmatter to carry any.
+    #[schema(example = json!(["rust", "async"]))]
+    pub tags: Vec<String>,
+    /// Hops from `root`, or `null` when the query had none.
+    #[schema(example = 1)]
+    pub distance: Option<usize>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GraphEdgeView {
+    #[schema(example = "notes/rust/async")]
+    pub source: String,
+    #[schema(example = "notes/rust/pinning")]
+    pub target: String,
+    /// `wiki`, `internal`, or both when the same page is linked twice over.
+    /// One line to draw either way.
+    #[schema(example = json!(["wiki"]))]
+    pub kinds: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GraphResponse {
+    /// Sorted by slug, so the same wiki always arrives in the same order.
+    pub nodes: Vec<GraphNodeView>,
+    /// Directed. A mutual pair is two edges, because which way a link points is
+    /// most of what the graph has to say.
+    pub edges: Vec<GraphEdgeView>,
+    /// Pages that matched the filters, before `limit` was applied.
+    #[schema(example = 6)]
+    pub matched: usize,
+    /// Whether `limit` dropped any of them.
+    pub truncated: bool,
+    /// The root the walk started from, echoed back.
+    pub root: Option<Slug>,
+    /// The depth that was applied, after clamping. `null` without a root.
+    #[schema(example = 2)]
+    pub depth: Option<usize>,
+    /// The limit that was applied, after clamping.
+    #[schema(example = 400)]
+    pub limit: usize,
+}
+
+/// The link graph, as something you can draw.
+///
+/// `/api/links/{slug}` answers "where does this page sit"; this answers "what
+/// shape is the wiki". Nodes are pages — **including ones nobody has written**,
+/// which are the branches the wiki has gestured at and the reason the picture is
+/// worth looking at.
+///
+/// Three rules decide what comes back:
+///
+/// 1. `tag` and `prefix` select pages, and `root` narrows to a neighbourhood.
+///    They intersect.
+/// 2. An edge is returned when both of its ends survived.
+/// 3. A wanted page is not a page. It has no tags and no path on disk, so no
+///    filter can apply to it; it is returned wherever a link in the view
+///    reaches it. The one thing it obeys is the walk, or `depth` would be a
+///    promise broken at the edges.
+///
+/// Time is not in here at all. A page collects a time entry every time a timer
+/// starts, so those edges would drown the links — see `/api/times?page=`.
+#[utoipa::path(
+    get,
+    path = "/api/graph",
+    tag = "graph",
+    params(GraphQuery),
+    responses(
+        (status = 200, description = "Nodes and edges", body = GraphResponse),
+        (status = 400, description = "`root` is not a valid slug", body = crate::error::ErrorResponse),
+    ),
+)]
+pub async fn link_graph(
+    State(state): State<AppState>,
+    Query(query): Query<GraphQuery>,
+) -> AppResult<Json<GraphResponse>> {
+    // Parsed, unlike `prefix` and `tag`: those are filters, where a value
+    // nobody uses is an empty answer, and this one names a specific page.
+    let root = query.root.as_deref().map(parse_slug).transpose()?;
+    let depth = query.depth.unwrap_or(DEFAULT_DEPTH).min(MAX_DEPTH);
+    let limit = query.limit.unwrap_or(DEFAULT_NODES).min(MAX_NODES);
+
+    let graph = state
+        .index
+        .graph(GraphOptions {
+            tag: query.tag,
+            prefix: query.prefix,
+            root: root.as_ref().map(Slug::to_string),
+            depth,
+            wanted: query.wanted.unwrap_or(true),
+            limit,
+        })
+        .await?;
+
+    Ok(Json(GraphResponse {
+        nodes: graph
+            .nodes
+            .into_iter()
+            .map(|node| GraphNodeView {
+                slug: node.slug,
+                title: node.title,
+                exists: node.exists,
+                inbound: node.inbound,
+                outbound: node.outbound,
+                tags: node.tags,
+                distance: node.distance,
+            })
+            .collect(),
+        edges: graph
+            .edges
+            .into_iter()
+            .map(|edge| GraphEdgeView {
+                source: edge.source,
+                target: edge.target,
+                kinds: edge
+                    .kinds
+                    .into_iter()
+                    .map(|kind| kind.as_str().to_owned())
+                    .collect(),
+            })
+            .collect(),
+        matched: graph.matched,
+        truncated: graph.truncated,
+        depth: root.as_ref().map(|_| depth),
+        root,
+        limit,
     }))
 }
 
