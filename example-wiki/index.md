@@ -5,12 +5,12 @@ tags:
 
 # Example wiki
 
-Nine pages, arranged to show what Rhizowiki does with them. Run the server
+Nine pages, arranged to show what Rhizolog does with them. Run the server
 against this directory and the dashboard reports two orphans and one wanted
 page — all three on purpose.
 
 Nothing here is special. It is markdown in a directory; delete the whole thing
-and point `RHIZOWIKI_ROOT` at your own notes.
+and point `RHIZOLOG_ROOT` at your own notes.
 
 ## Start here
 

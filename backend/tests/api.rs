@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use rhizowiki::{AppState, Index, Store};
+use rhizolog::{AppState, Index, Store};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -37,10 +37,10 @@ impl App {
         // persistence, which `index::sync` covers.
         let index = Index::open(None).await.expect("open index");
         Self {
-            router: rhizowiki::router(AppState {
+            router: rhizolog::router(AppState {
                 store,
                 index,
-                usage: rhizowiki::UsageTally::new(),
+                usage: rhizolog::UsageTally::new(),
                 // API-only: the SPA fallback is covered in tests/frontend.rs.
                 assets: None,
             }),
@@ -170,9 +170,9 @@ async fn usage_counts_survive_a_restart() {
     {
         let store = Store::open(wiki.path()).await.expect("open store");
         let index = Index::open(Some(&database)).await.expect("open index");
-        let usage = rhizowiki::UsageTally::new();
+        let usage = rhizolog::UsageTally::new();
         let app = App {
-            router: rhizowiki::router(AppState {
+            router: rhizolog::router(AppState {
                 store,
                 index: index.clone(),
                 usage: usage.clone(),
@@ -188,7 +188,7 @@ async fn usage_counts_survive_a_restart() {
         assert_eq!(health_calls(&app.get("/api/stats").await.body), 3);
 
         // What shutdown does.
-        rhizowiki::api::graph::flush_usage(&index, &usage).await;
+        rhizolog::api::graph::flush_usage(&index, &usage).await;
     }
 
     // Second run, same database, a tally that has never seen a request.
@@ -196,10 +196,10 @@ async fn usage_counts_survive_a_restart() {
     let store = Store::open(wiki.path()).await.expect("open store");
     let index = Index::open(Some(&database)).await.expect("reopen index");
     let app = App {
-        router: rhizowiki::router(AppState {
+        router: rhizolog::router(AppState {
             store,
             index,
-            usage: rhizowiki::UsageTally::new(),
+            usage: rhizolog::UsageTally::new(),
             assets: None,
         }),
         _directory: wiki,
@@ -221,7 +221,7 @@ async fn the_openapi_document_is_served() {
     let res = app.get("/api-docs/openapi.json").await;
 
     assert_eq!(res.status, StatusCode::OK);
-    assert_eq!(res.body["info"]["title"], "Rhizowiki");
+    assert_eq!(res.body["info"]["title"], "Rhizolog");
     assert!(res.body["paths"]["/api/health"]["get"].is_object());
 }
 

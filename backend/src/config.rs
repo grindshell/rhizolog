@@ -8,11 +8,11 @@ use thiserror::Error;
 
 use crate::store::INTERNAL_DIR;
 
-pub const ENV_ROOT: &str = "RHIZOWIKI_ROOT";
-pub const ENV_DATABASE: &str = "RHIZOWIKI_DB";
-pub const ENV_ADDRESS: &str = "RHIZOWIKI_ADDR";
-pub const ENV_ASSETS: &str = "RHIZOWIKI_ASSETS";
-pub const ENV_LOG: &str = "RHIZOWIKI_LOG";
+pub const ENV_ROOT: &str = "RHIZOLOG_ROOT";
+pub const ENV_DATABASE: &str = "RHIZOLOG_DB";
+pub const ENV_ADDRESS: &str = "RHIZOLOG_ADDR";
+pub const ENV_ASSETS: &str = "RHIZOLOG_ASSETS";
+pub const ENV_LOG: &str = "RHIZOLOG_LOG";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -54,7 +54,7 @@ impl Config {
                 value: value.clone(),
                 source,
             })?,
-            // Loopback by default, deliberately: Rhizowiki is single-user, has
+            // Loopback by default, deliberately: Rhizolog is single-user, has
             // no authentication, and its API writes files.
             Err(_) => SocketAddr::from(([127, 0, 0, 1], 3000)),
         };

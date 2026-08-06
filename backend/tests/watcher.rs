@@ -8,7 +8,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use rhizowiki::{Index, Store, watcher};
+use rhizolog::{Index, Store, watcher};
 use tempfile::TempDir;
 
 /// Generous on purpose: the debounce window is 500ms, and a loaded machine can
@@ -156,12 +156,12 @@ async fn picks_up_a_directory_removed_outside_the_api() {
 #[tokio::test]
 async fn the_apis_own_writes_do_not_corrupt_the_index() {
     let (_directory, store, index) = watched().await;
-    let slug = rhizowiki::Slug::parse("notes/page").expect("valid slug");
+    let slug = rhizolog::Slug::parse("notes/page").expect("valid slug");
 
     let page = store
         .write(
             &slug,
-            rhizowiki::Frontmatter {
+            rhizolog::Frontmatter {
                 title: Some("Written by the API".to_owned()),
                 tags: vec!["api".to_owned()],
                 created: None,

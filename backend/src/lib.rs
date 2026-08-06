@@ -1,4 +1,4 @@
-//! Rhizowiki — a wiki backend over a directory of markdown files.
+//! Rhizolog — a wiki backend over a directory of markdown files.
 //!
 //! Markdown files on disk are the source of truth; the SQLite index is derived
 //! and can be rebuilt at any time. See `knowledge-base/architecture.md` for the

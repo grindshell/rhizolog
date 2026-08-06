@@ -1,6 +1,6 @@
-# Rhizowiki
+# Rhizolog
 
-Rhizowiki ("rhizome" + "wiki") is a wiki backend and server in the vein of
+Rhizolog ("rhizome" + "log") is a wiki backend and server in the vein of
 MediaWiki and TiddlyWiki, built on the idea that knowledge branches off
 chaotically — and that's exactly what it should track.
 
@@ -19,15 +19,15 @@ This is a **git monorepo with a single `.git` at the root**.
 
 | Path | Purpose |
 |------|---------|
-| `backend/` | The Rust backend (cargo project, crate name `rhizowiki`) |
+| `backend/` | The Rust backend (cargo project, crate name `rhizolog`) |
 | `frontend/` | The TypeScript frontend, served by the backend |
 | `example-wiki/` | A small committed wiki to run against; its `index.md` states what the dashboard should report about it |
-| `knowledge-base/` | Markdown knowledge base tracking Rhizowiki's design and implementation |
+| `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
 | `README.md` | Setup and usage, for people who are not this file |
 | `CLAUDE.md` | This file |
 
-`backend/wiki/` is the default `RHIZOWIKI_ROOT` and is gitignored, as is
-`.rhizowiki/` anywhere. Do not develop against `example-wiki/` — it is a
+`backend/wiki/` is the default `RHIZOLOG_ROOT` and is gitignored, as is
+`.rhizolog/` anywhere. Do not develop against `example-wiki/` — it is a
 fixture, and changing it changes what the docs claim.
 
 ## Tech stack
@@ -125,5 +125,5 @@ $data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/ap
   the first non-ASCII bytes are `E2 80 94`. The same applies to `>` and
   `Out-File` generally, which re-encode and add a BOM — `git show HEAD:f > tmp`
   does not give you the committed bytes; `git checkout HEAD -- f` does.
-- Stop the server before `cargo build`: a running `rhizowiki.exe` is locked,
+- Stop the server before `cargo build`: a running `rhizolog.exe` is locked,
   and the build fails with "Access is denied" rather than anything informative.

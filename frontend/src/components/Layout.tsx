@@ -8,7 +8,7 @@ export default function Layout(props: RouteSectionProps) {
       <div class="navbar bg-base-100 shadow-sm">
         <div class="flex-1">
           <A href="/" class="btn btn-ghost text-xl">
-            Rhizowiki
+            Rhizolog
           </A>
         </div>
         <nav class="flex flex-none items-center gap-1">

@@ -1,11 +1,11 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
-use rhizowiki::api::graph::flush_usage;
-use rhizowiki::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
-use rhizowiki::index::sync;
-use rhizowiki::watcher;
-use rhizowiki::{AppState, Config, Index, Store, UsageTally};
+use rhizolog::api::graph::flush_usage;
+use rhizolog::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
+use rhizolog::index::sync;
+use rhizolog::watcher;
+use rhizolog::{AppState, Config, Index, Store, UsageTally};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -84,7 +84,7 @@ async fn run() -> anyhow::Result<()> {
 
     let flusher = tokio::spawn(flush_usage_periodically(state.clone()));
 
-    let router = rhizowiki::router(state.clone());
+    let router = rhizolog::router(state.clone());
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -113,8 +113,8 @@ async fn flush_usage_periodically(state: AppState) {
 }
 
 fn init_tracing() {
-    let filter = EnvFilter::try_from_env(rhizowiki::config::ENV_LOG)
-        .unwrap_or_else(|_| EnvFilter::new("rhizowiki=info,tower_http=info"));
+    let filter = EnvFilter::try_from_env(rhizolog::config::ENV_LOG)
+        .unwrap_or_else(|_| EnvFilter::new("rhizolog=info,tower_http=info"));
 
     tracing_subscriber::registry()
         .with(filter)

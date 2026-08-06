@@ -1,9 +1,9 @@
-# Rhizowiki
+# Rhizolog
 
 A wiki over a directory of markdown files, with an HTTP API that is meant to be
 used — by you, and by whatever agents you point at it.
 
-"Rhizome" plus "wiki". A rhizome is a root system with no trunk: any point
+"Rhizome" plus "log". A rhizome is a root system with no trunk: any point
 connects to any other and there is no privileged centre. That is the bet this
 project makes about notes — that knowledge branches off chaotically, and that
 filing it as though it were a tree loses the connections worth keeping.
@@ -31,10 +31,10 @@ Build the dashboard once, then run the server against the example wiki:
 
 ```powershell
 cd frontend; pnpm install; pnpm build
-cd ../backend; $env:RHIZOWIKI_ROOT = "../example-wiki"; cargo run
+cd ../backend; $env:RHIZOLOG_ROOT = "../example-wiki"; cargo run
 ```
 
-On macOS or Linux the last line is `RHIZOWIKI_ROOT=../example-wiki cargo run`.
+On macOS or Linux the last line is `RHIZOLOG_ROOT=../example-wiki cargo run`.
 
 Then open:
 
@@ -53,7 +53,7 @@ directory name in two places, which is what makes the two path filters differ.
 Read [its index](example-wiki/index.md) first; it explains what the dashboard
 will say about it and why.
 
-To use your own notes instead, point `RHIZOWIKI_ROOT` at any directory of
+To use your own notes instead, point `RHIZOLOG_ROOT` at any directory of
 markdown files. Nothing needs importing.
 
 The dashboard is optional. Skip `pnpm build` and the API works exactly the same;
@@ -102,16 +102,16 @@ All optional, all environment variables.
 
 | Variable | Default | What it is |
 |---|---|---|
-| `RHIZOWIKI_ROOT` | `./wiki` | The wiki directory. Created if missing. |
-| `RHIZOWIKI_DB` | `<root>/.rhizowiki/index.db` | The derived index. Safe to delete. |
-| `RHIZOWIKI_ADDR` | `127.0.0.1:3000` | Where to listen. |
-| `RHIZOWIKI_ASSETS` | `../frontend/dist` | The built dashboard. Missing is fine. |
-| `RHIZOWIKI_LOG` | `rhizowiki=info,tower_http=info` | `tracing` filter. |
+| `RHIZOLOG_ROOT` | `./wiki` | The wiki directory. Created if missing. |
+| `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | The derived index. Safe to delete. |
+| `RHIZOLOG_ADDR` | `127.0.0.1:3000` | Where to listen. |
+| `RHIZOLOG_ASSETS` | `../frontend/dist` | The built dashboard. Missing is fine. |
+| `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter. |
 
 Defaults are relative to the working directory, which is assumed to be
 `backend/`.
 
-Think before changing `RHIZOWIKI_ADDR`. There is no authentication, and the API
+Think before changing `RHIZOLOG_ADDR`. There is no authentication, and the API
 writes files.
 
 ## Development
@@ -123,7 +123,7 @@ inside it.
 
 | Path | |
 |---|---|
-| `backend/` | The Rust server (crate `rhizowiki`) |
+| `backend/` | The Rust server (crate `rhizolog`) |
 | `frontend/` | The dashboard: Vite, SolidJS, Tailwind, daisyUI |
 | `example-wiki/` | A small wiki to run against |
 | `knowledge-base/` | Why the thing is built the way it is |
@@ -132,7 +132,7 @@ Backend, from `backend/`:
 
 ```
 cargo run        # start the server
-cargo test       # 193 tests
+cargo test       # 199 tests
 cargo fmt
 cargo clippy
 ```
@@ -142,7 +142,7 @@ Frontend, from `frontend/`:
 ```
 pnpm dev         # dev server with HMR, proxying /api to the backend
 pnpm build       # production build, which the backend serves
-pnpm test        # 48 tests
+pnpm test        # 56 tests
 pnpm typecheck
 ```
 
@@ -153,10 +153,25 @@ The frontend's API types are generated from the OpenAPI document rather than
 written by hand, so a backend change that breaks a caller becomes a type error
 instead of a runtime surprise. After changing the API, with the server running:
 
+```powershell
+$data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/api-docs/openapi.json")
+[System.IO.File]::WriteAllBytes("$PWD\frontend\openapi.json", $data)
 ```
-curl http://127.0.0.1:3000/api-docs/openapi.json -o frontend/openapi.json
-pnpm gen:api
-```
+
+Then `pnpm gen:api` from `frontend/`.
+
+The spec has to be downloaded as bytes and written verbatim, which is why that
+is two lines of .NET rather than one of `curl`. `curl` is the obvious thing to
+reach for and is the one thing that does not work: in PowerShell 5.1 it is an
+alias for `Invoke-WebRequest`, which decodes a body as Latin-1 when its
+`Content-Type` carries no charset — and `application/json` from here carries
+none. Every em-dash in the spec turns from `E2 80 94` into `C3 A2 C2 80 C2 94`.
+The file stays valid JSON, stays one line, and the diff still reads like an
+ordinary regeneration, so nothing catches it. `>` and `Out-File` are no better;
+they re-encode too, and add a BOM.
+
+Worth checking after a refresh: the file should have no BOM, and its first
+non-ASCII bytes should be `E2 80 94`.
 
 Windows PowerShell 5.1 has no `&&`; use `;` to chain. And do not round-trip a
 source file through `Get-Content` and `Set-Content` — 5.1 reads as ANSI and

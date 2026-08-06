@@ -1,12 +1,12 @@
 # Product vision
 
-Rhizowiki is a wiki backend and server in the same vein as MediaWiki and
-TiddlyWiki. The name combines "rhizome" and "wiki": knowledge branches off
-chaotically, and Rhizowiki is built to track that.
+Rhizolog is a wiki backend and server in the same vein as MediaWiki and
+TiddlyWiki. The name combines "rhizome" and "log": knowledge branches off
+chaotically, and Rhizolog is built to track that.
 
 ## How it differs from MediaWiki and TiddlyWiki
 
-- **Developer tool.** Rhizowiki is for developers managing knowledge bases,
+- **Developer tool.** Rhizolog is for developers managing knowledge bases,
   not for hosting public community wikis.
 - **Rich, agent-friendly API.** The HTTP API is a primary interface, designed
   for access by AI agents as well as humans, with OpenAPI definitions.

@@ -594,7 +594,7 @@ impl Index {
 }
 
 /// Create the schema, dropping and rebuilding the derived half of it if it was
-/// written by a different version of Rhizowiki.
+/// written by a different version of Rhizolog.
 ///
 /// The durable tables are created first, because the version number this
 /// decision rests on lives in one of them.

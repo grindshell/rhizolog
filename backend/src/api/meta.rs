@@ -15,7 +15,7 @@ pub struct Health {
     #[schema(example = "ok")]
     pub status: String,
 
-    /// The running Rhizowiki version.
+    /// The running Rhizolog version.
     #[schema(example = "0.1.0")]
     pub version: String,
 

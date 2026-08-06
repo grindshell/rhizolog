@@ -1,6 +1,6 @@
 //! The wiki directory.
 //!
-//! Every filesystem path in Rhizowiki is built here, from a validated
+//! Every filesystem path in Rhizolog is built here, from a validated
 //! [`Slug`], under a canonicalised root. [`Slug::parse`] already rejects
 //! traversal, so the remaining escape route is a symlink pointing out of the
 //! wiki — [`Store::resolve`] closes that one.
@@ -19,9 +19,9 @@ use walkdir::WalkDir;
 use crate::page::{Frontmatter, Page, PageError};
 use crate::slug::Slug;
 
-/// Directory holding the derived index, and anything else Rhizowiki needs to
+/// Directory holding the derived index, and anything else Rhizolog needs to
 /// keep inside the wiki without treating it as content.
-pub const INTERNAL_DIR: &str = ".rhizowiki";
+pub const INTERNAL_DIR: &str = ".rhizolog";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -166,7 +166,7 @@ impl Store {
 
     /// Write a page that must not already exist.
     ///
-    /// The check and the write are not atomic. Rhizowiki is single-user, so the
+    /// The check and the write are not atomic. Rhizolog is single-user, so the
     /// only way to lose that race is to race yourself.
     pub async fn create(
         &self,
@@ -235,7 +235,7 @@ impl Store {
             .follow_links(false)
             .into_iter()
             .filter_entry(|entry| {
-                // Skip `.rhizowiki`, `.git`, and anything else hidden by
+                // Skip `.rhizolog`, `.git`, and anything else hidden by
                 // convention. Slug validation rejects dot-segments too, so
                 // these could never be addressed as pages anyway.
                 entry.depth() == 0 || !file_name_starts_with_dot(entry.path())

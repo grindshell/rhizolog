@@ -67,6 +67,6 @@ Unknown `/api` paths are excluded from that fallback and still return the JSON
 error envelope. Answering a mistyped endpoint with a 200 of HTML would be a
 particularly confusing thing to do to an agent.
 
-`RHIZOWIKI_ASSETS` overrides the directory. A missing build is not an error:
+`RHIZOLOG_ASSETS` overrides the directory. A missing build is not an error:
 during frontend work `pnpm dev` serves the UI and proxies `/api`,
 `/api-docs`, and `/swagger-ui` to the backend.

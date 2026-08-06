@@ -17,7 +17,7 @@
 //! ## Why events are debounced
 //!
 //! Editors save by writing a temporary file and renaming it over the original —
-//! Rhizowiki's own [`crate::store`] does the same — so a single save can arrive
+//! Rhizolog's own [`crate::store`] does the same — so a single save can arrive
 //! as several events. Windows is especially chatty here. The debouncer collapses
 //! a burst into one batch.
 
@@ -203,7 +203,7 @@ async fn reindex_page(
 
 /// Whether any component of a relative path is a dot-entry.
 ///
-/// Catches `.rhizowiki/index.db` and the `.page.md.tmp` files atomic writes go
+/// Catches `.rhizolog/index.db` and the `.page.md.tmp` files atomic writes go
 /// through, which are the two ways the server's own activity shows up here.
 fn is_hidden(relative: &Path) -> bool {
     relative.components().any(|component| {
@@ -251,8 +251,8 @@ mod tests {
     /// watch itself write and reindex forever.
     #[test]
     fn the_servers_own_files_are_ignored() {
-        assert_eq!(planned(&[".rhizowiki/index.db"]), None);
-        assert_eq!(planned(&[".rhizowiki/index.db-wal"]), None);
+        assert_eq!(planned(&[".rhizolog/index.db"]), None);
+        assert_eq!(planned(&[".rhizolog/index.db-wal"]), None);
         // Temporary files from an atomic write.
         assert_eq!(planned(&[".notes.md.tmp"]), None);
         assert_eq!(planned(&["notes/.rhizome.md.tmp"]), None);
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn a_hidden_path_does_not_drag_a_real_page_into_a_rescan() {
         assert_eq!(
-            planned(&[".rhizowiki/index.db", "notes/rhizome.md"]),
+            planned(&[".rhizolog/index.db", "notes/rhizome.md"]),
             Some(slugs(&["notes/rhizome"])),
             "the ignored path should not have forced a full rescan"
         );

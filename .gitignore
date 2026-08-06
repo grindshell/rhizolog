@@ -5,14 +5,14 @@ target/
 node_modules/
 dist/
 
-# The development wiki. RHIZOWIKI_ROOT defaults to ./wiki, so running the
+# The development wiki. RHIZOLOG_ROOT defaults to ./wiki, so running the
 # backend creates this — scratch content plus a derived SQLite index under
-# .rhizowiki/. None of it belongs in the repo.
+# .rhizolog/. None of it belongs in the repo.
 backend/wiki/
 
-# Rhizowiki's own state inside any wiki directory, including example-wiki/.
+# Rhizolog's own state inside any wiki directory, including example-wiki/.
 # The index is derived from the markdown beside it and rebuilds on startup.
-.rhizowiki/
+.rhizolog/
 
 # Editor / OS noise
 .DS_Store

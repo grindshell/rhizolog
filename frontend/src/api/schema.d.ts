@@ -288,7 +288,7 @@ export interface components {
              */
             status: string;
             /**
-             * @description The running Rhizowiki version.
+             * @description The running Rhizolog version.
              * @example 0.1.0
              */
             version: string;

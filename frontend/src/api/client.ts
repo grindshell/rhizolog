@@ -1,5 +1,5 @@
 /**
- * Thin typed wrapper over the Rhizowiki HTTP API.
+ * Thin typed wrapper over the Rhizolog HTTP API.
  *
  * Every shape here comes from `schema.d.ts`, which is generated from
  * `openapi.json` by `pnpm gen:api`. Nothing in this file re-declares a

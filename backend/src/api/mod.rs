@@ -50,7 +50,7 @@ pub struct AppState {
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "Rhizowiki",
+        title = "Rhizolog",
         description = "A wiki over a directory of markdown files. Markdown on \
                        disk is the source of truth; the search index is derived \
                        from it and can be rebuilt at any time.\n\n\
@@ -150,7 +150,7 @@ async fn missing_route(request: Request) -> Response {
     (
         StatusCode::NOT_FOUND,
         "No frontend has been built. Run `pnpm build` in frontend/, or set \
-         RHIZOWIKI_ASSETS to a built directory. The API is unaffected and is \
+         RHIZOLOG_ASSETS to a built directory. The API is unaffected and is \
          available under /api.",
     )
         .into_response()

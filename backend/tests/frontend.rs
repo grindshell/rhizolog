@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use rhizowiki::{AppState, Index, Store};
+use rhizolog::{AppState, Index, Store};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -18,7 +18,7 @@ async fn app_with_assets() -> (TempDir, TempDir, Router) {
 
     std::fs::write(
         assets.path().join("index.html"),
-        "<!doctype html><title>Rhizowiki</title><div id=root></div>",
+        "<!doctype html><title>Rhizolog</title><div id=root></div>",
     )
     .expect("write index.html");
     std::fs::create_dir_all(assets.path().join("assets")).expect("create assets dir");
@@ -30,10 +30,10 @@ async fn app_with_assets() -> (TempDir, TempDir, Router) {
 
     let store = Store::open(wiki.path()).await.expect("open store");
     let index = Index::open(None).await.expect("open index");
-    let router = rhizowiki::router(AppState {
+    let router = rhizolog::router(AppState {
         store,
         index,
-        usage: rhizowiki::UsageTally::new(),
+        usage: rhizolog::UsageTally::new(),
         assets: Some(assets.path().to_path_buf()),
     });
 
@@ -178,7 +178,7 @@ async fn the_openapi_document_survives_the_spa_fallback() {
 
     assert_eq!(status, StatusCode::OK);
     let spec: serde_json::Value = serde_json::from_str(&body).expect("spec is JSON");
-    assert_eq!(spec["info"]["title"], "Rhizowiki");
+    assert_eq!(spec["info"]["title"], "Rhizolog");
 }
 
 /// With no build present the API must still work, and the browser routes should
@@ -188,10 +188,10 @@ async fn a_missing_frontend_build_leaves_the_api_working() {
     let wiki = TempDir::new().expect("wiki dir");
     let store = Store::open(wiki.path()).await.expect("open store");
     let index = Index::open(None).await.expect("open index");
-    let router = rhizowiki::router(AppState {
+    let router = rhizolog::router(AppState {
         store,
         index,
-        usage: rhizowiki::UsageTally::new(),
+        usage: rhizolog::UsageTally::new(),
         assets: None,
     });
 

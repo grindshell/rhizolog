@@ -508,9 +508,9 @@ mod tests {
             }
         );
         assert_eq!(
-            err(".rhizowiki/index"),
+            err(".rhizolog/index"),
             SlugError::SegmentPadding {
-                segment: ".rhizowiki".into()
+                segment: ".rhizolog".into()
             }
         );
         assert_eq!(

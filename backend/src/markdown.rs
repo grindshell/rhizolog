@@ -28,7 +28,7 @@ pub const PAGE_URL_PREFIX: &str = "/pages/";
 /// relative links mean. `None` renders as though the content sat at the wiki
 /// root — the right answer for previewing a draft that has no slug yet.
 ///
-/// Raw HTML in the source is **escaped, not passed through**. Rhizowiki is
+/// Raw HTML in the source is **escaped, not passed through**. Rhizolog is
 /// single-user and loopback-bound, so this is not guarding against a hostile
 /// author — but page content arrives over an API that agents write to, and
 /// rendering `<script>` from an indirect source into the dashboard is the kind

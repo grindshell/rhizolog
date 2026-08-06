@@ -1,4 +1,4 @@
-//! Extractors that fail in Rhizowiki's error envelope.
+//! Extractors that fail in Rhizolog's error envelope.
 //!
 //! `axum::Json` rejects a bad body with its own response shape, which would
 //! leave one class of error — the one a caller is most likely to hit while

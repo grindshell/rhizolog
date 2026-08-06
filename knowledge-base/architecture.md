@@ -9,7 +9,7 @@ Page content lives as `.md` files on disk. SQLite holds a **derived index**
 (search, tags, links, stats) that is fully rebuildable by deleting the DB and
 restarting.
 
-Why: Rhizowiki is a developer tool. Developers expect to `grep` the wiki, edit
+Why: Rhizolog is a developer tool. Developers expect to `grep` the wiki, edit
 it in their own editor, and commit it to git. Agents are far better at reading
 and writing markdown files than at driving a CRUD API. Making files
 authoritative means neither has to go through us.
@@ -33,11 +33,11 @@ harmless and needs no suppression logic.
   index.md
   notes/
     rust/async.md
-  .rhizowiki/
+  .rhizolog/
     index.db        # derived; safe to delete
 ```
 
-The walker skips any directory beginning with `.`, which keeps `.rhizowiki/`
+The walker skips any directory beginning with `.`, which keeps `.rhizolog/`
 and `.git/` out of the wiki.
 
 ## Page identity
@@ -328,9 +328,9 @@ src/
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RHIZOWIKI_ROOT` | `./wiki` | Wiki directory |
-| `RHIZOWIKI_DB` | `<root>/.rhizowiki/index.db` | Derived index |
-| `RHIZOWIKI_ADDR` | `127.0.0.1:3000` | Listen address |
+| `RHIZOLOG_ROOT` | `./wiki` | Wiki directory |
+| `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | Derived index |
+| `RHIZOLOG_ADDR` | `127.0.0.1:3000` | Listen address |
 
 Binding to loopback by default is intentional: single-user, no auth, and the
 API can write files anywhere under the wiki root.
