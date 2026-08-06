@@ -178,7 +178,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use tempfile::TempDir;
 
-    use crate::index::Stamp;
+    use crate::index::{Stamp, TimeListOptions};
     use crate::page::Frontmatter;
     use crate::slug::Slug;
     use crate::times::store::TimeDraft;
@@ -472,7 +472,10 @@ mod tests {
         let (directory, store, times, index) = fixture().await;
         write(&store, "page-0", "Body.\n").await;
         let entry = times
-            .create(draft("Deep work", "2026-08-06T09:00:00Z"))
+            .create(TimeDraft {
+                note: "Chased the poll loop.\n".to_owned(),
+                ..draft("Deep work", "2026-08-06T09:00:00Z")
+            })
             .await
             .unwrap();
         sync(&store, &times, &index).await.unwrap();
@@ -487,6 +490,22 @@ mod tests {
 
         assert_eq!(index.count().await.unwrap(), 0);
         assert_eq!(index.count_times().await.unwrap(), 0);
+
+        // A file that is gone is walked by nothing, so only `Index::clear`
+        // can take its searchable text with it. The full-text tables are the
+        // easy ones to forget there — they hold their own copy of the row.
+        assert_eq!(index.search("body", 10, 0).await.unwrap().total, 0);
+        let searched = index
+            .list_times(
+                TimeListOptions {
+                    query: Some("poll".to_owned()),
+                    ..TimeListOptions::default()
+                },
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(searched.total, 0, "the deleted entry is still searchable");
     }
 
     #[tokio::test]

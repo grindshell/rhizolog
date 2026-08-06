@@ -365,7 +365,12 @@ impl Index {
         .await
     }
 
-    /// Full-text search over titles and bodies.
+    /// Full-text search over page titles and bodies.
+    ///
+    /// The time log has its own search, on [`Index::list_times`], rather than
+    /// being folded in here: a time entry and a page are not the same shape, so
+    /// one result set holding both would have to be lossy or a union type. See
+    /// [`times`] for what that search is instead.
     ///
     /// Terms are matched literally — see [`to_fts_query`] — and results come
     /// back with a marked-up excerpt so a caller can tell which hits are worth
@@ -568,6 +573,7 @@ impl Index {
             transaction.execute("delete from links", [])?;
             transaction.execute("delete from pages_fts", [])?;
             transaction.execute("delete from time_pages", [])?;
+            transaction.execute("delete from times_fts", [])?;
             transaction.execute("delete from times", [])?;
             transaction.commit()?;
             Ok(())

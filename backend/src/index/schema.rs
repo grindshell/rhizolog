@@ -13,13 +13,16 @@
 
 /// Bump this whenever [`CREATE_DERIVED`] changes. The next startup will notice,
 /// drop the derived tables, and rebuild them from disk.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
 
 /// Column index of `body` within `pages_fts`, for `snippet()`.
 pub const FTS_BODY_COLUMN: i32 = 2;
+
+/// Column index of `note` within `times_fts`, for `snippet()`.
+pub const FTS_NOTE_COLUMN: i32 = 2;
 
 /// How many entries the top-N lists in `/api/stats` carry.
 pub const TOP_N: usize = 10;
@@ -164,6 +167,20 @@ create table time_pages (
 ) strict;
 
 create index time_pages_by_target on time_pages(target);
+
+-- Search over the log. Both indexed columns are deliberate: `note` is the
+-- obvious one, and `name` is what makes the search useful on a log where most
+-- entries have no note at all -- `deep` should find every `Deep work` entry.
+--
+-- That is a different question from `times.name = ?`, which is the group filter
+-- and is exact by design. This one is fuzzy and they intersect, so asking for
+-- `poll loop` inside `Deep work` is one request.
+create virtual table times_fts using fts5(
+    id unindexed,
+    name,
+    note,
+    tokenize = 'unicode61'
+);
 ";
 
 /// Dropped in dependency order so the foreign keys never block.
@@ -174,5 +191,6 @@ drop table if exists page_segments;
 drop table if exists pages_fts;
 drop table if exists pages;
 drop table if exists time_pages;
+drop table if exists times_fts;
 drop table if exists times;
 ";

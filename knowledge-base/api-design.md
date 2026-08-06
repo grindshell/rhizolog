@@ -23,7 +23,7 @@ storage model it sits on.
 | `GET` | `/api/pins` | Pinned pages, oldest first, with the limit |
 | `PUT` | `/api/pins/{slug}` | Pin a page; idempotent |
 | `DELETE` | `/api/pins/{slug}` | Unpin a page; the page is untouched |
-| `GET` | `/api/times` | Time entries, newest first; `?name=`, `?page=`, `?running=`, `?from=`, `?to=` |
+| `GET` | `/api/times` | Time entries, newest first; `?q=`, `?name=`, `?page=`, `?running=`, `?from=`, `?to=` |
 | `POST` | `/api/times` | Start a timer, or log time already spent |
 | `GET` | `/api/times/{id}` | One entry with its note; `?render=true` adds HTML |
 | `PATCH` | `/api/times/{id}` | Partial update; `end: null` sets it running again |
@@ -60,6 +60,17 @@ files.
 `/api/search` takes none of them. Search answers "where is this word" and the
 listing answers "what is in here"; the dashboard picks one endpoint or the
 other rather than pretending the filters compose across both.
+
+**The time log does the opposite, deliberately.** `GET /api/times?q=` searches
+names and notes as one more filter beside `name`, `page` and the window, and it
+does not reorder the results. That is not an inconsistency with the paragraph
+above; it is the same reasoning reaching a different answer, because the two
+searches are not the same shape. A page search returns hits ranked by relevance
+and nothing else composes with that. A log search is asked things like "what did
+I write about the poll loop, last week, under `Deep work`" — every part of which
+is a filter the listing already has, and none of which a separate endpoint could
+answer without growing all of them. Time entries are therefore *not* in
+`/api/search`; see [Time tracking](time-tracking.md).
 
 ### The time endpoints are the exception to the wildcard rule
 

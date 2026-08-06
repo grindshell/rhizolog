@@ -210,7 +210,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Search page titles and bodies. */
+        /**
+         * Search page titles and bodies.
+         * @description Time entries are not included. Their names and notes are searchable through
+         *     `GET /api/times?q=`, where the search intersects with the log's own filters.
+         */
         get: operations["search"];
         put?: never;
         post?: never;
@@ -1299,6 +1303,17 @@ export interface components {
              * @example 148
              */
             size: number;
+            /**
+             * @description An excerpt of the note with the matched terms wrapped in `<mark>`,
+             *     present only when a `q=` search is what turned this entry up and the
+             *     note is what matched it. Absent when the name matched instead — that is
+             *     already in `name`.
+             *
+             *     Only the marks are markup: the text around them is the note verbatim and
+             *     is **not** escaped, exactly as in a search hit over pages.
+             * @example Chased down a lifetime error in the <mark>poll</mark> loop
+             */
+            snippet?: string | null;
             /** Format: date-time */
             start: string;
             /**
@@ -2121,7 +2136,19 @@ export interface operations {
         parameters: {
             query?: {
                 /**
-                 * @description Only entries in this group, matched exactly.
+                 * @description Search the entries' names and notes. Terms are matched literally and
+                 *     combined with AND, a trailing `*` searches by prefix, and punctuation is
+                 *     safe to include — the same rules `/api/search` follows.
+                 *
+                 *     It is a filter, so it intersects with everything else here rather than
+                 *     replacing it, and it does not reorder the log. Matching entries carry a
+                 *     `snippet`.
+                 * @example poll loop
+                 */
+                q?: string;
+                /**
+                 * @description Only entries in this group, matched **exactly**. `q` is the fuzzy one;
+                 *     this is the group, spelled as written.
                  * @example Deep work
                  */
                 name?: string;

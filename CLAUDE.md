@@ -21,7 +21,7 @@ This is a **git monorepo with a single `.git` at the root**.
 |------|---------|
 | `backend/` | The Rust backend (cargo project, crate name `rhizolog`) |
 | `frontend/` | The TypeScript frontend, served by the backend |
-| `example-wiki/` | A small committed wiki to run against; its `index.md` states what the dashboard should report about it |
+| `example-wiki/` | A small committed wiki *and time log* to run against; its `index.md` states what the dashboard should report about both |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
 | `README.md` | Setup and usage, for people who are not this file |
 | `CLAUDE.md` | This file |
@@ -29,6 +29,12 @@ This is a **git monorepo with a single `.git` at the root**.
 `backend/wiki/` is the default `RHIZOLOG_ROOT` and is gitignored, as is
 `.rhizolog/index.db` anywhere. Do not develop against `example-wiki/` — it is a
 fixture, and changing it changes what the docs claim.
+
+That now includes `example-wiki/.rhizolog/times/`: 18 committed entries whose
+totals `example-wiki/index.md` states exactly. Pointing `RHIZOLOG_ROOT` at the
+example wiki to *look* at it is fine and is what the README tells people to do;
+starting a timer while it is pointed there writes a new file into the fixture
+and breaks those numbers. Check `git status example-wiki` afterwards.
 
 **`.rhizolog/` is not all disposable.** `index.db` is derived and rebuilds on
 startup; `.rhizolog/times/` beside it is the time log, which is authored data

@@ -1,4 +1,7 @@
-//! Full-text search, and rebuilding the index it reads from.
+//! Full-text search over pages, and rebuilding the index it reads from.
+//!
+//! Time entries are searched through `GET /api/times?q=`, not here — see
+//! [`crate::api::times`] for why the log carries its own.
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -69,6 +72,9 @@ pub struct SearchResponse {
 }
 
 /// Search page titles and bodies.
+///
+/// Time entries are not included. Their names and notes are searchable through
+/// `GET /api/times?q=`, where the search intersects with the log's own filters.
 #[utoipa::path(
     get,
     path = "/api/search",

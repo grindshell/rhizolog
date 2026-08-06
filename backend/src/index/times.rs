@@ -27,14 +27,27 @@
 //! written, joined against `pages` at read time and never resolved once and
 //! stored — so time can be tracked against a page before it is written, and it
 //! attaches itself the moment somebody writes it.
+//!
+//! ## The log has its own search
+//!
+//! `times_fts` indexes each entry's name and note, and it is reached through
+//! [`Index::list_times`] rather than through [`Index::search`]. Two reasons,
+//! and the first is only about types: a search that returned pages and time
+//! entries in one list would have to flatten both into something neither of
+//! them is. The second is that a note is worth searching *alongside* the log's
+//! other filters — by group, by page, by window — and a separate entry point
+//! could not do that without growing all of them too.
 
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 
-use crate::index::{Index, IndexError, Stamp, from_nanos, to_nanos};
-use crate::index::{SortOrder, schema::TOP_N};
+use crate::index::{Index, IndexError, Stamp, from_nanos, to_fts_query, to_nanos};
+use crate::index::{
+    SortOrder,
+    schema::{FTS_NOTE_COLUMN, TOP_N},
+};
 use crate::slug::Slug;
 use crate::times::stats::{Sample, SamplePage};
 use crate::times::{TimeEntry, TimeId};
@@ -57,6 +70,13 @@ pub struct TimeRecord {
     pub pages: Vec<TimePageRef>,
     /// Whether the file carries a note. The note itself comes from disk.
     pub has_note: bool,
+    /// An excerpt of the note with the searched terms marked, when a search was
+    /// what turned this entry up *and* the note is what matched.
+    ///
+    /// `None` when there was no query, and also when the query matched only the
+    /// name — the name is already on screen, so an excerpt of it would tell the
+    /// reader nothing they cannot see.
+    pub snippet: Option<String>,
     pub updated: DateTime<Utc>,
     pub size: u64,
 }
@@ -146,17 +166,28 @@ impl TimeSortBy {
     /// Going through this enum is what keeps that safe: the only strings that
     /// can reach a query are the three below. `?1` in the duration case is the
     /// caller's "now", which every query here binds first.
+    ///
+    /// Qualified with the table because a search joins `times_fts`, which has
+    /// its own `id` and `name` — a bare `name` there is an ambiguous column and
+    /// the query fails outright.
     fn expression(self) -> &'static str {
         match self {
-            Self::Start => "started",
-            Self::Name => "name",
-            Self::Duration => "max(0, coalesce(ended, ?1) - started)",
+            Self::Start => "times.started",
+            Self::Name => "times.name",
+            Self::Duration => "max(0, coalesce(times.ended, ?1) - times.started)",
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct TimeListOptions {
+    /// Full-text search over names and notes.
+    ///
+    /// A filter like the rest of these rather than a separate search: it
+    /// intersects with them, so "the entries mentioning the poll loop that I
+    /// logged last week against `notes/rust/async`" is one query. Order is
+    /// unaffected — see [`Index::list_times`].
+    pub query: Option<String>,
     /// Restrict to one group, matched exactly.
     pub name: Option<String>,
     /// Restrict to entries attached to this page.
@@ -175,6 +206,7 @@ pub struct TimeListOptions {
 impl Default for TimeListOptions {
     fn default() -> Self {
         Self {
+            query: None,
             name: None,
             page: None,
             running: None,
@@ -197,8 +229,8 @@ impl Default for TimeListOptions {
 /// "no bound on that side". An entry counts when it *overlaps* the window
 /// rather than when it starts inside it, so a session that began yesterday and
 /// is still running shows up in today's list — it is time being spent today.
-const WINDOW: &str = "(?2 is null or coalesce(ended, ?1) > ?2)
-     and (?3 is null or started < ?3)";
+const WINDOW: &str = "(?2 is null or coalesce(times.ended, ?1) > ?2)
+     and (?3 is null or times.started < ?3)";
 
 impl Index {
     /// Record a time entry, replacing whatever was indexed under its id.
@@ -208,6 +240,7 @@ impl Index {
         let started = to_nanos(entry.start, "time start")?;
         let ended = entry.end.map(|end| to_nanos(end, "time end")).transpose()?;
         let has_note = i64::from(entry.has_note());
+        let note = entry.note.clone();
         let updated = to_nanos(entry.updated, "time updated")?;
         let size = entry.size as i64;
         let pages: Vec<String> = entry.pages.iter().map(Slug::to_string).collect();
@@ -231,6 +264,14 @@ impl Index {
                 }
             }
 
+            // FTS5 has no upsert, so the old row goes first — the same dance
+            // `Index::upsert` does for `pages_fts`.
+            transaction.execute("delete from times_fts where id = ?1", params![&id])?;
+            transaction.execute(
+                "insert into times_fts (id, name, note) values (?1, ?2, ?3)",
+                params![&id, &name, &note],
+            )?;
+
             transaction.commit()?;
             Ok(())
         })
@@ -243,6 +284,7 @@ impl Index {
         self.with_connection(move |connection| {
             let transaction = connection.transaction()?;
             transaction.execute("delete from time_pages where time_id = ?1", params![&id])?;
+            transaction.execute("delete from times_fts where id = ?1", params![&id])?;
             transaction.execute("delete from times where id = ?1", params![&id])?;
             transaction.commit()?;
             Ok(())
@@ -293,12 +335,22 @@ impl Index {
     }
 
     /// List entries, without their notes.
+    ///
+    /// `options.query` searches names and notes, and it is a filter rather than
+    /// a mode: the result is still the log, still in whatever order was asked
+    /// for. Deliberately *not* ranked by relevance, unlike [`Index::search`].
+    /// An entry's note is a sentence or two, so bm25 between two of them is
+    /// mostly noise, and the question a log is asked is when something happened
+    /// — a search that reordered it chronologically would be answering a
+    /// different one. What the search does add is the `snippet` on each record,
+    /// which says why the entry matched.
     pub async fn list_times(
         &self,
         options: TimeListOptions,
         now: DateTime<Utc>,
     ) -> Result<TimeList, IndexError> {
         let TimeListOptions {
+            query,
             name,
             page,
             running,
@@ -314,33 +366,68 @@ impl Index {
         let from = from.map(|at| to_nanos(at, "from")).transpose()?;
         let to = to.map(|at| to_nanos(at, "to")).transpose()?;
         let running = running.map(i64::from);
+        // A query of nothing but punctuation reduces to no terms, and matches
+        // nothing rather than everything — the same answer `search` gives, and
+        // the only one that does not silently drop a filter the caller asked
+        // for.
+        let searching = query.is_some();
+        let fts_query = query.as_deref().and_then(to_fts_query);
 
         self.with_connection(move |connection| {
+            if searching && fts_query.is_none() {
+                return Ok(TimeList {
+                    times: Vec::new(),
+                    total: 0,
+                });
+            }
+
+            // Two shapes, because an FTS5 table cannot be joined without a
+            // `match` constraint — left in with a NULL parameter it would cross
+            // every entry with every indexed row. Both shapes still *mention*
+            // `?7`, since rusqlite refuses a parameter the SQL never uses, and
+            // both queries below bind the same list.
+            let (source, fts_filter, snippet) = match fts_query {
+                Some(_) => (
+                    "times join times_fts on times_fts.id = times.id",
+                    "and times_fts match ?7",
+                    format!(
+                        "snippet(times_fts, {FTS_NOTE_COLUMN}, '<mark>', '</mark>', '...', 12)"
+                    ),
+                ),
+                None => ("times", "and ?7 is null", "null".to_owned()),
+            };
+
             // One filter expression rather than conditional clauses, the same
             // shape `list` uses for pages: each condition short-circuits to
             // "everything" when its parameter binds as NULL.
+            //
+            // Every column is qualified: `times_fts` has an `id` and a `name`
+            // of its own, so a bare one is ambiguous the moment a search joins
+            // it in.
             let filters = format!(
                 "where {WINDOW}
-                 and (?4 is null or name = ?4)
+                 and (?4 is null or times.name = ?4)
                  and (?5 is null or exists (
                      select 1 from time_pages
                      where time_pages.time_id = times.id and time_pages.target = ?5
                  ))
-                 and (?6 is null or (ended is null) = (?6 = 1))"
+                 and (?6 is null or (times.ended is null) = (?6 = 1))
+                 {fts_filter}"
             );
 
             let total: i64 = connection.query_row(
-                &format!("select count(*) from times {filters}"),
-                params![now, from, to, &name, &page, running],
+                &format!("select count(*) from {source} {filters}"),
+                params![now, from, to, &name, &page, running, &fts_query],
                 |row| row.get(0),
             )?;
 
             let sql = format!(
-                "select id, name, started, ended, has_note, updated, size
-                 from times
+                "select times.id, times.name, times.started, times.ended,
+                        times.has_note, times.updated, times.size, {snippet}
+                 from {source}
                  {filters}
-                 order by {} {}, id desc
-                 limit ?7 offset ?8",
+                 order by {} {}, times.id desc
+                 limit ?8 offset ?9",
                 sort.expression(),
                 order.keyword(),
             );
@@ -357,6 +444,7 @@ impl Index {
                         &name,
                         &page,
                         running,
+                        &fts_query,
                         limit as i64,
                         offset as i64
                     ],
@@ -603,7 +691,10 @@ impl Index {
         self.with_connection(move |connection| {
             let record = connection
                 .query_row(
-                    "select id, name, started, ended, has_note, updated, size
+                    // The trailing `null` is the snippet column `read_record`
+                    // expects. Nothing was searched for here, so there is
+                    // nothing to excerpt.
+                    "select id, name, started, ended, has_note, updated, size, null
                      from times where id = ?1",
                     params![&id],
                     read_record,
@@ -619,7 +710,7 @@ impl Index {
     }
 }
 
-/// Read one row of the seven columns every entry query selects.
+/// Read one row of the eight columns every entry query selects.
 ///
 /// Returns `None` for a row whose id no longer parses: it names an entry that
 /// could never be served, so there is nothing useful to hand back for it.
@@ -636,6 +727,13 @@ fn read_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<TimeRecord>> 
         end: row.get::<_, Option<i64>>(3)?.map(from_nanos),
         pages: Vec::new(),
         has_note: row.get::<_, i64>(4)? != 0,
+        // `snippet()` returns the opening of the column even when the match was
+        // somewhere else, so an unmarked excerpt means the *name* matched and
+        // this is just the note's first few words. That is not an explanation
+        // of anything, and the note is one fetch away, so it is dropped.
+        snippet: row
+            .get::<_, Option<String>>(7)?
+            .filter(|text| text.contains("<mark>")),
         updated: from_nanos(row.get::<_, i64>(5)?),
         size: row.get::<_, i64>(6)? as u64,
     }))
@@ -1045,6 +1143,355 @@ mod tests {
 
         assert_eq!(page.times.len(), 2);
         assert_eq!(page.total, 5, "total counts every entry, not the slice");
+    }
+
+    // ------------------------------------------------------------- searching
+
+    /// A finished hour with something actually written on it.
+    fn noted(name: &str, start: &str, note: &str) -> TimeEntry {
+        let mut written = entry(name, start, None, &[]);
+        written.end = Some(written.start + chrono::TimeDelta::hours(1));
+        written.note = note.to_owned();
+        written
+    }
+
+    async fn found(index: &Index, options: TimeListOptions) -> Vec<String> {
+        let list = index.list_times(options, now()).await.unwrap();
+        assert_eq!(list.total, list.times.len(), "nothing was paginated away");
+        list.times.into_iter().map(|record| record.name).collect()
+    }
+
+    async fn matching(index: &Index, query: &str) -> Vec<String> {
+        found(
+            index,
+            TimeListOptions {
+                query: Some(query.to_owned()),
+                ..TimeListOptions::default()
+            },
+        )
+        .await
+    }
+
+    async fn seed_notes(index: &Index) {
+        for (name, start, note) in [
+            (
+                "Deep work",
+                "2026-08-06T09:00:00Z",
+                "Chased down a lifetime error in the poll loop.\n",
+            ),
+            (
+                "Deep work",
+                "2026-08-06T11:00:00Z",
+                "Wrote the poll loop up in the knowledge base.\n",
+            ),
+            (
+                "Email",
+                "2026-08-06T13:00:00Z",
+                "Inbox, mostly recruiters.\n",
+            ),
+            ("Reading", "2026-08-06T14:00:00Z", ""),
+        ] {
+            index.upsert_time(&noted(name, start, note)).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn searches_both_the_note_and_the_name() {
+        let index = index().await;
+        seed_notes(&index).await;
+
+        assert_eq!(matching(&index, "lifetime").await, ["Deep work"]);
+
+        // The name is indexed too, which is what makes searching useful at all
+        // on a log where most entries carry no note.
+        assert_eq!(matching(&index, "reading").await, ["Reading"]);
+
+        // Terms combine with AND, the same as everywhere else.
+        assert_eq!(matching(&index, "poll loop").await.len(), 2);
+        assert_eq!(matching(&index, "poll recruiters").await.len(), 0);
+        assert!(matching(&index, "kubernetes").await.is_empty());
+    }
+
+    /// The reason this is a filter on the listing rather than its own endpoint:
+    /// the useful questions are intersections.
+    #[tokio::test]
+    async fn a_search_intersects_every_other_filter() {
+        let index = index().await;
+        seed_notes(&index).await;
+        index
+            .upsert_time(&TimeEntry {
+                pages: vec![Slug::parse("notes/rust/async").unwrap()],
+                ..noted(
+                    "Deep work",
+                    "2026-08-05T09:00:00Z",
+                    "First look at the poll loop, the day before.\n",
+                )
+            })
+            .await
+            .unwrap();
+
+        // Narrowed to a group.
+        assert_eq!(matching(&index, "loop").await.len(), 3);
+        assert_eq!(
+            found(
+                &index,
+                TimeListOptions {
+                    query: Some("loop".to_owned()),
+                    name: Some("Email".to_owned()),
+                    ..TimeListOptions::default()
+                }
+            )
+            .await
+            .len(),
+            0
+        );
+
+        // Narrowed to a page, and to a window.
+        assert_eq!(
+            found(
+                &index,
+                TimeListOptions {
+                    query: Some("loop".to_owned()),
+                    page: Some("notes/rust/async".to_owned()),
+                    ..TimeListOptions::default()
+                }
+            )
+            .await
+            .len(),
+            1
+        );
+        assert_eq!(
+            found(
+                &index,
+                TimeListOptions {
+                    query: Some("loop".to_owned()),
+                    to: Some(at("2026-08-06T00:00:00Z")),
+                    ..TimeListOptions::default()
+                }
+            )
+            .await
+            .len(),
+            1
+        );
+    }
+
+    /// Sorting by name is the case that would fail loudly if the columns were
+    /// left unqualified: `times_fts` has a `name` of its own.
+    #[tokio::test]
+    async fn a_search_leaves_the_log_in_the_order_that_was_asked_for() {
+        let index = index().await;
+        seed_notes(&index).await;
+
+        let newest_first = index
+            .list_times(
+                TimeListOptions {
+                    query: Some("loop".to_owned()),
+                    ..TimeListOptions::default()
+                },
+                now(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            newest_first.times[0].start,
+            at("2026-08-06T11:00:00Z"),
+            "a search must not reorder the log by relevance"
+        );
+
+        for sort in [TimeSortBy::Start, TimeSortBy::Name, TimeSortBy::Duration] {
+            let list = index
+                .list_times(
+                    TimeListOptions {
+                        query: Some("poll".to_owned()),
+                        sort,
+                        order: SortOrder::Ascending,
+                        ..TimeListOptions::default()
+                    },
+                    now(),
+                )
+                .await;
+            assert!(list.is_ok(), "sorting by {sort:?} failed: {list:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_snippet_marks_the_note_and_is_absent_when_the_name_matched() {
+        let index = index().await;
+        seed_notes(&index).await;
+
+        let hit = index
+            .list_times(
+                TimeListOptions {
+                    query: Some("lifetime".to_owned()),
+                    ..TimeListOptions::default()
+                },
+                now(),
+            )
+            .await
+            .unwrap();
+        let snippet = hit.times[0].snippet.as_deref().expect("a matched note");
+        assert!(
+            snippet.contains("<mark>lifetime</mark>"),
+            "expected a marked excerpt, got {snippet:?}"
+        );
+
+        // The name matched, so an excerpt of the note would be its opening
+        // words with nothing marked in them — an explanation of nothing.
+        let by_name = index
+            .list_times(
+                TimeListOptions {
+                    query: Some("email".to_owned()),
+                    ..TimeListOptions::default()
+                },
+                now(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_name.times[0].snippet, None);
+
+        // And nothing carries one when nothing was searched for.
+        let unsearched = index
+            .list_times(TimeListOptions::default(), now())
+            .await
+            .unwrap();
+        assert!(
+            unsearched
+                .times
+                .iter()
+                .all(|record| record.snippet.is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn rewriting_an_entry_replaces_what_is_searchable() {
+        let index = index().await;
+        let mut written = noted("Deep work", "2026-08-06T09:00:00Z", "Poll loop.\n");
+        index.upsert_time(&written).await.unwrap();
+
+        written.name = "Shallow work".to_owned();
+        written.note = "Answered email instead.\n".to_owned();
+        index.upsert_time(&written).await.unwrap();
+
+        assert_eq!(matching(&index, "email").await, ["Shallow work"]);
+        assert!(
+            matching(&index, "poll").await.is_empty(),
+            "the replaced note is still searchable"
+        );
+        assert!(
+            matching(&index, "deep").await.is_empty(),
+            "the replaced name is still searchable"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_removed_entry_stops_being_searchable() {
+        let index = index().await;
+        let written = noted("Deep work", "2026-08-06T09:00:00Z", "Poll loop.\n");
+        index.upsert_time(&written).await.unwrap();
+        assert_eq!(matching(&index, "poll").await.len(), 1);
+
+        index.remove_time(&written.id).await.unwrap();
+
+        assert!(matching(&index, "poll").await.is_empty());
+    }
+
+    /// Every one of these would be a 500 if it reached FTS5 as syntax.
+    #[tokio::test]
+    async fn punctuation_in_a_search_never_errors() {
+        let index = index().await;
+        seed_notes(&index).await;
+
+        for query in [
+            "\"",
+            "\"\"",
+            "*",
+            "(",
+            ")",
+            "AND",
+            "OR",
+            "NOT",
+            "NEAR",
+            "^",
+            ":",
+            "-",
+            "a OR b",
+            "\"unclosed",
+            "",
+            "   ",
+        ] {
+            let result = index
+                .list_times(
+                    TimeListOptions {
+                        query: Some(query.to_owned()),
+                        ..TimeListOptions::default()
+                    },
+                    now(),
+                )
+                .await;
+            assert!(result.is_ok(), "query {query:?} failed: {result:?}");
+        }
+    }
+
+    /// A query with no terms in it matches nothing, rather than quietly
+    /// becoming no filter at all and returning the whole log.
+    #[tokio::test]
+    async fn a_query_of_nothing_but_punctuation_matches_nothing() {
+        let index = index().await;
+        seed_notes(&index).await;
+
+        let empty = index
+            .list_times(
+                TimeListOptions {
+                    query: Some("   ".to_owned()),
+                    ..TimeListOptions::default()
+                },
+                now(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(empty.total, 0);
+        assert!(empty.times.is_empty());
+        // Whereas no query at all is no filter.
+        assert_eq!(
+            index
+                .list_times(TimeListOptions::default(), now())
+                .await
+                .unwrap()
+                .total,
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn a_search_paginates_and_reports_the_full_total() {
+        let index = index().await;
+        for hour in 0..5 {
+            index
+                .upsert_time(&noted(
+                    "Deep work",
+                    &format!("2026-08-06T0{hour}:00:00Z"),
+                    "Poll loop.\n",
+                ))
+                .await
+                .unwrap();
+        }
+
+        let page = index
+            .list_times(
+                TimeListOptions {
+                    query: Some("poll".to_owned()),
+                    limit: 2,
+                    offset: 2,
+                    ..TimeListOptions::default()
+                },
+                now(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.times.len(), 2);
+        assert_eq!(page.total, 5, "total counts every match, not the slice");
     }
 
     #[tokio::test]

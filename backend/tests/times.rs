@@ -438,6 +438,177 @@ async fn lists_newest_first_and_filters_by_group() {
     assert_eq!(nonsense.code(), "invalid_parameter");
 }
 
+/// Seed a log with something written on it, for the search tests below.
+async fn seed_notes(app: &App) {
+    app.track(json!({
+        "name": "Deep work",
+        "start": "2026-08-06T09:00:00Z",
+        "end": "2026-08-06T11:00:00Z",
+        "pages": ["notes/rust/async"],
+        "note": "Chased down a lifetime error in the poll loop.\n",
+    }))
+    .await;
+    app.track(json!({
+        "name": "Deep work",
+        "start": "2026-08-05T09:00:00Z",
+        "end": "2026-08-05T10:00:00Z",
+        "note": "Wrote the poll loop up in the knowledge base.\n",
+    }))
+    .await;
+    app.track(json!({
+        "name": "Email",
+        "start": "2026-08-06T13:00:00Z",
+        "end": "2026-08-06T13:30:00Z",
+        "note": "Inbox, mostly recruiters.\n",
+    }))
+    .await;
+}
+
+#[tokio::test]
+async fn the_log_is_searchable_by_note_and_by_name() {
+    let app = App::new().await;
+    seed_notes(&app).await;
+
+    let notes = app.get("/api/times?q=lifetime").await;
+    assert_eq!(notes.body["total"], 1);
+    assert_eq!(notes.body["times"][0]["name"], "Deep work");
+    assert_eq!(
+        notes.body["times"][0]["snippet"],
+        "Chased down a <mark>lifetime</mark> error in the poll loop.\n"
+    );
+
+    // The name is searchable too, which is what makes this worth having on a
+    // log where most entries carry no note.
+    assert_eq!(app.get("/api/times?q=email").await.body["total"], 1);
+
+    // Terms are ANDed, and a term nobody wrote finds nothing.
+    assert_eq!(app.get("/api/times?q=poll%20loop").await.body["total"], 2);
+    assert_eq!(
+        app.get("/api/times?q=poll%20recruiters").await.body["total"],
+        0
+    );
+    assert_eq!(app.get("/api/times?q=kubernetes").await.body["total"], 0);
+}
+
+/// The reason `q` is a filter on the listing rather than its own endpoint.
+#[tokio::test]
+async fn a_search_narrows_the_log_alongside_every_other_filter() {
+    let app = App::new().await;
+    seed_notes(&app).await;
+
+    assert_eq!(app.get("/api/times?q=loop").await.body["total"], 2);
+    assert_eq!(
+        app.get("/api/times?q=loop&page=notes/rust/async")
+            .await
+            .body["total"],
+        1
+    );
+    assert_eq!(
+        app.get("/api/times?q=loop&name=Email").await.body["total"],
+        0
+    );
+    assert_eq!(
+        app.get("/api/times?q=loop&from=2026-08-06T00:00:00Z")
+            .await
+            .body["total"],
+        1
+    );
+
+    // And it still reads newest first, rather than by relevance.
+    let both = app.get("/api/times?q=loop").await;
+    assert_eq!(both.body["times"][0]["start"], "2026-08-06T09:00:00Z");
+}
+
+/// The snippet says *why* an entry matched. When the name is the reason, the
+/// name is already on screen and an excerpt of the note explains nothing.
+#[tokio::test]
+async fn a_snippet_is_present_only_when_the_note_is_what_matched() {
+    let app = App::new().await;
+    seed_notes(&app).await;
+
+    let by_name = app.get("/api/times?q=email").await;
+    assert_eq!(by_name.body["times"][0]["snippet"], Value::Null);
+
+    let unsearched = app.get("/api/times").await;
+    assert_eq!(unsearched.body["times"][0]["snippet"], Value::Null);
+}
+
+/// Notes are searched here and nowhere else: a time entry is not a page, and
+/// `/api/search` would have to flatten one into the other to carry both.
+#[tokio::test]
+async fn time_notes_are_not_in_the_page_search() {
+    let app = App::new().await;
+    app.seed_page("notes/rust/async", "Async in Rust").await;
+    seed_notes(&app).await;
+
+    assert_eq!(app.get("/api/search?q=lifetime").await.body["total"], 0);
+    assert_eq!(app.get("/api/times?q=lifetime").await.body["total"], 1);
+}
+
+/// Editing an entry has to replace what is searchable, not add to it — the
+/// full-text table holds its own copy of the row and has no upsert.
+#[tokio::test]
+async fn rewriting_an_entry_replaces_what_is_searchable() {
+    let app = App::new().await;
+    let id = app
+        .track(json!({
+            "name": "Deep work",
+            "start": "2026-08-06T09:00:00Z",
+            "note": "Chased the poll loop.\n",
+        }))
+        .await;
+
+    let res = app
+        .patch(
+            &format!("/api/times/{id}"),
+            json!({ "name": "Email", "note": "Answered recruiters instead.\n" }),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK);
+
+    assert_eq!(app.get("/api/times?q=recruiters").await.body["total"], 1);
+    assert_eq!(app.get("/api/times?q=poll").await.body["total"], 0);
+    assert_eq!(app.get("/api/times?q=deep").await.body["total"], 0);
+
+    app.delete(&format!("/api/times/{id}")).await;
+    assert_eq!(app.get("/api/times?q=recruiters").await.body["total"], 0);
+}
+
+/// A search box sends whatever was typed into it, and none of it may be read
+/// as FTS5 syntax.
+#[tokio::test]
+async fn punctuation_in_a_search_never_errors() {
+    let app = App::new().await;
+    seed_notes(&app).await;
+
+    for query in [
+        "%22",
+        "*",
+        "(",
+        "AND",
+        "OR",
+        "NEAR",
+        "%5E",
+        "-",
+        "a%20OR%20b",
+        "%22unclosed",
+        "",
+    ] {
+        let res = app.get(&format!("/api/times?q={query}")).await;
+        assert_eq!(
+            res.status,
+            StatusCode::OK,
+            "q={query:?} failed: {:?}",
+            res.body
+        );
+    }
+
+    // A query with no terms in it matches nothing, rather than quietly
+    // becoming no filter and handing back the whole log.
+    assert_eq!(app.get("/api/times?q=").await.body["total"], 0);
+    assert_eq!(app.get("/api/times").await.body["total"], 3);
+}
+
 /// A window admits what overlaps it, not only what starts inside it.
 #[tokio::test]
 async fn a_window_admits_a_session_that_began_before_it() {

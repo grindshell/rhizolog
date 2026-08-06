@@ -13,7 +13,7 @@ Setup and versions live in [Tech stack](tech-stack.md).
 | `/pages/*slug` | One page, rendered, with both directions of its links and the time spent on it |
 | `/new`, `/edit/*slug` | The editor |
 | `/tags` | Every tag, linking into the filtered listing |
-| `/times` | The time log: running timers, entries, groups; narrowed by `?name=`, `?page=` |
+| `/times` | The time log: running timers, entries, groups; narrowed by `?q=`, `?name=`, `?page=` |
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
 
@@ -116,6 +116,24 @@ collapsed, and render that — a visible flash of stale text on every re-open. T
 effect owns the transition instead, so re-opening is one write and one render,
 with the right content and no debounce (nobody is typing; they clicked).
 
+## The log's search box is one more filter, not a mode
+
+`/times` searches with `?q=`, alongside `?name=` and `?page=` rather than
+instead of them — see [Time tracking](time-tracking.md) for why the backend
+shapes it that way. On this side that makes the screen simpler than `/pages`,
+which swaps between two endpoints depending on whether anything is typed: here
+there is one call and one list, and a search just narrows it.
+
+Two details are load-bearing and both are tested:
+
+**An empty box sends no `q` at all.** Not `q=`, which the API reads as a search
+for nothing and correctly answers with nothing. A cleared box means no filter.
+
+**Clearing the filter chip empties the box too.** The box is a signal of its
+own, debounced into the URL 250 ms later; a chip that only cleared the URL would
+have the search written straight back underneath it and would look broken. This
+is the kind of thing that reads as obviously fine in the source and is not.
+
 ## Only one place sets `innerHTML`
 
 `components/Markdown.tsx`, and only with HTML the **server** rendered. That is
@@ -162,7 +180,14 @@ What is covered is the part where the bugs were, not the part that is easy:
   produce no `script` or `img` element from a hostile page body, and to show the
   markup as text instead. `Markdown` is asserted to run server HTML, send
   in-wiki links through the router, and give everything else `target="_blank"`
-  and `rel="noopener noreferrer"` — including after its content is replaced.
+  and `rel="noopener noreferrer"` — including after its content is replaced. A
+  time entry's snippet goes through the same check, because a note is written
+  through the API exactly as a page body is.
+- **The log's search wiring**: that an empty box sends no `q`, that emptying a
+  full one drops the filter rather than searching for `""`, that a search
+  composes with `?page=`, and that clearing the chip leaves the box empty and
+  keeps it that way. The last one is the guard described above; it fails
+  without the one line that resets the draft.
 - **The derived-title fix**, both halves: the field is left empty when the title
   is derived, and an empty field saves as `null` rather than `""`.
 - **Slug encoding**, round-tripped over every shape the backend allows.

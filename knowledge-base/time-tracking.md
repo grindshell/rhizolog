@@ -154,6 +154,44 @@ because these edges drive the numbers: if merely mentioning a page in a note
 added its hours to that page's total, every total would be an accident of
 prose.
 
+## Searching the log is a filter, not a second search endpoint
+
+`times_fts` indexes each entry's **name and note**, and it is reached through
+`GET /api/times?q=`, not through `GET /api/search`.
+
+Two separate decisions there, and the first is the interesting one.
+
+**Why not fold it into `/api/search`.** A page hit and a time hit are not the
+same shape — one has a slug, tags and a title, the other has a duration, a group
+and possibly no text at all — so one result set carrying both would have to
+either flatten them into something neither of them is, or become a union type
+that every caller has to switch on. The two searches also answer different
+questions. "Where did I write about pinning" and "when was I working on
+pinning" are not the same question, and a wiki that ran them together would be
+guessing which one you meant.
+
+**Why not `/api/times/search`.** Because the useful questions are
+intersections: what did I write about the poll loop, last week, under `Deep
+work`, against `notes/rust/async`. The listing already carries all four of those
+filters. A separate endpoint would either duplicate them or be unable to ask.
+It also spares `/api/times/{id}` a sibling that looks like an id and is not.
+
+Two consequences worth knowing:
+
+**The name is indexed, not just the note.** Most entries carry no note — the
+log is mostly timers you started and stopped — so a search that only looked at
+notes would find nothing in a real log. This is not redundant with `name=`,
+which is the exact group filter; `q=deep` is fuzzy and finds `Deep work`,
+`name=Deep work` is the group, and they intersect.
+
+**It does not reorder the log.** Unlike `/api/search`, there is no relevance
+ranking. An entry's note is a sentence or two, so bm25 between two of them is
+mostly noise, and the question a log is asked is *when* — a search that sorted
+chronology away would be answering a different one. What the search does add is
+a `snippet` per entry, and only when the **note** is what matched: if the name
+matched, the name is already on screen and an excerpt of the note would explain
+nothing.
+
 ## Statistics are computed in Rust, not in SQL
 
 `GET /api/time-stats` answers day, week, month and year in one call, plus a
@@ -202,7 +240,7 @@ Sunday.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/times` | Newest first; `name`, `page`, `running`, `from`, `to`, `sort`, `order` |
+| `GET` | `/api/times` | Newest first; `q`, `name`, `page`, `running`, `from`, `to`, `sort`, `order` |
 | `POST` | `/api/times` | Starts a timer, or logs a finished entry |
 | `GET` | `/api/times/{id}` | The entry and its note; `?render=true` for HTML |
 | `PATCH` | `/api/times/{id}` | `end: null` clears the end and sets it running |
@@ -257,9 +295,6 @@ second tab, an agent, or a hand-edited file can all change it.
 
 ## Deliberately out of scope
 
-- **Full-text search over notes.** They are not in `pages_fts`, so
-  `GET /api/search` does not find them. Notes are usually a sentence, and a
-  second FTS table earns its place only once they are not.
 - **Rounding, rates, billing, invoices.** This is a developer's tool for
   knowing where the hours went, not a timesheet.
 - **Idle detection and reminders.** They need something watching the desktop,
@@ -267,3 +302,12 @@ second tab, an agent, or a hand-edited file can all change it.
 - **A browsable URL per entry.** An id is a machine's handle; unlike a slug it
   is not something anyone would link to, so entries are read and edited in the
   log itself.
+
+## A worked example
+
+`example-wiki/.rhizolog/times/` is a committed log — eighteen entries over five
+groups, including two timers that overlap, a session that runs past midnight,
+and time tracked against a page nobody has written. What the dashboard should
+say about it is written down in
+[the example wiki's index](../example-wiki/index.md), which is also where the
+fixed dates are explained.

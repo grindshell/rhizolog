@@ -1,4 +1,4 @@
-import { For, Show, createResource, createSignal } from 'solid-js'
+import { For, Show, createEffect, createResource, createSignal, onCleanup } from 'solid-js'
 import { A, useSearchParams } from '@solidjs/router'
 import {
   ApiError,
@@ -15,10 +15,14 @@ import type { TimeGroupView, TimeSummary } from '../api/client'
 import { timers } from '../api/timers'
 import { Async, ErrorNotice } from '../components/Async'
 import Duration, { formatDuration } from '../components/Duration'
+import Snippet from '../components/Snippet'
 import { formatDate } from './PageDetail'
 
 /** How many entries one page of the log holds. */
 const PAGE_SIZE = 50
+
+/** How long typing settles before the search reaches the URL and the API. */
+const SEARCH_DELAY_MS = 250
 
 /**
  * The time log.
@@ -35,8 +39,22 @@ export default function Times() {
   const [failure, setFailure] = createSignal<unknown>()
   const [editing, setEditing] = createSignal<string>()
   const [reloads, setReloads] = createSignal(0)
+  const [draft, setDraft] = createSignal(first(searchParams.q) ?? '')
+
+  // Typing lands in the URL, so a search is a link and survives a refresh, and
+  // it composes with the group and page filters already there. `replace` keeps
+  // the back button from having to walk out through every keystroke.
+  createEffect(() => {
+    const typed = draft().trim()
+    const timer = setTimeout(
+      () => setSearchParams({ q: typed || undefined }, { replace: true }),
+      SEARCH_DELAY_MS,
+    )
+    onCleanup(() => clearTimeout(timer))
+  })
 
   const query = () => ({
+    q: first(searchParams.q) ?? '',
     name: first(searchParams.name) ?? '',
     page: first(searchParams.page) ?? '',
     // Read so that a change to it re-runs the listing. Any write through the
@@ -45,8 +63,12 @@ export default function Times() {
     reloads: reloads(),
   })
 
-  const [entries] = createResource(query, ({ name, page }) =>
+  const [entries] = createResource(query, ({ q, name, page }) =>
     listTimes({
+      // Dropped when empty rather than sent as `q=`, which the API reads as a
+      // search for nothing and answers with nothing. A cleared box means no
+      // filter, not no results.
+      q: q || undefined,
       name: name || undefined,
       page: page || undefined,
       limit: PAGE_SIZE,
@@ -79,14 +101,33 @@ export default function Times() {
 
   const filters = () =>
     [
+      { key: 'q' as const, label: 'matching', value: first(searchParams.q) },
       { key: 'name' as const, label: 'group', value: first(searchParams.name) },
       { key: 'page' as const, label: 'page', value: first(searchParams.page) },
     ].filter((filter) => Boolean(filter.value))
+
+  /**
+   * Clearing the search chip has to empty the box as well as the URL — the
+   * effect above would otherwise put the search straight back a quarter of a
+   * second later, and the chip would look broken.
+   */
+  const clearFilter = (key: 'q' | 'name' | 'page') => {
+    if (key === 'q') setDraft('')
+    setSearchParams({ [key]: undefined })
+  }
 
   return (
     <div class="flex flex-col gap-6">
       <header class="flex flex-wrap items-center justify-between gap-3">
         <h1 class="text-2xl font-semibold">Time</h1>
+        <input
+          class="input input-bordered input-sm min-w-64 grow sm:max-w-lg"
+          type="search"
+          placeholder="Search notes and activity names — trailing * matches by prefix"
+          aria-label="Search the time log"
+          value={draft()}
+          onInput={(event) => setDraft(event.currentTarget.value)}
+        />
       </header>
 
       <StartForm
@@ -113,7 +154,7 @@ export default function Times() {
                 <button
                   class="opacity-60"
                   aria-label={`Clear the ${filter.label} filter`}
-                  onClick={() => setSearchParams({ [filter.key]: undefined })}
+                  onClick={() => clearFilter(filter.key)}
                 >
                   ✕
                 </button>
@@ -148,8 +189,13 @@ export default function Times() {
                     each={data.times}
                     fallback={
                       <li class="py-4 text-sm opacity-60">
-                        Nothing tracked yet. Start a timer above, or log time you
-                        already spent.
+                        <Show
+                          when={filters().length === 0}
+                          fallback="Nothing in the log matches. Clear a filter above to widen it."
+                        >
+                          Nothing tracked yet. Start a timer above, or log time you
+                          already spent.
+                        </Show>
                       </li>
                     }
                   >
@@ -439,6 +485,18 @@ function Entry(props: {
           {formatDate(props.entry.start)}
           <Show when={props.entry.end}>{(end) => <> → {formatDate(end())}</>}</Show>
         </div>
+        {/*
+          Only present when a search matched the note, and rendered as text
+          rather than markup — a note is written through the API like a page
+          body, so the same rule applies. See `Snippet`.
+        */}
+        <Show when={props.entry.snippet}>
+          {(snippet) => (
+            <p class="pt-1 text-sm opacity-80">
+              <Snippet text={snippet()} />
+            </p>
+          )}
+        </Show>
         <div class="flex flex-wrap gap-1 pt-1">
           <For each={props.entry.pages}>
             {(page) => (

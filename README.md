@@ -55,8 +55,10 @@ unpacked at build time.
 `example-wiki/` is nine pages arranged to show the features off — nested slugs,
 wikilinks, a page that is linked but not written, two orphans, and the same
 directory name in two places, which is what makes the two path filters differ.
-Read [its index](example-wiki/index.md) first; it explains what the dashboard
-will say about it and why.
+It also carries a week of tracked time: eighteen entries, two overlapping
+timers, a session that runs past midnight, and hours logged against the page
+nobody has written. Read [its index](example-wiki/index.md) first; it explains
+what the dashboard will say about it and why — including why Today is empty.
 
 To use your own notes instead, point `RHIZOLOG_ROOT` at any directory of
 markdown files. Nothing needs importing.
@@ -135,6 +137,12 @@ of the week. A session that ran past midnight is split across both days and
 lights every hour it touched, rather than being filed under the hour it started
 in.
 
+Names and notes are searchable with `GET /api/times?q=`, or the box on the Time
+screen. It is a filter rather than a mode: it narrows the log alongside the
+group, page and date filters instead of replacing them, and it leaves the log in
+order — so "what did I write about the poll loop last week" is one request.
+Entries are deliberately absent from `/api/search`, which is about pages.
+
 Time attached to a page shows on that page as one line with a total on it, not
 as backlinks. That is deliberate: a page you actually work on collects an entry
 every time you start a timer, and folding hundreds of them into the link graph
@@ -170,14 +178,14 @@ inside it.
 |---|---|
 | `backend/` | The Rust server (crate `rhizolog`) |
 | `frontend/` | The dashboard: Vite, SolidJS, Tailwind, daisyUI |
-| `example-wiki/` | A small wiki to run against |
+| `example-wiki/` | A small wiki, and a week of time, to run against |
 | `knowledge-base/` | Why the thing is built the way it is |
 
 Backend, from `backend/`:
 
 ```
 cargo run        # start the server
-cargo test       # 314 tests
+cargo test       # 336 tests
 cargo fmt
 cargo clippy
 ```
@@ -187,7 +195,7 @@ Frontend, from `frontend/`:
 ```
 pnpm dev         # dev server with HMR, proxying /api to the backend
 pnpm build       # production build, which the backend serves
-pnpm test        # 92 tests
+pnpm test        # 99 tests
 pnpm typecheck
 ```
 
@@ -243,8 +251,8 @@ was taken to mean concretely.
 
 The MVP is complete: pages, search, tags, the link graph, meta-stats, live
 pickup of outside edits, and a dashboard you can write in. Time tracking is in
-too: timers, manual entries, notes, groups, and the statistics section.
+too: timers, manual entries, notes, groups, search over the log, and the
+statistics section.
 
 Not implemented, on purpose: page history and diffs, authentication, anything
-multi-user, link rewriting on move, file attachments, transclusion, and
-full-text search over time notes.
+multi-user, link rewriting on move, file attachments, and transclusion.

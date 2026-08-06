@@ -13,6 +13,18 @@
 //! `PATCH` would mean every client reading the clock and sending a timestamp,
 //! and a client whose clock is wrong writing it down.
 //!
+//! ## Searching the log is `?q=`, not `/api/times/search`
+//!
+//! Pages get a listing and a search as two endpoints, because a search hit is
+//! not a page record — it carries a snippet and a relevance score, and it comes
+//! back in a different order. A time search is not like that. It is one more
+//! way to narrow the log, and the useful questions are intersections: what did
+//! I write about the poll loop, last week, under `Deep work`. Splitting it off
+//! would mean either duplicating five filters on the second endpoint or being
+//! unable to ask.
+//!
+//! It also spares `/api/times/{id}` a sibling that looks like an id and is not.
+//!
 //! ## Ids are not slugs, so these routes are not wildcards
 //!
 //! The page routes capture `{*slug}` because a slug contains `/`. A
@@ -103,6 +115,16 @@ pub struct TimeSummary {
     pub pages: Vec<TimePageView>,
     /// Whether the entry carries a note. Fetch the entry itself to read it.
     pub has_note: bool,
+    /// An excerpt of the note with the matched terms wrapped in `<mark>`,
+    /// present only when a `q=` search is what turned this entry up and the
+    /// note is what matched it. Absent when the name matched instead — that is
+    /// already in `name`.
+    ///
+    /// Only the marks are markup: the text around them is the note verbatim and
+    /// is **not** escaped, exactly as in a search hit over pages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "Chased down a lifetime error in the <mark>poll</mark> loop")]
+    pub snippet: Option<String>,
     /// The file's modification time.
     pub updated: DateTime<Utc>,
     /// Size of the entry's file on disk, in bytes.
@@ -346,7 +368,17 @@ pub struct PatchTime {
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct TimeListQuery {
-    /// Only entries in this group, matched exactly.
+    /// Search the entries' names and notes. Terms are matched literally and
+    /// combined with AND, a trailing `*` searches by prefix, and punctuation is
+    /// safe to include — the same rules `/api/search` follows.
+    ///
+    /// It is a filter, so it intersects with everything else here rather than
+    /// replacing it, and it does not reorder the log. Matching entries carry a
+    /// `snippet`.
+    #[param(example = "poll loop")]
+    pub q: Option<String>,
+    /// Only entries in this group, matched **exactly**. `q` is the fuzzy one;
+    /// this is the group, spelled as written.
     #[param(example = "Deep work")]
     pub name: Option<String>,
     /// Only entries attached to this page.
@@ -425,6 +457,7 @@ pub async fn list_times(
         .index
         .list_times(
             TimeListOptions {
+                query: query.q,
                 name: query.name,
                 page: query.page,
                 running: query.running,
@@ -734,6 +767,7 @@ fn summary(record: TimeRecord, now: DateTime<Utc>) -> TimeSummary {
         start: record.start,
         end: record.end,
         has_note: record.has_note,
+        snippet: record.snippet,
         updated: record.updated,
         size: record.size,
     }
