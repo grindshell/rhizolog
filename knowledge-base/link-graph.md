@@ -161,6 +161,35 @@ twice it.
 `preserveAspectRatio`. Otherwise the mapping from a pointer position to a graph
 coordinate is not linear, and zoom-toward-the-cursor drifts.
 
+## Capturing the pointer to pan breaks every click, invisibly
+
+The obvious way to implement panning is to capture the pointer on `pointerdown`
+and move the viewport from there. It silently disables every click on the graph.
+
+A captured pointer retargets the compatibility mouse events that follow —
+`click` and `dblclick` — to the **capture element**. So a click on a node is
+delivered to the canvas instead: the node's handler never runs, and the canvas,
+seeing a click that arrived at itself, reads it as a click on empty space and
+clears the selection. Nothing at all appears to happen, which is exactly how it
+was reported.
+
+**jsdom does not implement that retargeting**, so the component tested green and
+did nothing in a browser. Nor could a test be written for it here; the behaviour
+belongs to real input, and a synthetic `MouseEvent` never had a captured pointer
+to be retargeted from.
+
+The fix is to capture *lazily*: a press does not become a pan until the pointer
+has travelled a few pixels, and by the time capture is set the gesture is
+definitely a drag and there is no click left to break. That is better behaviour
+anyway — a press that never moved is a click, not a pan of zero pixels — and
+what the tests assert is the rule rather than the symptom: no capture on a still
+press, capture once the pointer travels. The click that ends a real pan is
+swallowed, because the pointer stopped over whatever happened to be under it.
+
+The other half of the same lesson is the legend: it floats over the canvas, so
+it carries `pointer-events-none`. A key in the corner of the frame must not be a
+region where nodes quietly stop being clickable.
+
 ## Deliberately not in the first version
 
 - **Dragging a node.** It would mean keeping the simulation alive after the

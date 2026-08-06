@@ -148,6 +148,98 @@ describe('picking a node', () => {
   })
 })
 
+/**
+ * These are here because of a bug that every test above was blind to.
+ *
+ * Capturing the pointer on `pointerdown` retargets the `click` that follows it
+ * to the capture element, so a click on a node arrives at the canvas instead:
+ * nothing selects, and the canvas clears the selection it never got. jsdom does
+ * not implement that retargeting, so the component tested green and did nothing
+ * at all in a browser.
+ *
+ * jsdom still cannot show the retargeting, so what is asserted instead is the
+ * rule that prevents it — capture happens only once a gesture is definitely a
+ * pan, and by then there is no click left to break.
+ */
+describe('panning does not eat clicks', () => {
+  /** jsdom implements neither method; a stub is enough to watch for the call. */
+  function watchCapture(svg: SVGSVGElement) {
+    const captured = vi.fn()
+    Object.assign(svg, {
+      setPointerCapture: captured,
+      releasePointerCapture: vi.fn(),
+    })
+    return captured
+  }
+
+  const at = (clientX: number, clientY: number) => ({
+    pointerId: 1,
+    button: 0,
+    clientX,
+    clientY,
+  })
+
+  it('does not capture the pointer for a press that goes nowhere', () => {
+    const { container } = draw()
+    const svg = container.querySelector('svg')!
+    const captured = watchCapture(svg)
+
+    fireEvent.pointerDown(svg, at(100, 100))
+    // Under the threshold: a hand resting on a mouse, not a drag.
+    fireEvent.pointerMove(svg, at(101, 102))
+    fireEvent.pointerUp(svg, at(101, 102))
+
+    expect(captured).not.toHaveBeenCalled()
+  })
+
+  it('captures once the pointer has actually travelled', () => {
+    const { container } = draw()
+    const svg = container.querySelector('svg')!
+    const captured = watchCapture(svg)
+
+    fireEvent.pointerDown(svg, at(100, 100))
+    fireEvent.pointerMove(svg, at(160, 140))
+
+    expect(captured).toHaveBeenCalledWith(1)
+  })
+
+  /** A press that never moved is a click on the node under it. */
+  it('still selects a node when the press wobbles', () => {
+    const { container, onSelect } = draw()
+    const svg = container.querySelector('svg')!
+    watchCapture(svg)
+    const node = container.querySelector('g > g')!
+
+    fireEvent.pointerDown(svg, at(100, 100))
+    fireEvent.pointerMove(svg, at(101, 100))
+    fireEvent.pointerUp(svg, at(101, 100))
+    fireEvent.click(node)
+
+    expect(onSelect).toHaveBeenCalledWith('index')
+  })
+
+  /**
+   * A pan ends in a click, over whatever the pointer happened to stop on. It
+   * must not clear the selection the reader is holding.
+   */
+  it('swallows the click that ends a pan', () => {
+    const { container, onSelect } = draw({}, { selected: 'index' })
+    const svg = container.querySelector('svg')!
+    watchCapture(svg)
+
+    fireEvent.pointerDown(svg, at(100, 100))
+    fireEvent.pointerMove(svg, at(200, 180))
+    fireEvent.pointerUp(svg, at(200, 180))
+    fireEvent.click(svg)
+
+    expect(onSelect).not.toHaveBeenCalled()
+
+    // ...and only that one click. The next is a real one again.
+    fireEvent.click(svg)
+    expect(onSelect).toHaveBeenCalledWith(undefined)
+  })
+})
+
 describe('labels', () => {
   it('labels everything while the graph is small', () => {
     const { container } = draw()

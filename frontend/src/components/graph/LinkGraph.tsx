@@ -44,6 +44,9 @@ const ARROW_CLEARANCE = 7
 const MIN_ZOOM_SPAN = EXTENT / 40
 const MAX_ZOOM_SPAN = EXTENT * 4
 
+/** How far a pointer must travel, in pixels, before a press becomes a pan. */
+const DRAG_THRESHOLD = 4
+
 interface Drawn {
   slug: string
   title: string
@@ -232,26 +235,60 @@ export default function LinkGraph(props: {
     )
   }
 
-  let dragging: { x: number; y: number } | undefined
+  /**
+   * Panning, which may not begin until the pointer has actually gone somewhere.
+   *
+   * The obvious version — capture the pointer on `pointerdown` and pan from
+   * there — silently breaks every click on the graph, and does it in a way no
+   * test here can see. A captured pointer retargets the `click` and `dblclick`
+   * that follow it to the **capture element**, so they arrive at the canvas
+   * instead of the node that was pressed: the node's handler never runs, and
+   * the canvas reads the click as one on empty space and clears the selection.
+   * jsdom does not implement that retargeting, so it passes under the tests and
+   * fails in every browser.
+   *
+   * Waiting for real movement fixes it and is the better behaviour anyway — a
+   * press that never moved is a click, not a pan of zero pixels.
+   */
+  let press: { clientX: number; clientY: number } | undefined
+  let panning = false
+  /** Set by a pan, and consumed by the click that inevitably follows it. */
+  let panned = false
 
   const onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return
-    dragging = toGraph(event.clientX, event.clientY)
-    canvas?.setPointerCapture?.(event.pointerId)
+    press = { clientX: event.clientX, clientY: event.clientY }
+    panned = false
   }
 
   const onPointerMove = (event: PointerEvent) => {
-    if (!dragging) return
-    const now = toGraph(event.clientX, event.clientY)
+    if (!press) return
+
+    if (!panning) {
+      const travelled = Math.hypot(event.clientX - press.clientX, event.clientY - press.clientY)
+      if (travelled < DRAG_THRESHOLD) return
+      panning = true
+      panned = true
+      // Safe now: the gesture is a pan, so there is no click left to break, and
+      // capture is what keeps it working when the pointer leaves the canvas.
+      canvas?.setPointerCapture?.(event.pointerId)
+    }
+
+    // Both ends converted against the same viewport, so the delta is exact even
+    // though panning moves the viewport out from under it.
+    const from = toGraph(press.clientX, press.clientY)
+    const to = toGraph(event.clientX, event.clientY)
     setPan((current) => ({
-      x: current.x + (dragging!.x - now.x),
-      y: current.y + (dragging!.y - now.y),
+      x: current.x + (from.x - to.x),
+      y: current.y + (from.y - to.y),
     }))
+    press = { clientX: event.clientX, clientY: event.clientY }
   }
 
   const endDrag = (event: PointerEvent) => {
-    dragging = undefined
-    canvas?.releasePointerCapture?.(event.pointerId)
+    if (panning) canvas?.releasePointerCapture?.(event.pointerId)
+    press = undefined
+    panning = false
   }
 
   const reset = () => {
@@ -279,6 +316,12 @@ export default function LinkGraph(props: {
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onClick={(event) => {
+          // A pan ends in a click, and it is not one: the pointer stopped over
+          // whatever happened to be under it when the drag finished.
+          if (panned) {
+            panned = false
+            return
+          }
           // A click that reached the canvas rather than a node is a click on
           // nothing, and clears the selection.
           if (event.target === canvas) props.onSelect(undefined)
@@ -439,7 +482,12 @@ export default function LinkGraph(props: {
         </button>
       </div>
 
-      <div class="absolute bottom-3 left-3 flex flex-wrap items-center gap-3 rounded-box bg-base-100/80 px-3 py-2 text-xs">
+      {/*
+        `pointer-events-none`: it floats over the canvas, and a key at the
+        bottom-left of the frame must not be a place where nodes stop being
+        clickable. The zoom buttons above it are controls and keep theirs.
+      */}
+      <div class="pointer-events-none absolute bottom-3 left-3 flex flex-wrap items-center gap-3 rounded-box bg-base-100/80 px-3 py-2 text-xs">
         <span class="flex items-center gap-1.5">
           <span class="inline-block size-3 rounded-full bg-primary" />
           page
