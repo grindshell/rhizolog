@@ -136,3 +136,13 @@ $data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/ap
   `git commit -F <file>`, which carries quotes and em-dashes through intact.
 - Stop the server before `cargo build`: a running `rhizolog.exe` is locked,
   and the build fails with "Access is denied" rather than anything informative.
+- **Moving or renaming the repository breaks Swagger UI until you
+  `cargo clean -p utoipa-swagger-ui`.** That crate's build script writes the
+  *absolute* path of its downloaded asset directory into a generated
+  `embed.rs`, and cargo caches the result — so after a move it points at a
+  directory that no longer exists. Nothing fails loudly: the crate compiles,
+  the route is registered, and `/swagger-ui` still redirects to
+  `/swagger-ui/`, which then 404s with every asset behind it gone. Renaming
+  this project from `rhizowiki` to `rhizolog` did exactly that and it went
+  unnoticed for several commits. `swagger_ui_serves_its_own_assets` in
+  `backend/tests/frontend.rs` now fails when it happens.

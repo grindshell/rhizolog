@@ -181,6 +181,63 @@ async fn the_openapi_document_survives_the_spa_fallback() {
     assert_eq!(spec["info"]["title"], "Rhizolog");
 }
 
+/// Swagger UI must actually serve its own assets.
+///
+/// `utoipa-swagger-ui` embeds them at compile time from an **absolute** path
+/// that its build script bakes into the crate. Move or rename the repository
+/// and cargo keeps the cached build output — which now points at a directory
+/// that does not exist. Nothing fails: the crate still compiles, the route is
+/// still registered, `/swagger-ui` still redirects. Every asset behind it is
+/// simply gone, and the page 404s.
+///
+/// That is not hypothetical. Renaming this project from `rhizowiki` to
+/// `rhizolog` did exactly that, and it went unnoticed for several commits
+/// because no test opened the page. `cargo clean -p utoipa-swagger-ui` is the
+/// fix; this is what says it is needed.
+#[tokio::test]
+async fn swagger_ui_serves_its_own_assets() {
+    let (_wiki, _assets, router) = app_with_assets().await;
+
+    let (status, body, content_type) = get(&router, "/swagger-ui/").await;
+
+    assert_eq!(status, StatusCode::OK, "swagger-ui served nothing");
+    assert!(
+        content_type
+            .as_deref()
+            .is_some_and(|ct| ct.contains("html")),
+        "the shell was served as {content_type:?}"
+    );
+    assert!(
+        body.contains("swagger-ui"),
+        "not the Swagger UI shell: {body}"
+    );
+
+    // The shell is useless on its own, and the bundle is the asset that
+    // actually goes missing — a stale embed serves neither.
+    let (status, bundle, _) = get(&router, "/swagger-ui/swagger-ui-bundle.js").await;
+
+    assert_eq!(status, StatusCode::OK, "the Swagger UI bundle is missing");
+    assert!(
+        bundle.len() > 100_000,
+        "the bundle is suspiciously small at {} bytes",
+        bundle.len()
+    );
+}
+
+/// The dashboard's navbar links to `/swagger-ui` with no trailing slash, so
+/// that spelling has to lead somewhere.
+#[tokio::test]
+async fn the_swagger_ui_link_in_the_navbar_resolves() {
+    let (_wiki, _assets, router) = app_with_assets().await;
+
+    let (status, _, _) = get(&router, "/swagger-ui").await;
+
+    assert!(
+        status.is_redirection(),
+        "expected a redirect to the trailing-slash form, got {status}"
+    );
+}
+
 /// With no build present the API must still work, and the browser routes should
 /// say what to do rather than just failing.
 #[tokio::test]
