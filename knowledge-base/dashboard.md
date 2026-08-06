@@ -16,6 +16,11 @@ Setup and versions live in [Tech stack](tech-stack.md).
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
 
+The app shell also carries a **Pins** dropdown — the one part of the chrome that
+is not navigation. It and the Pin toggle on a page share one store rather than
+holding a resource each, so pinning from either is visible in both immediately.
+The design is in [Pins](pins.md).
+
 ## Every part of a slug is a place you can go
 
 A slug is never printed as flat text where it could be printed as links. Both
@@ -71,6 +76,37 @@ Renaming is a `POST /api/move`, which operates on the file rather than on what i
 in the textarea — hence the interlock. Inbound links are not rewritten, so a
 rename turns them into wanted pages, visible immediately on the dashboard.
 
+## The editor divides its space three ways
+
+Editor / Split / Preview, chosen from a segmented control in the editor's
+header. Three states rather than one collapse toggle because "give the editor
+the room" and "give the preview the room" are both things you want, and a single
+button that cycled between them would make you guess which way it goes.
+
+The choice is remembered in `localStorage`, since it is a working preference
+rather than a property of the page: somebody who collapsed the preview to write
+does not want it back on the next page they open. It is the one piece of state
+in the dashboard that lives in the browser — contrast [Pins](pins.md), which are
+about the wiki and therefore live on the server.
+
+Two things about it are less obvious than they look, and both are covered by
+tests:
+
+**A collapsed preview issues no `POST /api/render` at all.** Not one per pause
+in typing, and not the one at mount either. The debounce effect returns before
+reading `content`, so it depends only on the layout; and the draft signal is
+`null` while the pane is hidden, which is what makes Solid skip the fetcher. A
+pane nobody is looking at is not free here — this wiki counts its own API usage
+and puts the numbers on its own dashboard.
+
+**The resource's source is the draft signal alone**, not
+`showPreview() && previewOf()`. Solid settles pure computations before user
+effects, so a source that read the layout directly would see it flip to visible
+while the draft signal still held the content from *before* the pane was
+collapsed, and render that — a visible flash of stale text on every re-open. The
+effect owns the transition instead, so re-opening is one write and one render,
+with the right content and no debounce (nobody is typing; they clicked).
+
 ## Only one place sets `innerHTML`
 
 `components/Markdown.tsx`, and only with HTML the **server** rendered. That is
@@ -121,6 +157,12 @@ What is covered is the part where the bugs were, not the part that is easy:
 - **The derived-title fix**, both halves: the field is left empty when the title
   is derived, and an empty field saves as `null` rather than `""`.
 - **Slug encoding**, round-tripped over every shape the backend allows.
+- **The editor's layout modes**, including the two behaviours above — that a
+  collapsed preview stops rendering, and that re-opening renders what is in the
+  textarea *now*. The second test is what found the stale-draft flash.
+- **The pin store's writes**, which update the list locally rather than
+  refetching: that a new pin appends, that re-pinning keeps its position, and
+  that a refused pin reaches the caller instead of silently doing nothing.
 - **The error envelope**, including the transport cases and the one case that
   must *not* become an `ApiError`: an abort, which is a caller who stopped
   caring rather than a failure.

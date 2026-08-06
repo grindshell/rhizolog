@@ -9,6 +9,7 @@ pub mod extract;
 pub mod graph;
 pub mod meta;
 pub mod pages;
+pub mod pins;
 pub mod search;
 pub mod usage;
 
@@ -66,6 +67,7 @@ pub struct AppState {
         (name = "pages", description = "Reading and writing wiki pages"),
         (name = "search", description = "Full-text search and index maintenance"),
         (name = "graph", description = "Links between pages, tags, and meta-stats"),
+        (name = "pins", description = "Pages kept within reach"),
         (name = "meta", description = "Server and index status"),
     ),
 )]
@@ -89,6 +91,8 @@ pub fn router(state: AppState) -> Router {
         .routes(routes!(graph::links))
         .routes(routes!(graph::tags))
         .routes(routes!(graph::stats))
+        .routes(routes!(pins::list_pins))
+        .routes(routes!(pins::pin_page, pins::unpin_page))
         .split_for_parts();
 
     normalize_wildcard_paths(&mut api);

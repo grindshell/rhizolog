@@ -71,6 +71,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // The layout is remembered across mounts, so a case that changed it would
+  // otherwise decide what the next case starts with.
+  window.localStorage.clear()
 })
 
 describe('loading a page', () => {
@@ -183,5 +186,91 @@ describe('saving', () => {
     openEditor('/new')
 
     expect(api.getPage).not.toHaveBeenCalled()
+  })
+})
+
+describe('the layout', () => {
+  /** Which panes are on screen. The preview is the only `prose` block here. */
+  function panes(container: HTMLElement) {
+    return {
+      editor: container.querySelector('textarea') !== null,
+      preview: container.querySelector('.prose') !== null,
+    }
+  }
+
+  /** The layout buttons, by the titles that say what each one does. */
+  const CONTROLS = {
+    editor: 'Collapse the preview',
+    split: 'Show the editor and the preview',
+    preview: 'Maximise the preview',
+  }
+
+  it('shows both panes by default', () => {
+    const { container } = openEditor('/new')
+
+    expect(panes(container)).toEqual({ editor: true, preview: true })
+  })
+
+  /**
+   * Collapsing is not just hiding. The preview costs a `POST /api/render` on
+   * every pause in typing, and this wiki counts its own API usage — so a pane
+   * nobody is looking at must stop asking for renders entirely, including the
+   * one that would otherwise fire at mount.
+   */
+  it('collapsing the preview leaves the editor and stops rendering', async () => {
+    const { container, getByTitle } = openEditor('/new')
+    await waitFor(() => expect(api.renderMarkdown).toHaveBeenCalled())
+    vi.clearAllMocks()
+
+    getByTitle(CONTROLS.editor).click()
+
+    expect(panes(container)).toEqual({ editor: true, preview: false })
+    type(fields(container).body, '# Something new\n')
+    // Past the 300 ms debounce, with room to spare.
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(api.renderMarkdown).not.toHaveBeenCalled()
+  })
+
+  it('maximising the preview hides the form', () => {
+    const { container, getByTitle } = openEditor('/new')
+
+    getByTitle(CONTROLS.preview).click()
+
+    expect(panes(container)).toEqual({ editor: false, preview: true })
+  })
+
+  it('renders again when the preview comes back', async () => {
+    const { container, getByTitle } = openEditor('/new')
+    getByTitle(CONTROLS.editor).click()
+    type(fields(container).body, '# Written while collapsed\n')
+    vi.clearAllMocks()
+
+    getByTitle(CONTROLS.split).click()
+
+    await waitFor(() => expect(api.renderMarkdown).toHaveBeenCalled())
+    const [draft] = api.renderMarkdown.mock.calls[0] as [{ content: string }]
+    expect(draft.content).toBe('# Written while collapsed\n')
+  })
+
+  /**
+   * A working preference, not a property of the page: somebody who collapsed
+   * the preview to write does not want it back on the next page they open.
+   */
+  it('remembers the choice across mounts', () => {
+    const first = openEditor('/new')
+    first.getByTitle(CONTROLS.preview).click()
+    cleanup()
+
+    const { container } = openEditor('/new')
+
+    expect(panes(container)).toEqual({ editor: false, preview: true })
+  })
+
+  it('falls back to the split view when the stored layout is nonsense', () => {
+    window.localStorage.setItem('rhizolog:editor-layout', 'sideways')
+
+    const { container } = openEditor('/new')
+
+    expect(panes(container)).toEqual({ editor: true, preview: true })
   })
 })

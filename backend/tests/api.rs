@@ -253,6 +253,35 @@ async fn every_api_route_is_documented() {
     }
 }
 
+/// Operation ids are global to the document, but utoipa takes each one from its
+/// handler's function name — which is only unique within a Rust module. Two
+/// modules that both call a handler `list` publish two operations with one id,
+/// and a client generated from that document silently keeps one of them.
+///
+/// This is the check that catches it, because nothing else does: the spec still
+/// validates, both routes still work, and only the generated client is wrong.
+#[tokio::test]
+async fn operation_ids_are_unique_across_the_document() {
+    let app = App::new().await;
+
+    let spec = app.get("/api-docs/openapi.json").await.body;
+    let paths = spec["paths"].as_object().expect("spec has paths");
+
+    let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (path, operations) in paths {
+        for (method, operation) in operations.as_object().expect("operations") {
+            let id = operation["operationId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{method} {path} has no operationId"))
+                .to_owned();
+            let here = format!("{} {path}", method.to_uppercase());
+            if let Some(previous) = seen.insert(id.clone(), here.clone()) {
+                panic!("operationId {id:?} is used by both {previous} and {here}");
+            }
+        }
+    }
+}
+
 /// Doc comments are written for people reading the source. Some of them talk
 /// about Rust types and link to other items, and a rustdoc link on the wire is a
 /// dead reference — the reader has no crate to resolve it against. Where that
@@ -1227,4 +1256,200 @@ async fn reindexing_rebuilds_from_disk() {
     assert_eq!(res.body["failed"], 0);
     // Still searchable afterwards.
     assert_eq!(app.get("/api/search?q=rhizomes").await.body["total"], 2);
+}
+
+// ------------------------------------------------------------------ pins
+
+impl App {
+    async fn pin(&self, slug: &str) -> Res {
+        self.send(Method::PUT, &format!("/api/pins/{slug}"), None)
+            .await
+    }
+
+    async fn unpin(&self, slug: &str) -> Res {
+        self.delete(&format!("/api/pins/{slug}")).await
+    }
+
+    async fn pinned_slugs(&self) -> Vec<String> {
+        self.get("/api/pins").await.body["pins"]
+            .as_array()
+            .expect("pins array")
+            .iter()
+            .map(|pin| pin["slug"].as_str().expect("slug").to_owned())
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn pins_a_page_and_lists_it_with_its_title() {
+    let app = App::new().await;
+    app.seed(
+        "notes/quick",
+        json!({ "title": "Quick Notes", "content": "Scratch.\n" }),
+    )
+    .await;
+
+    let res = app.pin("notes/quick").await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["slug"], "notes/quick");
+    assert_eq!(res.body["title"], "Quick Notes");
+    assert_eq!(res.body["exists"], true);
+
+    let listed = app.get("/api/pins").await;
+    assert_eq!(listed.body["pins"][0]["title"], "Quick Notes");
+    assert_eq!(listed.body["limit"], 50);
+}
+
+/// Slugs contain `/`, so the pin routes are wildcards like the page routes.
+/// A nested slug arriving as several path segments is the bug this catches.
+#[tokio::test]
+async fn pins_a_deeply_nested_slug() {
+    let app = App::new().await;
+    app.seed("notes/rust/async", json!({ "content": "Body.\n" }))
+        .await;
+
+    assert_eq!(app.pin("notes/rust/async").await.status, StatusCode::OK);
+    assert_eq!(app.pinned_slugs().await, ["notes/rust/async"]);
+}
+
+/// Idempotent in both senses: no second entry, and no new position. A client
+/// should not have to check whether something is pinned before pinning it.
+#[tokio::test]
+async fn pinning_twice_changes_nothing() {
+    let app = App::new().await;
+    app.seed("a", json!({ "content": "Body.\n" })).await;
+    app.seed("b", json!({ "content": "Body.\n" })).await;
+
+    app.pin("a").await;
+    app.pin("b").await;
+    let first = app.get("/api/pins").await.body["pins"][0]["pinned_at"].clone();
+    assert_eq!(app.pin("a").await.status, StatusCode::OK);
+
+    assert_eq!(app.pinned_slugs().await, ["a", "b"]);
+    assert_eq!(
+        app.get("/api/pins").await.body["pins"][0]["pinned_at"],
+        first
+    );
+}
+
+#[tokio::test]
+async fn pinning_a_page_that_does_not_exist_is_a_404() {
+    let app = App::new().await;
+
+    let res = app.pin("nothing/here").await;
+
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    assert_eq!(res.code(), "page_not_found");
+}
+
+#[tokio::test]
+async fn pinning_an_invalid_slug_is_refused_by_rule() {
+    let app = App::new().await;
+
+    let res = app.pin("notes/CON").await;
+
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.code(), "slug_reserved_name");
+}
+
+#[tokio::test]
+async fn unpinning_removes_the_pin_but_not_the_page() {
+    let app = App::new().await;
+    app.seed("notes/quick", json!({ "content": "Scratch.\n" }))
+        .await;
+    app.pin("notes/quick").await;
+
+    assert_eq!(
+        app.unpin("notes/quick").await.status,
+        StatusCode::NO_CONTENT
+    );
+
+    assert!(app.pinned_slugs().await.is_empty());
+    assert_eq!(
+        app.get("/api/pages/notes/quick").await.status,
+        StatusCode::OK,
+        "unpinning must not touch the page"
+    );
+}
+
+/// Not `page_not_found`: the page is right there, it is the pin that is
+/// missing, and a caller that cannot tell them apart would retry the wrong
+/// thing.
+#[tokio::test]
+async fn unpinning_something_that_was_not_pinned_is_a_404_of_its_own() {
+    let app = App::new().await;
+    app.seed("notes/quick", json!({ "content": "Scratch.\n" }))
+        .await;
+
+    let res = app.unpin("notes/quick").await;
+
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    assert_eq!(res.code(), "pin_not_found");
+    assert_eq!(res.body["error"]["details"]["slug"], "notes/quick");
+}
+
+/// A bookmark that stopped working because you renamed the thing it points at
+/// is a bug. Unlike inbound links, which belong to the pages that wrote them, a
+/// pin follows the page.
+#[tokio::test]
+async fn a_pin_follows_a_move() {
+    let app = App::new().await;
+    app.seed(
+        "notes/old",
+        json!({ "title": "Kept", "content": "Body.\n" }),
+    )
+    .await;
+    app.pin("notes/old").await;
+
+    app.post(
+        "/api/move",
+        json!({ "from": "notes/old", "to": "archive/new" }),
+    )
+    .await;
+
+    let pins = app.get("/api/pins").await;
+    assert_eq!(pins.body["pins"][0]["slug"], "archive/new");
+    assert_eq!(pins.body["pins"][0]["title"], "Kept");
+    assert_eq!(pins.body["pins"][0]["exists"], true);
+}
+
+/// Deleting a page through the API is a deliberate act on that page, so the
+/// shortcut to it goes too rather than lingering as a dead menu entry.
+#[tokio::test]
+async fn deleting_a_page_takes_its_pin_with_it() {
+    let app = App::new().await;
+    app.seed("notes/quick", json!({ "content": "Scratch.\n" }))
+        .await;
+    app.pin("notes/quick").await;
+
+    app.delete("/api/pages/notes/quick").await;
+
+    assert!(app.pinned_slugs().await.is_empty());
+}
+
+/// The menu is a shortcut, not a second listing.
+#[tokio::test]
+async fn the_pin_limit_is_enforced_and_names_itself() {
+    let app = App::new().await;
+    for n in 0..51 {
+        app.seed(&format!("page-{n:02}"), json!({ "content": "Body.\n" }))
+            .await;
+    }
+
+    for n in 0..50 {
+        assert_eq!(
+            app.pin(&format!("page-{n:02}")).await.status,
+            StatusCode::OK,
+            "pin {n} was refused early"
+        );
+    }
+
+    let refused = app.pin("page-50").await;
+    assert_eq!(refused.status, StatusCode::CONFLICT);
+    assert_eq!(refused.code(), "too_many_pins");
+    assert_eq!(refused.body["error"]["details"]["limit"], 50);
+
+    // Re-pinning at the limit adds nothing, so it must still be allowed.
+    assert_eq!(app.pin("page-00").await.status, StatusCode::OK);
 }

@@ -109,6 +109,50 @@ export interface paths {
         patch: operations["patch"];
         trace?: never;
     };
+    "/api/pins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every pinned page. */
+        get: operations["list_pins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pins/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Pin a page.
+         * @description Idempotent: pinning a page that is already pinned succeeds and leaves its
+         *     position alone, so a client does not have to check first.
+         */
+        put: operations["pin_page"];
+        post?: never;
+        /**
+         * Unpin a page.
+         * @description Unpinning something that was not pinned is a `404`, matching `DELETE` on a
+         *     page: an operation that did nothing is worth knowing about. The page itself
+         *     is untouched — this removes the shortcut, not the wiki entry.
+         */
+        delete: operations["unpin_page"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reindex": {
         parameters: {
             query?: never;
@@ -549,6 +593,40 @@ export interface components {
              * @example Async in Rust
              */
             title?: string | null;
+        };
+        PinView: {
+            /**
+             * @description Whether a page still exists at this slug.
+             *
+             *     A pin can outlive its page — a file removed or renamed outside Rhizolog
+             *     leaves one behind. That is reported rather than cleaned up silently, so
+             *     the pin can be removed deliberately.
+             */
+            exists: boolean;
+            /**
+             * Format: date-time
+             * @description When it was pinned. Pinning an already-pinned page does not change this.
+             */
+            pinned_at: string;
+            slug: components["schemas"]["Slug"];
+            /**
+             * @description The pinned page's title, falling back to the slug when no page is there.
+             * @example Async in Rust
+             */
+            title: string;
+        };
+        PinsResponse: {
+            /**
+             * @description How many pins there may be in total, so a client can say why a pin was
+             *     refused before it tries.
+             * @example 50
+             */
+            limit: number;
+            /**
+             * @description Oldest pin first. The order is stable: pinning something new appends to
+             *     it and re-pinning moves nothing.
+             */
+            pins: components["schemas"]["PinView"][];
         };
         ReindexResponse: {
             /**
@@ -1191,6 +1269,121 @@ export interface operations {
                 };
             };
             /** @description No page at that slug */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_pins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pinned pages, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PinsResponse"];
+                };
+            };
+        };
+    };
+    pin_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Page slug
+                 * @example notes/rust/async
+                 */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The page is pinned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PinView"];
+                };
+            };
+            /** @description The slug is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No page at that slug */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The pin limit is already reached */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    unpin_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Page slug
+                 * @example notes/rust/async
+                 */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pin was removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The slug is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description That page was not pinned */
             404: {
                 headers: {
                     [name: string]: unknown;

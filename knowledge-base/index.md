@@ -11,3 +11,4 @@ Every page should be reachable from this index.
 - [Architecture](architecture.md) — storage model, page format, link graph, module layout
 - [API design](api-design.md) — endpoint surface and what makes it agent-friendly
 - [The dashboard](dashboard.md) — the admin UI: screens, the editor, and where HTML may be injected
+- [Pins](pins.md) — pages kept within reach, and why they are server state

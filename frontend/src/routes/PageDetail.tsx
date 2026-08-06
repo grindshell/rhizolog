@@ -13,6 +13,7 @@ import {
   tagHref,
 } from '../api/client'
 import type { PageLinksResponse } from '../api/client'
+import { pins } from '../api/pins'
 import { Async, ErrorNotice } from '../components/Async'
 import Markdown from '../components/Markdown'
 import SlugPath from '../components/SlugPath'
@@ -32,6 +33,23 @@ export default function PageDetail() {
   const params = useParams<{ slug: string }>()
   const slug = () => decodeSlug(params.slug ?? '')
   const [showSource, setShowSource] = createSignal(false)
+  const [pinning, setPinning] = createSignal(false)
+  const [pinFailure, setPinFailure] = createSignal<unknown>()
+
+  const togglePin = async () => {
+    if (pinning()) return
+    setPinning(true)
+    setPinFailure(undefined)
+    try {
+      await pins.toggle(slug())
+    } catch (error) {
+      // Shown here rather than swallowed: the interesting failure is hitting
+      // the pin limit, and it comes back with the limit in `details`.
+      setPinFailure(error)
+    } finally {
+      setPinning(false)
+    }
+  }
 
   const [page] = createResource(slug, (target) => getPage(target, { render: true }))
   const [links] = createResource(slug, (target) => pageLinks(target))
@@ -109,6 +127,22 @@ export default function PageDetail() {
                   <h1 class="card-title text-2xl">{loaded().title}</h1>
                   <div class="flex gap-2">
                     <button
+                      class="btn btn-sm"
+                      classList={{
+                        'btn-ghost': !pins.isPinned(loaded().slug),
+                        'btn-secondary': pins.isPinned(loaded().slug),
+                      }}
+                      onClick={() => void togglePin()}
+                      disabled={pinning()}
+                      title={
+                        pins.isPinned(loaded().slug)
+                          ? 'Remove this page from the Pins menu'
+                          : 'Keep this page in the Pins menu'
+                      }
+                    >
+                      {pins.isPinned(loaded().slug) ? 'Pinned' : 'Pin'}
+                    </button>
+                    <button
                       class="btn btn-ghost btn-sm"
                       onClick={() => setShowSource((shown) => !shown)}
                     >
@@ -119,6 +153,10 @@ export default function PageDetail() {
                     </A>
                   </div>
                 </div>
+
+                <Show when={pinFailure()}>
+                  <ErrorNotice error={pinFailure()} />
+                </Show>
 
                 {/*
                   The other reading of the slug, next to the tags because it is

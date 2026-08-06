@@ -556,6 +556,10 @@ pub async fn delete(
     let slug = parse_slug(&raw)?;
     state.store.delete(&slug).await?;
     state.index.remove(&slug).await?;
+    // Deleting a page through the API is a deliberate act on that page, so its
+    // pin goes with it. A file that merely disappeared from disk is a different
+    // case and keeps its pin — see `index::pins`.
+    state.index.unpin(&slug).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -583,6 +587,10 @@ pub async fn move_page(
 
     state.index.remove(&request.from).await?;
     state.index.upsert(&page).await?;
+    // Unlike inbound links, a pin follows the page. A link is something another
+    // page said and is not ours to rewrite; a pin is a bookmark, and a bookmark
+    // that stopped working because you renamed the thing it points at is a bug.
+    state.index.repin(&request.from, &request.to).await?;
 
     Ok(Json(PageView::new(&page, false)))
 }

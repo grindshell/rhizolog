@@ -1,4 +1,4 @@
-import { Show, createEffect, createResource, createSignal, onCleanup } from 'solid-js'
+import { For, Show, createEffect, createResource, createSignal, onCleanup } from 'solid-js'
 import { useBeforeLeave, useNavigate, useParams, useSearchParams } from '@solidjs/router'
 import {
   ApiError,
@@ -17,6 +17,43 @@ import Markdown from '../components/Markdown'
 
 /** How long typing has to pause before the preview is re-rendered. */
 const PREVIEW_DELAY_MS = 300
+
+/** The three ways the editor can divide its space. */
+export type Layout = 'editor' | 'split' | 'preview'
+
+const LAYOUTS: { value: Layout; label: string; title: string }[] = [
+  { value: 'editor', label: 'Editor', title: 'Collapse the preview' },
+  { value: 'split', label: 'Split', title: 'Show the editor and the preview' },
+  { value: 'preview', label: 'Preview', title: 'Maximise the preview' },
+]
+
+const LAYOUT_KEY = 'rhizolog:editor-layout'
+
+/**
+ * The layout the user last chose.
+ *
+ * Remembered because it is a working preference, not a property of the page:
+ * somebody who collapsed the preview to write does not want it back on the next
+ * page they open.
+ */
+function storedLayout(): Layout {
+  try {
+    const stored = window.localStorage.getItem(LAYOUT_KEY)
+    if (LAYOUTS.some((option) => option.value === stored)) return stored as Layout
+  } catch {
+    // Storage can be unavailable — private mode, a blocked origin. Remembering
+    // a pane arrangement is not worth failing the editor over.
+  }
+  return 'split'
+}
+
+function rememberLayout(layout: Layout) {
+  try {
+    window.localStorage.setItem(LAYOUT_KEY, layout)
+  } catch {
+    // As above.
+  }
+}
 
 /**
  * Write a page.
@@ -73,16 +110,67 @@ export default function Editor() {
     setFailure(undefined)
   })
 
+  /* -------------------------------------------------------------- layout -- */
+
+  const [layout, setLayoutSignal] = createSignal<Layout>(storedLayout())
+  const setLayout = (next: Layout) => {
+    setLayoutSignal(next)
+    rememberLayout(next)
+  }
+
+  const showEditor = () => layout() !== 'preview'
+  const showPreview = () => layout() !== 'editor'
+
   /* ------------------------------------------------------------- preview -- */
 
-  const [previewOf, setPreviewOf] = createSignal<Draft>({ content: '', slug: undefined })
+  /**
+   * What the preview is showing, or `null` when there is nothing to show.
+   *
+   * Solid skips the fetcher for a null source, so `null` is what makes a
+   * collapsed preview cost no `POST /api/render` at all — not one per pause in
+   * typing, and not the one at mount either. Requests for a pane nobody is
+   * looking at are not free here: this wiki counts its own API usage and puts
+   * the numbers on its dashboard.
+   */
+  const [previewOf, setPreviewOf] = createSignal<Draft | null>(null)
+
+  /**
+   * Whether the preview is coming back rather than keeping up.
+   *
+   * A plain latch, not state anything renders: it only decides whether the next
+   * draft waits for the debounce.
+   */
+  let previewWasHidden = true
 
   createEffect(() => {
+    // Returning before `content` is read is what stops a collapsed preview
+    // debouncing at all: the effect then depends only on the layout.
+    if (!showPreview()) {
+      previewWasHidden = true
+      setPreviewOf(null)
+      return
+    }
+
     const draft: Draft = { content: content(), slug: slug().trim() || undefined }
+
+    // Re-opening skips the debounce. The debounce waits for a pause in typing,
+    // and nobody is typing — they clicked.
+    if (previewWasHidden) {
+      previewWasHidden = false
+      setPreviewOf(draft)
+      return
+    }
+
     const timer = setTimeout(() => setPreviewOf(draft), PREVIEW_DELAY_MS)
     onCleanup(() => clearTimeout(timer))
   })
 
+  // The source is the draft signal alone, deliberately — not
+  // `showPreview() && previewOf()`. Solid settles pure computations before user
+  // effects, so a source that read the layout directly would see it flip to
+  // visible while `previewOf` still held the draft from before the pane was
+  // collapsed, and fetch that. The effect above owns the transition instead, so
+  // there is one write and one render, with the right content.
   const [preview] = createResource(previewOf, render)
 
   /* ------------------------------------------------------------- actions -- */
@@ -204,7 +292,29 @@ export default function Editor() {
           </Show>
         </div>
 
-        <div class="flex flex-wrap gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          {/*
+            Three states rather than one collapse toggle: "give the editor the
+            room" and "give the preview the room" are both things you want, and
+            a single button that cycled through them would make you guess which
+            way it goes.
+          */}
+          <div class="join" role="group" aria-label="Editor layout">
+            <For each={LAYOUTS}>
+              {(option) => (
+                <button
+                  class="btn join-item btn-sm"
+                  classList={{ 'btn-active': layout() === option.value }}
+                  aria-pressed={layout() === option.value}
+                  title={option.title}
+                  onClick={() => setLayout(option.value)}
+                >
+                  {option.label}
+                </button>
+              )}
+            </For>
+          </div>
+
           <Show when={editing()}>
             {(target) => (
               <>
@@ -241,7 +351,8 @@ export default function Editor() {
         <ErrorNotice error={failure()} />
       </Show>
 
-      <div class="grid gap-4 lg:grid-cols-2">
+      <div class="grid gap-4" classList={{ 'lg:grid-cols-2': layout() === 'split' }}>
+        <Show when={showEditor()}>
         <section class="card bg-base-100 shadow">
           <div class="card-body gap-3">
             <label class="form-control">
@@ -320,6 +431,7 @@ export default function Editor() {
               </div>
               <textarea
                 class="textarea textarea-bordered editor-pane w-full resize-y font-mono text-sm"
+                classList={{ 'editor-pane-solo': layout() === 'editor' }}
                 value={content()}
                 placeholder="# Heading&#10;&#10;Link to another page with [[notes/rhizome]]."
                 onInput={(event) => {
@@ -330,7 +442,9 @@ export default function Editor() {
             </label>
           </div>
         </section>
+        </Show>
 
+        <Show when={showPreview()}>
         <section class="card bg-base-100 shadow">
           <div class="card-body">
             <h2 class="card-title text-base">
@@ -349,12 +463,16 @@ export default function Editor() {
                 blanking on every pause in typing.
               */}
               <Markdown
-                class="prose prose-sm dark:prose-invert editor-pane max-w-none"
+                class={
+                  'prose prose-sm dark:prose-invert editor-pane max-w-none' +
+                  (layout() === 'preview' ? ' editor-pane-solo' : '')
+                }
                 html={preview.latest?.html ?? ''}
               />
             </Show>
           </div>
         </section>
+        </Show>
       </div>
     </div>
   )

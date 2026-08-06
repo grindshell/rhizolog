@@ -20,6 +20,9 @@ storage model it sits on.
 | `GET` | `/api/search` | Full-text search with snippets |
 | `GET` | `/api/tags` | All tags with page counts |
 | `GET` | `/api/stats` | Meta-stats for the dashboard |
+| `GET` | `/api/pins` | Pinned pages, oldest first, with the limit |
+| `PUT` | `/api/pins/{slug}` | Pin a page; idempotent |
+| `DELETE` | `/api/pins/{slug}` | Unpin a page; the page is untouched |
 | `POST` | `/api/reindex` | Force a full rebuild of the index |
 | `GET` | `/api/health` | Liveness + index freshness |
 | `GET` | `/api-docs/openapi.json` | Generated OpenAPI document |
@@ -124,6 +127,18 @@ returns what already points at it, which is exactly what you want to see before
 deciding whether to write it. The response carries `exists` to say which case
 you are in.
 
+### Operation ids are global, and utoipa takes them from function names
+
+A handler called `list` in `api/pages.rs` and one called `list` in `api/pins.rs`
+publish two operations with the id `list`. The document still validates and both
+routes still work — but `openapi-typescript` keys on the operation id, so one of
+each colliding pair silently disappears from the generated client.
+
+Handlers are therefore named for the document, not just for their module
+(`list_pins`, not `list`), and
+`operation_ids_are_unique_across_the_document` in `tests/api.rs` is what keeps
+it that way. See [Pins](pins.md), where this was first hit.
+
 ### The wildcard does not appear in the spec
 
 `utoipa-axum` hands the path string from `#[utoipa::path]` straight to
@@ -179,6 +194,8 @@ Codes in use so far:
 | `invalid_request_body` | 400 | Body would not parse or validate |
 | `unknown_fields` | 400 | `fields` named something that is not a field |
 | `invalid_parameter` | 400 | `sort`/`order` outside its allowed set |
+| `pin_not_found` | 404 | Unpinning a page that was not pinned |
+| `too_many_pins` | 409 | The pin limit is already reached |
 | `index_error` / `io_error` / `internal_error` | 500 | The server's problem |
 
 **Extraction failures use the envelope too.** `axum::Json` rejects a bad body in

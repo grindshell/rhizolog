@@ -1,5 +1,6 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { A } from '@solidjs/router'
+import PinsMenu from './PinsMenu'
 
 /** The app shell: navigation, and the width everything else is read at. */
 export default function Layout(props: RouteSectionProps) {
@@ -34,6 +35,7 @@ export default function Layout(props: RouteSectionProps) {
               </a>
             </li>
           </ul>
+          <PinsMenu />
           <A class="btn btn-primary btn-sm" href="/new">
             New
           </A>

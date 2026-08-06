@@ -23,7 +23,7 @@ use utoipa::ToSchema;
 
 use crate::index::IndexError;
 use crate::page::PageError;
-use crate::slug::SlugError;
+use crate::slug::{Slug, SlugError};
 use crate::store::StoreError;
 
 #[derive(Debug, Error)]
@@ -71,6 +71,17 @@ pub enum AppError {
         allowed: &'static [&'static str],
     },
 
+    /// Unpinning a page that was not pinned.
+    ///
+    /// Distinct from `page_not_found`, because the page is very likely there —
+    /// it is the pin that is missing, and a caller that cannot tell the two
+    /// apart would retry the wrong thing.
+    #[error("{slug} is not pinned")]
+    PinNotFound { slug: Slug },
+
+    #[error("at most {limit} pages may be pinned")]
+    TooManyPins { limit: usize },
+
     #[error("{message}")]
     Internal { message: String },
 }
@@ -94,7 +105,8 @@ impl AppError {
                 }
                 StoreError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
             },
-            Self::RouteNotFound { .. } => StatusCode::NOT_FOUND,
+            Self::RouteNotFound { .. } | Self::PinNotFound { .. } => StatusCode::NOT_FOUND,
+            Self::TooManyPins { .. } => StatusCode::CONFLICT,
             Self::InvalidRequestBody { .. }
             | Self::UnknownFields { .. }
             | Self::InvalidParameter { .. } => StatusCode::BAD_REQUEST,
@@ -119,6 +131,8 @@ impl AppError {
             },
             Self::Index(_) => "index_error",
             Self::RouteNotFound { .. } => "route_not_found",
+            Self::PinNotFound { .. } => "pin_not_found",
+            Self::TooManyPins { .. } => "too_many_pins",
             Self::InvalidRequestBody { .. } => "invalid_request_body",
             Self::UnknownFields { .. } => "unknown_fields",
             Self::InvalidParameter { .. } => "invalid_parameter",
@@ -145,6 +159,8 @@ impl AppError {
                 StoreError::Io(_) => None,
             },
             Self::RouteNotFound { path } => Some(json!({ "path": path })),
+            Self::PinNotFound { slug } => Some(json!({ "slug": slug })),
+            Self::TooManyPins { limit } => Some(json!({ "limit": limit })),
             Self::InvalidRequestBody { kind, .. } => Some(json!({ "kind": kind })),
             // Both of these name what was accepted, not just what was refused:
             // a caller that guessed a field or a sort key wrong can correct

@@ -25,6 +25,8 @@ export type OutboundLinkView = Schemas['OutboundLinkView']
 export type InboundLinkView = Schemas['InboundLinkView']
 export type TagsResponse = Schemas['TagsResponse']
 export type TagCountView = Schemas['TagCountView']
+export type PinView = Schemas['PinView']
+export type PinsResponse = Schemas['PinsResponse']
 export type StatsResponse = Schemas['StatsResponse']
 export type RenderRequest = Schemas['RenderRequest']
 export type RenderedHtml = Schemas['RenderedHtml']
@@ -327,6 +329,31 @@ export function tags(signal?: AbortSignal): Promise<TagsResponse> {
 /** `GET /api/stats` — meta-stats for the dashboard. */
 export function stats(signal?: AbortSignal): Promise<StatsResponse> {
   return request<StatsResponse>('/stats', { signal })
+}
+
+/* ----------------------------------------------------------------- pins -- */
+
+/** `GET /api/pins` — the pinned pages, oldest first. */
+export function listPins(signal?: AbortSignal): Promise<PinsResponse> {
+  return request<PinsResponse>('/pins', { signal })
+}
+
+/**
+ * `PUT /api/pins/{slug}` — pin a page. Idempotent, so a caller does not have to
+ * check whether it is pinned already. `404` if there is no page there, `409`
+ * (`too_many_pins`) at the limit.
+ */
+export function pinPage(slug: string, signal?: AbortSignal): Promise<PinView> {
+  return request<PinView>(`/pins/${encodeSlug(slug)}`, { method: 'PUT', signal })
+}
+
+/**
+ * `DELETE /api/pins/{slug}` — unpin. The page itself is untouched. `404`
+ * (`pin_not_found`) if it was not pinned — distinct from `page_not_found`,
+ * which would mean something else entirely.
+ */
+export function unpinPage(slug: string, signal?: AbortSignal): Promise<void> {
+  return request<void>(`/pins/${encodeSlug(slug)}`, { method: 'DELETE', signal })
 }
 
 /* ----------------------------------------------------------------- meta -- */

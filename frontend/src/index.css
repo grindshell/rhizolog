@@ -25,3 +25,12 @@
 .editor-pane {
   min-height: 60vh;
 }
+
+/*
+ * A pane that has the editor to itself. Collapsing the preview is asking for
+ * room to write in, and width alone does not give it — a half-height textarea
+ * across the full page is not what anybody meant by "maximise".
+ */
+.editor-pane-solo {
+  min-height: 78vh;
+}

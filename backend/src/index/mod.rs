@@ -9,6 +9,7 @@
 //! of why the SQL is confined here rather than spread across handlers.
 
 pub mod graph;
+pub mod pins;
 pub mod schema;
 pub mod sync;
 
@@ -28,6 +29,7 @@ pub use graph::{
     InboundLink, LinkTotals, LinkedPage, OutboundLink, PageLinks, PageRef, RouteUsage, Stats,
     TagCount, WantedPage,
 };
+pub use pins::Pin;
 pub use sync::{SyncReport, sync};
 
 #[derive(Debug, Error)]

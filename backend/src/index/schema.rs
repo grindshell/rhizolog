@@ -6,10 +6,10 @@
 //! costs one scan, so it never costs a migration script — which is most of the
 //! payoff for keeping files as the source of truth.
 //!
-//! The exception is [`CREATE_DURABLE`]. API usage counts are not derived from
-//! anything; there is nowhere to rebuild them from. They live in tables that a
-//! version bump leaves alone, which also means a change to *those* would need a
-//! real migration. Keep them boring.
+//! The exception is [`CREATE_DURABLE`]. API usage counts and pins are not
+//! derived from anything; there is nowhere to rebuild them from. They live in
+//! tables that a version bump leaves alone, which also means a change to *those*
+//! would need a real migration. Keep them boring.
 
 /// Bump this whenever [`CREATE_DERIVED`] changes. The next startup will notice,
 /// drop the derived tables, and rebuild them from disk.
@@ -39,6 +39,19 @@ create table if not exists api_usage (
     method text    not null,
     count  integer not null default 0,
     primary key (route, method)
+) strict;
+
+-- Pages the user keeps within reach. Nothing derives them, so like `api_usage`
+-- they survive a schema bump.
+--
+-- Deliberately no `references pages(slug)`: `pages` is derived and gets dropped
+-- and rebuilt, which a foreign key from a durable table would either block or
+-- silently cascade away. A pin is resolved by joining at read time instead, and
+-- a pin whose page is not in the index is reported as missing rather than
+-- quietly dropped.
+create table if not exists pins (
+    slug      text    primary key,
+    pinned_at integer not null
 ) strict;
 ";
 
