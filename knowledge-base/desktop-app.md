@@ -256,8 +256,8 @@ file when it feels ready rather than when the server is has reintroduced the
 gap, and nothing would catch it.
 
 The gap is real, though: on a large wiki the window has nothing to show while
-the scan runs, so the shell opens a splash window and swaps it for the real one
-when `start` returns.
+the scan runs. A splash window swapped for the real one when `start` returns is
+the answer, and it is not built yet — see [`TODO.md`](../TODO.md).
 
 ### The file is a hint; `/api/health` is the proof
 
@@ -467,13 +467,8 @@ second lockfile and a second build of everything they share. It has one visible
 consequence: **`backend/target/` becomes `target/` at the repository root.**
 The root `.gitignore` ignores `target/` at any depth so nothing leaks, but
 `CLAUDE.md`'s layout table and its note about stopping the server before
-`cargo build` both name the old path, and the README's commands are run from
-`backend/`. Those want updating in the same commit as the split.
-
-The two artifacts are named for what they are: the portable app is
-`Rhizolog.exe` — via `[[bin]] name` and Tauri's `productName` — and the server
-stays `rhizolog`, because one is something a person double-clicks and the other
-is something a person types.
+`cargo build` both named the old path, and the README's commands are run from
+`backend/`. Both were corrected in the same commit as the split.
 
 One warning that applies literally here: **`cargo tauri init` and
 `pnpm create tauri-app` both create a nested `.git`**, which is the exact trap
@@ -530,11 +525,12 @@ is left to do is listed there.
   written into `config.rs`. A remote instance needs a token, and the config
   should have somewhere to put one before that day, but shipping a desktop app
   does not make that day arrive.
-- **CORS.** `tower-http`'s `cors` feature is enabled in `Cargo.toml` and nothing
-  in the crate uses it — everything is same-origin, including the webview. An
-  agent reaching a remote instance from a browser context is what would change
-  that, and it should be a deliberate decision rather than a default that was
-  already switched on.
+- **CORS.** Everything is same-origin, including the webview, so nothing needs
+  it. `tower-http`'s `cors` feature was enabled in `Cargo.toml` and used by
+  nothing; it is now off, because a feature switched on in advance of a decision
+  is how the decision gets made by accident. An agent reaching a remote instance
+  from a browser context is what would change this, and turning the feature back
+  on is one line at that point.
 - **Auto-update.** A portable executable that rewrites itself is a different
   product decision; for now, replacing the file is the update.
 - **macOS and Linux bundles.** The architecture is portable, the packaging work

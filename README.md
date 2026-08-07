@@ -238,7 +238,7 @@ Backend, from `backend/`:
 
 ```
 cargo run        # start the server
-cargo test       # 364 tests
+cargo test       # 373 tests
 cargo fmt
 cargo clippy
 ```
@@ -249,7 +249,7 @@ the executable, so it can be run anywhere without a `dist/` beside it. It needs
 
 ```
 cargo build --features embed-assets
-cargo test --features embed-assets    # 370 tests
+cargo test --features embed-assets    # 379 tests
 ```
 
 A directory that exists still wins, so this changes nothing when you are working
@@ -305,7 +305,7 @@ Frontend, from `frontend/`:
 ```
 pnpm dev         # dev server with HMR, proxying /api to the backend
 pnpm build       # production build, which the backend serves
-pnpm test        # 99 tests
+pnpm test        # 125 tests
 pnpm typecheck
 ```
 
@@ -360,9 +360,15 @@ was taken to mean concretely.
 ## Status
 
 The MVP is complete: pages, search, tags, the link graph, meta-stats, live
-pickup of outside edits, and a dashboard you can write in. Time tracking is in
-too: timers, manual entries, notes, groups, search over the log, and the
-statistics section.
+pickup of outside edits, and a dashboard you can write in. Since then: pinned
+pages, time tracking end to end (timers, manual entries, notes, groups, search
+over the log, and the statistics section), the drawn graph, and the desktop app
+described above.
+
+The desktop app runs and is not yet a download — real icons, a check for a
+missing WebView2 runtime, and code signing are what stand between the two.
+[`TODO.md`](TODO.md) has that list and the rest of what is known and not done,
+each entry with the reason it is not done.
 
 Not implemented, on purpose: page history and diffs, authentication, anything
 multi-user, link rewriting on move, file attachments, and transclusion.

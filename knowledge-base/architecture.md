@@ -232,6 +232,7 @@ links(src_slug, target, display, kind)  -- kind: wiki | internal | external
 pages_fts                               -- FTS5 over (slug unindexed, title, body)
 times(id PK, name, started, ended, has_note, updated, size)
 time_pages(time_id, target)             -- the pages an entry was spent on
+times_fts                               -- FTS5 over (id unindexed, name, note)
 ```
 
 `times` is derived from the files under `.rhizolog/times/`, exactly as `pages`
@@ -258,7 +259,13 @@ Not derived from anything, and therefore kept:
 ```sql
 meta(key, value)               -- schema_version, last_sync
 api_usage(route, method, count)
+pins(slug PK, pinned_at)       -- pages kept within reach
 ```
+
+`pins` deliberately has no `references pages(slug)`: a foreign key from a
+durable table into a derived one would either block the rebuild or cascade the
+pins away with it, so a pin is resolved by joining `pages` at read time. See
+[Pins](pins.md).
 
 Page bodies live only in the FTS5 table, never duplicated in `pages`; full
 content always comes from disk. FTS5 is confirmed available in the bundled
@@ -360,8 +367,10 @@ src/
   markdown.rs    comrak render, link extraction, wikilink rewriting
   store.rs       filesystem read/write/list/delete/move
   times/         TimeId, TimeEntry, the time log on disk, statistics
-  index/         SQLite: schema, upsert, search, links, tags, times, stats
+  index/         SQLite: schema, upsert, search, links, tags, pins, times, stats
   watcher.rs     notify -> reindex queue
+  assets.rs      the built dashboard: Dir | Embedded | None
+  endpoint.rs    .rhizolog/server.json: publish, withdraw, confirm
   api/           route handlers + OpenApi assembly
 ```
 
@@ -387,6 +396,8 @@ begun, which is what lets a caller hand out the address it bound. See
 | `RHIZOLOG_ROOT` | `./wiki` | Wiki directory |
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | Derived index |
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Listen address |
+| `RHIZOLOG_ASSETS` | `../frontend/dist` | Built dashboard; missing is fine |
+| `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter |
 
 Binding to loopback by default is intentional: single-user, no auth, and the
 API can write files anywhere under the wiki root. The fallback keeps the same

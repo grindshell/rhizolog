@@ -30,7 +30,10 @@ serde_json = "1"
 serde_yaml_ng = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
+# No `cors`: everything is same-origin, including the desktop app's webview.
+# Turning it on is a decision about who may reach a remote instance from a
+# browser context, and it should be made then rather than already switched on.
+tower-http = { version = "0.7", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
