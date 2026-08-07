@@ -2845,9 +2845,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rhizolog",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tempfile",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

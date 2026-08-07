@@ -143,16 +143,16 @@ portable — copy the directory to a USB stick and the wiki it points at comes
 with it. When that directory is not writable, it falls back to the OS config
 directory rather than failing.
 
-Two defaults do not survive the move.
+The precedence lives in `Config::resolve(Fallbacks)`; what the fallbacks *are*
+is the caller's business, because each binary is right about a different set.
+`Config::from_env` is now that call with the server's answers, so the headless
+path is unchanged.
 
-**`./wiki` is relative to the working directory**, which for a shell is the
-checkout and for a double-clicked executable is *usually* its own directory —
-but for a Start-menu shortcut it is whatever "Start in" says, and for a file
-association it is the opened file's folder. The desktop default has to resolve
-against `std::env::current_exe()`. Nothing would report this as an error, which
-is the problem.
-
-**`../frontend/dist`** is meaningless in a bundle; see below.
+`Fallbacks::root` is an **`Option`**, and that is the interesting part. The
+desktop app has nothing to put there when `RHIZOLOG_ROOT` is set — it never
+asked the user, because it did not need to — and `None` with no variable either
+is `ConfigError::NoWikiRoot` rather than a guess. Which matters more than it
+sounds:
 
 ### A wrong root is silent, so first run must ask
 
@@ -161,10 +161,49 @@ before canonicalising it. That is right for a server told where to look, and
 wrong for a GUI guessing: a bad default does not fail, it quietly creates an
 empty wiki somewhere nobody will look for it again.
 
-First run opens a folder picker rather than materialising a default. The picker
-must also never be pointed at `example-wiki/` — it is a fixture whose totals
-`example-wiki/index.md` states exactly, and starting one timer against it
+So the app has **no default wiki at all**. First run opens a folder picker;
+declining it exits without a dialog, because being asked and saying no is not an
+error. The choice is written to the settings file, and the same reasoning
+applies on every later run: a remembered root that is no longer a directory gets
+the picker again rather than being handed to `Store::open`, which would greet
+somebody whose wiki had moved with an empty dashboard where their notes used to
+be.
+
+This dissolves an earlier worry on this page — that `./wiki` resolves against a
+working directory a double-clicked executable does not control. There is no
+`./wiki` in the desktop app to resolve. The concern survives for anything else
+it carries, so `Fallbacks::assets` is `<exe dir>/dist`: drop a `dist` folder
+beside a portable copy and it overrides the built-in dashboard, from any working
+directory.
+
+The picker must never be pointed at `example-wiki/` — it is a fixture whose
+totals `example-wiki/index.md` states exactly, and starting one timer against it
 rewrites what the documentation claims.
+
+### Changing wikis is File → Open Wiki…, and it restarts
+
+`Store`, `TimeStore`, `Index` and the watcher are each bound to one root at
+startup, so the menu item saves the choice, stops the server properly and calls
+`restart`. Stopping first is not optional: a restart that skipped it would lose
+the usage counts and leave an endpoint file describing a server about to stop
+existing.
+
+The item is **disabled when `RHIZOLOG_ROOT` is set**, because the app is not the
+thing deciding — a restart would come straight back to the same wiki, and
+offering a choice that cannot be honoured is worse than not offering it.
+
+### The settings file will be hand-edited, so it tolerates a BOM
+
+It is a small JSON file in a folder people are invited to carry around on a
+stick. Notepad and PowerShell's `Set-Content -Encoding utf8` both write a UTF-8
+BOM without being asked, and `serde_json` rejects the document outright — so
+without stripping it, fixing a typo in the file makes the app forget which wiki
+it opens and ask again.
+
+This is the same hazard, for the same reason, that page parsing already handles;
+see the BOM section of [Architecture](architecture.md). It was found the way the
+first one was: by writing the file from PowerShell and watching the app ask a
+question it should have known the answer to.
 
 ## The port is negotiated, and the result is written down
 
@@ -370,10 +409,22 @@ desktop/
   tauri.conf.json   # no frontendDist, no windows: both are made at runtime
   icons/            # placeholders; replace with real artwork
   src/main.rs       # windows_subsystem = "windows"; window, logging, lifecycle
+  src/settings.rs   # which wiki, remembered between runs
 ```
 
-The binary is `Rhizolog` and the crate is `rhizolog-desktop`, so the artifact is
-named for the product and the package for what it is.
+### The binary cannot be called `Rhizolog`
+
+It was, briefly, on the reasoning that a portable download should be named for
+the product. Windows filenames are case-insensitive, so `Rhizolog.exe` and the
+server's `rhizolog.exe` are **one file** in `target\debug\` — building both
+leaves whichever cargo linked last, with no warning and no error. The symptom is
+that `cargo run -p rhizolog` opens a window, or the app starts a console server
+against `.\wiki`; it cost a confusing half hour before the directory listing gave
+it away.
+
+So the binary is `rhizolog-desktop` and the product name lives in
+`productName` and `mainBinaryName` in `tauri.conf.json`, where the installer and
+the window can use it and nothing can collide with it.
 
 Nothing inside `backend/` moves, and `backend/` goes on being only a backend —
 which was the other thing one binary would have cost, since a crate carrying

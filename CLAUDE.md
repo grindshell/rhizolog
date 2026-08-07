@@ -22,7 +22,7 @@ workspace** whose members are `backend/` and `desktop/`.
 |------|---------|
 | `Cargo.toml` | The workspace. Build artifacts go to `target/` at the root, not `backend/target/` |
 | `backend/` | The Rust library and the headless `rhizolog` server (crate `rhizolog`) |
-| `desktop/` | The Tauri app (crate `rhizolog-desktop`, binary `Rhizolog`) |
+| `desktop/` | The Tauri app (crate and binary `rhizolog-desktop`; the *product* is Rhizolog) |
 | `frontend/` | The TypeScript frontend, served by the backend |
 | `example-wiki/` | A small committed wiki *and time log* to run against; its `index.md` states what the dashboard should report about both |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
@@ -116,12 +116,17 @@ Desktop app (run from `desktop\`, or anywhere with `-p rhizolog-desktop`):
 
 ```
 cargo run                 # a window onto a server it starts itself
-cargo build --release     # the portable exe, at target\release\Rhizolog.exe
+cargo build --release     # the portable exe, target\release\rhizolog-desktop.exe
 ```
 
 It depends on `rhizolog` with `embed-assets` on, so **`pnpm build` is a
 prerequisite of building it at all**. `desktop\icons\` are placeholders,
 generated so the crate would build; replace them with real artwork.
+
+The app remembers which wiki it opened in `rhizolog.settings.json`, written
+beside the executable — so in a checkout that is `target\debug\`. Delete it to
+get the first-run folder picker back. `RHIZOLOG_ROOT` overrides it and is not
+remembered, which is how to point the app at a scratch wiki.
 
 Frontend (run from `frontend/`):
 
@@ -190,6 +195,16 @@ $data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/ap
   `git commit -F <file>`, which carries quotes and em-dashes through intact.
 - Stop the server before `cargo build`: a running `rhizolog.exe` is locked,
   and the build fails with "Access is denied" rather than anything informative.
+- **Two cargo binaries whose names differ only in case are one file here.**
+  Windows filenames are case-insensitive, so a `[[bin]]` called `Rhizolog`
+  writes `target\debug\Rhizolog.exe` over the server's `rhizolog.exe` — no
+  warning, no error, just whichever cargo happened to link last. The symptom is
+  bizarre: `cargo run -p rhizolog` opens a window, or the desktop app starts a
+  console server against `.\wiki`. The desktop binary is therefore
+  `rhizolog-desktop`, and the pretty name lives in `productName` and
+  `mainBinaryName` in `tauri.conf.json` where it cannot collide with anything.
+  Check `Get-ChildItem target\debug -Filter *.exe` if two binaries ever seem to
+  be the same program.
 - **Moving or renaming the repository breaks Swagger UI until you
   `cargo clean -p utoipa-swagger-ui`.** That crate's build script writes the
   *absolute* path of its downloaded asset directory into a generated

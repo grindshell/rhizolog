@@ -22,7 +22,7 @@ pub mod watcher;
 pub use api::usage::UsageTally;
 pub use api::{AppState, router};
 pub use assets::Assets;
-pub use config::{Config, Listen};
+pub use config::{Config, Fallbacks, Listen};
 pub use endpoint::Endpoint;
 pub use error::{AppError, AppResult};
 pub use index::{Index, IndexError, SyncReport};

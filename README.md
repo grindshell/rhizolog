@@ -226,7 +226,7 @@ inside it.
 | Path | |
 |---|---|
 | `backend/` | The Rust library and the headless server (crate `rhizolog`) |
-| `desktop/` | The Tauri app (crate `rhizolog-desktop`, binary `Rhizolog`) |
+| `desktop/` | The Tauri app (crate and binary `rhizolog-desktop`) |
 | `frontend/` | The dashboard: Vite, SolidJS, Tailwind, daisyUI |
 | `example-wiki/` | A small wiki, and a week of time, to run against |
 | `knowledge-base/` | Why the thing is built the way it is |
@@ -263,7 +263,7 @@ Desktop app, from `desktop/`:
 
 ```
 cargo run                 # a window onto a server it starts itself
-cargo build --release     # target/release/Rhizolog.exe
+cargo build --release     # target/release/rhizolog-desktop.exe
 ```
 
 It turns `embed-assets` on, so `pnpm build` has to have run before it will
@@ -279,6 +279,20 @@ without knowing it is an app.
 
 That is the whole reason it is built this way: nothing the app can do is
 something a browser pointed at a remote Rhizolog cannot.
+
+**It asks which wiki to open**, the first time and any time the one it
+remembers has gone. There is no default, deliberately — the API creates
+directories it is pointed at, so a guess would mean an empty wiki materialising
+somewhere you would never look for it. **File → Open Wiki…** changes it, which
+restarts the app.
+
+The answer is remembered in `rhizolog.settings.json` **beside the executable**,
+so a copied folder takes its wiki with it. If that directory cannot be written
+to, it falls back to the usual per-user config directory.
+
+`RHIZOLOG_ROOT` overrides all of that and is not remembered — it is how to point
+the app at a scratch wiki for an afternoon. The environment always wins; a
+remembered choice never overrides something you typed.
 
 Frontend, from `frontend/`:
 
