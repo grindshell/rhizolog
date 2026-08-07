@@ -1,0 +1,151 @@
+//! The server's lifecycle: starting, serving, and stopping cleanly.
+//!
+//! `server::start` and `Server::shutdown` are the whole surface a shell around
+//! the server gets — see `knowledge-base/desktop-app.md` — so the two things
+//! they promise are worth asserting rather than assuming: that the address is
+//! real and the index complete by the time `start` returns, and that nothing is
+//! left listening or unflushed after `shutdown`.
+
+use std::net::SocketAddr;
+
+use rhizolog::{Config, Index, server};
+use tempfile::TempDir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+
+fn config(directory: &TempDir) -> Config {
+    Config {
+        root: directory.path().to_path_buf(),
+        database: directory.path().join(".rhizolog").join("index.db"),
+        // Port 0, so these never fight each other — or the developer's own
+        // server — over 3000.
+        address: SocketAddr::from(([127, 0, 0, 1], 0)),
+        // Nothing is built in a temp directory, which is a normal state rather
+        // than an error.
+        assets: directory.path().join("dist"),
+    }
+}
+
+/// One HTTP/1.1 request, by hand.
+///
+/// The crate has no HTTP client and does not need one for this. Going over a
+/// real socket is the whole point — these tests are about the listener, which
+/// calling the `Router` in process would never touch. `Connection: close` is
+/// what lets the response be read to EOF without parsing a content length.
+async fn get(address: SocketAddr, path: &str) -> String {
+    let mut stream = TcpStream::connect(address).await.expect("connect");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.expect("send");
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.expect("read");
+    response
+}
+
+#[tokio::test]
+async fn starts_ready_and_stops_clean() {
+    let directory = TempDir::new().expect("temp dir");
+    let server = server::start(&config(&directory)).await.expect("start");
+    let address = server.address();
+
+    assert_ne!(
+        address.port(),
+        0,
+        "start returned before the bind had resolved a port"
+    );
+
+    let response = get(address, "/api/health").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("\"status\":\"ok\""), "{response}");
+
+    server.shutdown().await.expect("shutdown");
+
+    assert!(
+        TcpStream::connect(address).await.is_err(),
+        "the listener outlived the shutdown"
+    );
+}
+
+/// `start` returning means ready, not starting. Anything that publishes the
+/// address the moment it has one — a desktop window, eventually a file agents
+/// read — hands out a URL that a request can arrive at immediately, and that
+/// request must not see a half-built index.
+#[tokio::test]
+async fn the_wiki_is_reconciled_before_the_address_is_handed_back() {
+    let directory = TempDir::new().expect("temp dir");
+    tokio::fs::write(
+        directory.path().join("rhizome.md"),
+        "---\ntitle: Rhizome\n---\n\nKnowledge branches off chaotically.\n",
+    )
+    .await
+    .expect("write page");
+
+    let server = server::start(&config(&directory)).await.expect("start");
+    let response = get(server.address(), "/api/health").await;
+
+    assert!(
+        response.contains("\"pages\":1"),
+        "the page written before startup was not indexed yet: {response}"
+    );
+
+    server.shutdown().await.expect("shutdown");
+}
+
+/// API usage is tallied in memory and flushed every sixty seconds, so a
+/// shutdown that forgets the final flush loses up to a minute of counts and
+/// loses them silently — the only symptom is a number in `/api/stats` that is
+/// quietly too low. A window closing is now one of the ways to exit.
+#[tokio::test]
+async fn shutting_down_persists_the_usage_tally() {
+    let directory = TempDir::new().expect("temp dir");
+    let config = config(&directory);
+    let server = server::start(&config).await.expect("start");
+    let address = server.address();
+
+    get(address, "/api/health").await;
+    get(address, "/api/health").await;
+    get(address, "/api/pages").await;
+
+    server.shutdown().await.expect("shutdown");
+
+    // Reopened from the file rather than read through the handle the server
+    // was holding, so this is an assertion about what reached the disk.
+    let index = Index::open(Some(&config.database))
+        .await
+        .expect("reopen the index");
+    let counts: Vec<(String, String, u64)> = index
+        .usage()
+        .await
+        .expect("usage")
+        .into_iter()
+        .map(|usage| (usage.route, usage.method, usage.count))
+        .collect();
+
+    assert!(
+        counts.contains(&("/api/health".to_owned(), "GET".to_owned(), 2)),
+        "{counts:?}"
+    );
+    assert!(
+        counts.contains(&("/api/pages".to_owned(), "GET".to_owned(), 1)),
+        "{counts:?}"
+    );
+}
+
+/// Two servers over one wiki is a thing the desktop app has to prevent rather
+/// than a thing this asserts is fine — but starting one, stopping it, and
+/// starting another is the ordinary restart, and it only works if shutdown
+/// really let go of the index and the port.
+#[tokio::test]
+async fn a_wiki_can_be_served_again_after_a_shutdown() {
+    let directory = TempDir::new().expect("temp dir");
+    let config = config(&directory);
+
+    let first = server::start(&config).await.expect("first start");
+    get(first.address(), "/api/health").await;
+    first.shutdown().await.expect("first shutdown");
+
+    let second = server::start(&config).await.expect("second start");
+    let response = get(second.address(), "/api/health").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    second.shutdown().await.expect("second shutdown");
+}

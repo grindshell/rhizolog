@@ -335,7 +335,8 @@ router in-process:
 
 ```
 src/
-  main.rs        bootstrap: config, tracing, open index, spawn watcher, serve
+  main.rs        the headless binary: tracing, config, wait for Ctrl-C
+  server.rs      start / shutdown: the whole boot sequence, and stopping it
   lib.rs         re-exports; builds the axum Router
   config.rs      env-driven config
   error.rs       AppError -> one JSON error shape
@@ -354,6 +355,16 @@ src/
 header, then prose". The answers to what counts as a fence, what a BOM does,
 and how the two halves go back together belong in one place — the second copy
 is where they quietly diverge.
+
+`server.rs` holds everything between "here is a config" and "it is serving":
+opening the three stores, reconciling the index, binding, starting the watcher
+and the usage flusher, and stopping all of them again afterwards. It is not in
+`main.rs` because that sequence has more than one driver, and they differ only
+in the last step — a console binary stops on Ctrl-C, a desktop shell stops when
+its window closes, and a test stops when it has finished asserting.
+`server::start` returns once the server is **ready** rather than once it has
+begun, which is what lets a caller hand out the address it bound. See
+[The desktop app](desktop-app.md).
 
 ## Configuration
 

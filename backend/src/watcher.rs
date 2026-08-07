@@ -29,6 +29,7 @@ use std::time::Duration;
 
 use notify::RecursiveMode;
 use notify_debouncer_full::{DebounceEventResult, new_debouncer};
+use tokio::task::JoinHandle;
 
 use crate::index::{Index, sync::sync};
 use crate::slug::Slug;
@@ -58,7 +59,13 @@ pub enum Reindex {
 ///
 /// Failure is reported, not fatal: a wiki on a filesystem that cannot be
 /// watched should still be served, just without live pickup of external edits.
-pub fn spawn(store: Store, times: TimeStore, index: Index) {
+/// That is the `None` case, and it is why the caller gets an `Option` rather
+/// than a handle it can rely on.
+///
+/// The returned handle exists so a shutdown can cancel the watcher and wait for
+/// it to let go of the index; see [`crate::server::Server::shutdown`]. Dropping
+/// it detaches the watcher, which is what a process about to exit wants.
+pub fn spawn(store: Store, times: TimeStore, index: Index) -> Option<JoinHandle<()>> {
     let root = store.root().to_path_buf();
     let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -73,16 +80,16 @@ pub fn spawn(store: Store, times: TimeStore, index: Index) {
         Ok(debouncer) => debouncer,
         Err(error) => {
             tracing::warn!(%error, "could not start the file watcher; external edits will only be picked up on restart");
-            return;
+            return None;
         }
     };
 
     if let Err(error) = debouncer.watch(&root, RecursiveMode::Recursive) {
         tracing::warn!(%error, path = %crate::store::display_path(&root), "could not watch the wiki directory; external edits will only be picked up on restart");
-        return;
+        return None;
     }
 
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         // The debouncer stops watching when dropped, so the task owns it for as
         // long as it runs even though it never touches it again.
         let _debouncer = debouncer;
@@ -111,7 +118,7 @@ pub fn spawn(store: Store, times: TimeStore, index: Index) {
         }
 
         tracing::debug!("file watcher stopped");
-    });
+    }))
 }
 
 /// What one changed path turns out to be.

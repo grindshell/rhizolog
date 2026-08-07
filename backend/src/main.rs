@@ -1,11 +1,13 @@
-use std::process::ExitCode;
-use std::time::Duration;
+//! The headless server.
+//!
+//! Everything this does beyond reading the environment and waiting for Ctrl-C
+//! is [`rhizolog::server`], so that a shell with a different idea of when to
+//! stop — a desktop window, a test — starts the same server this does.
 
-use rhizolog::api::graph::flush_usage;
-use rhizolog::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
-use rhizolog::index::sync;
-use rhizolog::watcher;
-use rhizolog::{AppState, Config, Index, Store, TimeStore, UsageTally};
+use std::process::ExitCode;
+
+use rhizolog::Config;
+use rhizolog::server;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -24,104 +26,10 @@ async fn main() -> ExitCode {
 
 async fn run() -> anyhow::Result<()> {
     let config = Config::from_env()?;
-    let store = Store::open(&config.root).await?;
-    let times = TimeStore::open(&config.root).await?;
-    let index = Index::open(Some(&config.database)).await?;
+    let server = server::start(&config).await?;
 
-    tracing::info!(wiki_root = %store.root_display(), "opened wiki");
-    tracing::info!(time_log = %times.root_display(), "opened time log");
-
-    // Reconcile before serving: the wiki may have been edited, or the whole
-    // index deleted, while the server was down.
-    let report = sync(&store, &times, &index).await?;
-    tracing::info!(
-        scanned = report.pages.scanned,
-        indexed = report.pages.indexed,
-        unchanged = report.pages.unchanged,
-        removed = report.pages.removed,
-        failed = report.pages.failed,
-        "pages synchronised"
-    );
-    tracing::info!(
-        scanned = report.times.scanned,
-        indexed = report.times.indexed,
-        unchanged = report.times.unchanged,
-        removed = report.times.removed,
-        failed = report.times.failed,
-        "time log synchronised"
-    );
-    let failed = report.pages.failed + report.times.failed;
-    if failed > 0 {
-        tracing::warn!(
-            failed,
-            "some files could not be indexed; they will not appear in search or in the time log"
-        );
-    }
-
-    let listener = tokio::net::TcpListener::bind(config.address).await?;
-    let address = listener.local_addr()?;
-    // ASCII only: the Windows console defaults to a codepage that mangles
-    // anything else, and this is the first line anyone sees.
-    tracing::info!("listening on http://{address}");
-    tracing::info!("API docs at http://{address}{SWAGGER_UI_PATH}");
-    tracing::info!("OpenAPI at http://{address}{OPENAPI_PATH}");
-
-    // Started after the initial scan, so it only ever reports genuinely new
-    // changes rather than racing the reconciliation that just ran.
-    watcher::spawn(store.clone(), times.clone(), index.clone());
-
-    // A missing build is normal during frontend development, when `pnpm dev`
-    // serves the UI itself and proxies the API here.
-    let assets = match tokio::fs::try_exists(&config.assets).await {
-        Ok(true) => {
-            tracing::info!(path = %config.assets.display(), "serving the built frontend");
-            Some(config.assets.clone())
-        }
-        _ => {
-            tracing::info!(
-                path = %config.assets.display(),
-                "no frontend build found; serving the API only"
-            );
-            None
-        }
-    };
-
-    let state = AppState {
-        store,
-        times,
-        index,
-        usage: UsageTally::new(),
-        assets,
-    };
-
-    let flusher = tokio::spawn(flush_usage_periodically(state.clone()));
-
-    let router = rhizolog::router(state.clone());
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
-    // Stop the periodic flush before the final one, so the two cannot race for
-    // the tally and split the last batch between them.
-    flusher.abort();
-    flush_usage(&state.index, &state.usage).await;
-
-    tracing::info!("shut down");
-    Ok(())
-}
-
-/// How often API usage counts are moved from memory into the index.
-const USAGE_FLUSH_INTERVAL: Duration = Duration::from_secs(60);
-
-async fn flush_usage_periodically(state: AppState) {
-    let mut ticker = tokio::time::interval(USAGE_FLUSH_INTERVAL);
-    // The first tick fires immediately and would flush an empty tally.
-    ticker.tick().await;
-
-    loop {
-        ticker.tick().await;
-        flush_usage(&state.index, &state.usage).await;
-    }
+    shutdown_signal().await;
+    server.shutdown().await
 }
 
 fn init_tracing() {
