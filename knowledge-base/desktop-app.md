@@ -61,18 +61,24 @@ server mode output that arrives after the shell prompt has already come back.
 no `serve` subcommand, no mode flag — `rhizolog` serves, the app opens a
 window, and what they share is a library rather than a branch.
 
-### The seam is `Config` and `Server`, and nothing else
+### The seam is `Config`, `Server`, and the public client path
 
 `desktop/` can see everything `rhizolog` exports, which includes `Store`,
 `Index` and `TimeStore`. It must use none of them. The rule above — no
 capability in the app that a browser pointed at a remote instance lacks — is
-only enforceable if the shell's entire vocabulary is `Config`, `Server::start`,
-`Server::address` and `Server::shutdown`.
+only enforceable if the shell cannot reach wiki data except the way everything
+else does.
 
 A Tauri command that reads a page straight off disk would be a two-line
 convenience and the end of the property this design exists to protect. When the
 shell needs wiki data, it makes an HTTP request to itself, like every other
 client.
+
+`endpoint::live` is not an exception to that, despite being a library call: it
+reads a published file and makes an HTTP request, which is exactly the discovery
+path an agent uses and involves no privileged access to anything. The rule is
+about the wiki, not about the crate boundary — **`Store`, `Index` and
+`TimeStore` are the names that must not appear in `desktop/`.**
 
 ## The boot sequence has to become a library
 
@@ -261,12 +267,37 @@ than trust it, a reader confirms with `GET /api/health` and checks the
 wiki it meant. That endpoint already returns exactly the right fields, and a
 handshake beats a liveness heuristic.
 
-This doubles as the **single-instance lock**, and per wiki root rather than per
-application — which is the correct granularity. Two windows on one wiki means
-two SQLite writers, two file watchers, and a usage tally split across
-processes; two windows on two different wikis is fine and should stay fine. A
-second launch that finds a live server for the same root focuses the existing
-window instead of starting anything.
+Both halves are `endpoint::live`, which is the whole protocol in one function:
+read the hint, then confirm it. The comparison is against the root actually
+asked about rather than the one the file names, because a copied wiki directory
+brings its `server.json` along and that file describes somebody else's live
+server. All three cases have tests.
+
+### One instance per wiki, not per application
+
+That handshake is also the **single-instance lock**, at the granularity that
+matches the damage. Two windows on one wiki means two writers on one index, two
+file watchers, and an endpoint file that can only describe the newer of them —
+so the older window's published address becomes a lie. Two windows on two
+different wikis costs nothing and is a reasonable thing to want, which is why
+`tauri-plugin-single-instance` is not the answer here: it locks the
+application, and would forbid the harmless case along with the harmful one.
+
+A second launch on a wiki that is already open therefore says so, names the URL
+the running one is serving, and offers **Open a different wiki…** or **Quit**.
+The offer is the useful part: the case where somebody wants two windows is
+usually the case where they want two *wikis*, and the alternative — refusing and
+exiting — would leave them with no way to say so.
+
+**It does not raise the other window.** That needs platform code to find another
+process's window and ask for the foreground, Windows may decline the request and
+flash the taskbar instead, and the dialog already says which URL to look for.
+Worth revisiting only if the dialog turns out to annoy.
+
+**It is a courtesy, not a mutex.** Two launches close enough together both check
+before either publishes, and both start. Closing that properly needs an OS-level
+lock taken before the bind; the check as it stands covers the case that actually
+happens, which is launching while a window is already open.
 
 ### `.rhizolog/` now holds three kinds of thing
 
@@ -479,7 +510,8 @@ lifecycle is what makes it reachable later.
   regression that would otherwise only show up as slowly wrong numbers in
   `/api/stats`.
 - `server.json` written on ready, removed on clean shutdown, and treated as
-  absent when the server it names does not answer `/api/health` for that root.
+  absent when the server it names does not answer `/api/health` for that root —
+  including the copied-directory case, where it answers for a different one.
 - Port fallback: a second instance on a busy 3000 lands somewhere else and says
   where.
 - `swagger_ui_serves_its_own_assets` against a release build.

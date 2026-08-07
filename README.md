@@ -294,6 +294,12 @@ to, it falls back to the usual per-user config directory.
 the app at a scratch wiki for an afternoon. The environment always wins; a
 remembered choice never overrides something you typed.
 
+**One window per wiki.** Opening the app again on a wiki it is already serving
+tells you where that window is and offers to open a different wiki instead —
+two of them on one wiki would mean two writers on one index and a published
+address that is only true for one. Two windows on two *different* wikis is fine
+and works.
+
 Frontend, from `frontend/`:
 
 ```

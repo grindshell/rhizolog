@@ -33,9 +33,12 @@
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 use crate::store::{INTERNAL_DIR, display_path, write_atomically};
 
@@ -106,6 +109,68 @@ pub async fn withdraw(root: &Path) -> io::Result<()> {
 pub async fn read(root: &Path) -> Option<Endpoint> {
     let bytes = tokio::fs::read(path(root)).await.ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+/// How long to wait for a published endpoint to answer.
+///
+/// Generous for a loopback round trip on a busy machine, short enough that a
+/// file left behind by last week's crash does not make a launch feel broken.
+const CONFIRM_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The endpoint published for `root`, but only if a server is really there.
+///
+/// This is the discovery protocol in one function: read the hint, then confirm
+/// it. Anything that wants to reach a running Rhizolog should go through here
+/// rather than trusting the file, and anything that wants to know whether a
+/// wiki is *already being served* — a second copy of the desktop app, say —
+/// is asking the same question.
+///
+/// Two ways the hint lies, and both are checked by the one request:
+///
+/// - **The server is gone.** A hard kill leaves the file, and nothing answers.
+/// - **Something else has the port.** Process ids and ports both get reused, so
+///   an answer is not enough; it has to be an answer about *this* wiki. The
+///   comparison is against the root actually asked about rather than the one
+///   the file names, because a copied wiki directory brings its `server.json`
+///   with it and that file describes somebody else's live server.
+pub async fn live(root: &Path) -> Option<Endpoint> {
+    let endpoint = read(root).await?;
+
+    // A root that cannot be canonicalised does not exist, and nothing can be
+    // serving a wiki that is not there.
+    let canonical = tokio::fs::canonicalize(root).await.ok()?;
+    let expected = display_path(&canonical);
+
+    let address: SocketAddr = endpoint.url.strip_prefix("http://")?.parse().ok()?;
+    let reported = tokio::time::timeout(CONFIRM_TIMEOUT, serving(address))
+        .await
+        .ok()??;
+
+    (reported == expected).then_some(endpoint)
+}
+
+/// The wiki a server at `address` says it is serving, if one answers at all.
+async fn serving(address: SocketAddr) -> Option<String> {
+    let mut stream = TcpStream::connect(address).await.ok()?;
+    let request =
+        format!("GET /api/health HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.ok()?;
+
+    // `Connection: close` is what makes reading to the end terminate, and it
+    // saves having to parse a content length to find out where to stop.
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.ok()?;
+
+    let body = body_of(&response)?;
+    let health: serde_json::Value = serde_json::from_slice(body).ok()?;
+    health.get("wiki_root")?.as_str().map(str::to_owned)
+}
+
+fn body_of(response: &[u8]) -> Option<&[u8]> {
+    let blank_line = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")?;
+    Some(&response[blank_line + 4..])
 }
 
 #[cfg(test)]

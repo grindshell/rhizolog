@@ -22,14 +22,14 @@
 
 mod settings;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rhizolog::{Config, Fallbacks, Server};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -113,7 +113,7 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
     // `RHIZOLOG_ROOT` decides on its own when it is set, so there is nothing to
     // remember and nobody to ask — that is how the app gets pointed at a
     // scratch wiki without disturbing whatever it normally opens.
-    let fallback_root = if environment_names_a_wiki() {
+    let mut fallback_root = if environment_names_a_wiki() {
         None
     } else {
         match remembered_or_chosen(handle).await? {
@@ -128,11 +128,35 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
         }
     };
 
-    let config = Config::resolve(Fallbacks {
-        root: fallback_root,
-        assets: beside_executable("dist"),
-        ..Fallbacks::default()
-    })?;
+    // One instance per wiki. Not one per application: two windows on two
+    // different wikis is a perfectly reasonable thing to want, and two on the
+    // same one means two writers on an index, two file watchers, and an
+    // endpoint file that can only describe the newer of them.
+    let config = loop {
+        let config = Config::resolve(Fallbacks {
+            root: fallback_root.clone(),
+            assets: beside_executable("dist"),
+            ..Fallbacks::default()
+        })?;
+
+        let Some(existing) = rhizolog::endpoint::live(&config.root).await else {
+            break config;
+        };
+
+        tracing::info!(
+            url = %existing.url,
+            wiki = %config.root.display(),
+            "this wiki is already open"
+        );
+
+        let Some(instead) = already_open(handle, &config, &existing).await else {
+            handle.exit(0);
+            return Ok(());
+        };
+
+        remember(handle, &instead)?;
+        fallback_root = Some(instead);
+    };
 
     let server = rhizolog::server::start(&config).await?;
 
@@ -161,7 +185,7 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
 ///
 /// `None` means the picker was declined.
 async fn remembered_or_chosen(handle: &AppHandle) -> anyhow::Result<Option<PathBuf>> {
-    let mut stored = settings::load(handle);
+    let stored = settings::load(handle);
 
     if let Some(root) = &stored.wiki_root {
         if root.is_dir() {
@@ -181,10 +205,61 @@ async fn remembered_or_chosen(handle: &AppHandle) -> anyhow::Result<Option<PathB
         return Ok(None);
     };
 
-    stored.wiki_root = Some(chosen.clone());
-    settings::save(handle, &stored)?;
-
+    remember(handle, &chosen)?;
     Ok(Some(chosen))
+}
+
+/// Say that this wiki is already open, and offer the way out.
+///
+/// `None` means quit. Something else means open that instead.
+async fn already_open(
+    handle: &AppHandle,
+    config: &Config,
+    existing: &rhizolog::Endpoint,
+) -> Option<PathBuf> {
+    let message = format!(
+        "Rhizolog is already open on this wiki.\n\n{}\n\nThat window is serving {}.",
+        config.root.display(),
+        existing.url,
+    );
+
+    // `RHIZOLOG_ROOT` chose this wiki, so offering a different one would be
+    // offering something this launch has no way to honour.
+    if environment_names_a_wiki() {
+        handle
+            .dialog()
+            .message(message)
+            .kind(MessageDialogKind::Warning)
+            .title("Rhizolog")
+            .blocking_show();
+        return None;
+    }
+
+    let choose_another = handle
+        .dialog()
+        .message(format!(
+            "{message}\n\nSwitch to that window, or open a different wiki here."
+        ))
+        .kind(MessageDialogKind::Warning)
+        .title("Rhizolog")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open a different wiki…".to_owned(),
+            "Quit".to_owned(),
+        ))
+        .blocking_show();
+
+    if !choose_another {
+        return None;
+    }
+
+    pick_wiki(handle, "Open a different wiki").await
+}
+
+/// Write down which wiki to open next time.
+fn remember(handle: &AppHandle, root: &Path) -> anyhow::Result<()> {
+    let mut stored = settings::load(handle);
+    stored.wiki_root = Some(root.to_path_buf());
+    settings::save(handle, &stored)
 }
 
 /// Change wikis, which means restarting.
@@ -198,13 +273,11 @@ async fn open_another_wiki(handle: AppHandle) {
         return;
     };
 
-    let mut stored = settings::load(&handle);
-    if stored.wiki_root.as_ref() == Some(&chosen) {
+    if settings::load(&handle).wiki_root.as_ref() == Some(&chosen) {
         return;
     }
 
-    stored.wiki_root = Some(chosen);
-    if let Err(error) = settings::save(&handle, &stored) {
+    if let Err(error) = remember(&handle, &chosen) {
         tracing::error!("{error:#}");
         handle
             .dialog()

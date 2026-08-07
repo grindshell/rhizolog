@@ -29,12 +29,13 @@ workspace** whose members are `backend/` and `desktop/`.
 | `README.md` | Setup and usage, for people who are not this file |
 | `CLAUDE.md` | This file |
 
-**The desktop crate may only use `Config` and `Server`** from the library. It
-can see `Store`, `Index` and `TimeStore` too, and using them would be the end of
-the property the whole design protects: the app must not be able to do anything
-a browser pointed at a remote Rhizolog cannot do over HTTP. When the shell needs
-wiki data it makes an HTTP request to itself. See
-`knowledge-base/desktop-app.md`.
+**`Store`, `Index` and `TimeStore` must not appear in `desktop/`.** The app uses
+`Config`, `Server`, and `endpoint::live` — which is the same read-the-file-then-
+ask-`/api/health` discovery any client does, not privileged access. Reaching
+into the stores directly would end the property the whole design protects: the
+app must not be able to do anything a browser pointed at a remote Rhizolog
+cannot do over HTTP. When the shell needs wiki data it makes an HTTP request to
+itself. See `knowledge-base/desktop-app.md`.
 
 `backend/wiki/` is the default `RHIZOLOG_ROOT` and is gitignored, as is
 `.rhizolog/index.db` anywhere. Do not develop against `example-wiki/` — it is a
@@ -127,6 +128,12 @@ The app remembers which wiki it opened in `rhizolog.settings.json`, written
 beside the executable — so in a checkout that is `target\debug\`. Delete it to
 get the first-run folder picker back. `RHIZOLOG_ROOT` overrides it and is not
 remembered, which is how to point the app at a scratch wiki.
+
+**Run `cargo build` before launching the app to check a change.** `cargo clippy`
+and `cargo check` do not link an executable, so launching after one of those
+runs the *previous* binary — which looks exactly like the change having no
+effect, and cost a wrong diagnosis once already. Check the timestamp on
+`target\debug\rhizolog-desktop.exe` if behaviour and source disagree.
 
 Frontend (run from `frontend/`):
 

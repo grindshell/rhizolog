@@ -8,7 +8,7 @@
 
 use std::net::SocketAddr;
 
-use rhizolog::{Config, Index, Listen, endpoint, server};
+use rhizolog::{Config, Endpoint, Index, Listen, endpoint, server};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -187,6 +187,76 @@ async fn the_endpoint_is_published_while_the_server_is_up_and_withdrawn_after() 
         None,
         "the endpoint outlived the server it described"
     );
+}
+
+/// `endpoint::live` is the whole discovery protocol, and the question a second
+/// copy of the desktop app asks before it starts anything: is this wiki already
+/// being served?
+#[tokio::test]
+async fn a_served_wiki_is_confirmed_live_and_stops_being_so_when_it_stops() {
+    let directory = TempDir::new().expect("temp dir");
+    let server = server::start(&config(&directory)).await.expect("start");
+
+    let live = endpoint::live(directory.path())
+        .await
+        .expect("a running server was not confirmed");
+    assert_eq!(live.url, format!("http://{}", server.address()));
+
+    server.shutdown().await.expect("shutdown");
+
+    assert_eq!(
+        endpoint::live(directory.path()).await,
+        None,
+        "a stopped server is still being reported as live"
+    );
+}
+
+/// The reason the file alone is not an answer. A hard kill leaves one behind
+/// naming a port nothing is listening on, and treating that as proof would mean
+/// refusing to open a wiki because of a server that died last week.
+#[tokio::test]
+async fn an_endpoint_nothing_answers_at_is_not_live() {
+    let directory = TempDir::new().expect("temp dir");
+    // Bound and dropped: as close to a certainly-free port as this can get.
+    let (listener, address) = occupied().await;
+    drop(listener);
+
+    endpoint::publish(directory.path(), &Endpoint::new(address, directory.path()))
+        .await
+        .expect("publish by hand");
+
+    assert!(endpoint::read(directory.path()).await.is_some(), "setup");
+    assert_eq!(endpoint::live(directory.path()).await, None);
+}
+
+/// Ports get reused, and a wiki directory can be copied with its `server.json`
+/// inside it. An answer is therefore not enough on its own — it has to be an
+/// answer about the wiki that was asked about.
+#[tokio::test]
+async fn an_endpoint_answering_for_a_different_wiki_is_not_live() {
+    let served = TempDir::new().expect("temp dir");
+    let copy = TempDir::new().expect("temp dir");
+
+    let server = server::start(&config(&served)).await.expect("start");
+
+    // What copying a wiki directory does: the file arrives describing a server
+    // that is genuinely running, for somebody else's wiki.
+    let borrowed = endpoint::read(served.path()).await.expect("published");
+    endpoint::publish(copy.path(), &borrowed)
+        .await
+        .expect("publish the copy");
+
+    assert_eq!(
+        endpoint::live(copy.path()).await,
+        None,
+        "a live server for another wiki was accepted as this one's"
+    );
+    assert!(
+        endpoint::live(served.path()).await.is_some(),
+        "the wiki actually being served stopped being recognised"
+    );
+
+    server.shutdown().await.expect("shutdown");
 }
 
 /// A second copy finding 3000 taken is an ordinary Tuesday, and refusing to
