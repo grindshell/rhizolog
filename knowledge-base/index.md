@@ -16,3 +16,5 @@ Every page should be reachable from this index.
 - [Pins](pins.md) — pages kept within reach, and why they are server state
 - [Time tracking](time-tracking.md) — timers, the time log on disk, and why a
   time link is not a link
+- [The desktop app](desktop-app.md) — packaging as a portable Tauri app, and
+  keeping the server the only interface
