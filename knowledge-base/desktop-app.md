@@ -118,6 +118,19 @@ The desktop `main` also cannot be `#[tokio::main]`: Tauri owns the main thread.
 `tauri::async_runtime` is tokio, so `spawn_blocking` still has the thread pool
 that [the index's blocking boilerplate](architecture.md) depends on.
 
+### A windowed binary has no stdout
+
+`tracing_subscriber::fmt` to stdout is the console server's whole account of
+itself, and a `windows_subsystem = "windows"` build has nowhere to put it. The
+app adds a daily rolling file in Tauri's app log dir —
+`%LOCALAPPDATA%\dev.rhizolog.app\logs\` on Windows — and keeps the stdout layer
+as well, which costs nothing and is what makes `cargo run` on a debug build
+behave the way anyone would expect.
+
+`RHIZOLOG_LOG` still filters both. This is not a nicety: a launch that fails
+before there is a window has to leave something behind, or the only symptom is
+an icon that bounced once.
+
 ## Configuration stops being environment-only
 
 [`Config::from_env`](../backend/src/config.rs) is the only constructor, and
@@ -295,6 +308,18 @@ treats it as optional, and axum owns every byte the webview will load.
 That leaves nothing to display if `start` fails, so a failed launch reports
 through a native dialog and exits rather than opening a window onto nothing.
 
+The server is started from a task rather than awaited in `setup`, so the event
+loop is already running while the wiki is reconciled. The window appears when
+there is something behind it. On a large wiki that is a gap with nothing on
+screen, and a splash window is the eventual answer; for now the gap is the same
+one the console server has, and it is measured in the same scan.
+
+Closing the window is not the end of the process's obligations, so
+`RunEvent::ExitRequested` calls `prevent_exit`, awaits `Server::shutdown`, and
+only then exits — otherwise the last minute of usage counts goes with it. The
+`exit` at the end of that work comes back round as another `ExitRequested`,
+which an `AtomicBool` absorbs rather than letting it recurse.
+
 ### Native conveniences live in the shell
 
 A folder picker for "open wiki", "reveal in Explorer", a tray icon, a global
@@ -336,14 +361,19 @@ consequences:
 ```
 Cargo.toml          # workspace: members = ["backend", "desktop"]
 backend/            # the rhizolog library, and the headless `rhizolog` binary
-  src/server.rs     # new: start / shutdown, the extracted boot sequence
+  src/server.rs     # start / shutdown, the extracted boot sequence
+  src/endpoint.rs   # .rhizolog/server.json
+  src/assets.rs     # Dir | Embedded | None
 desktop/
-  Cargo.toml        # rhizolog = { path = "../backend" }
+  Cargo.toml        # rhizolog = { path = "../backend", features = ["embed-assets"] }
   build.rs          # tauri_build::build()
-  tauri.conf.json
-  icons/
-  src/main.rs       # windows_subsystem = "windows"; splash, window, lifecycle
+  tauri.conf.json   # no frontendDist, no windows: both are made at runtime
+  icons/            # placeholders; replace with real artwork
+  src/main.rs       # windows_subsystem = "windows"; window, logging, lifecycle
 ```
+
+The binary is `Rhizolog` and the crate is `rhizolog-desktop`, so the artifact is
+named for the product and the package for what it is.
 
 Nothing inside `backend/` moves, and `backend/` goes on being only a backend —
 which was the other thing one binary would have cost, since a crate carrying

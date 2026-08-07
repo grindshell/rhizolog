@@ -1,0 +1,26 @@
+[package]
+name = "rhizolog-desktop"
+version = "0.1.0"
+edition = "2024"
+
+# The portable app is named for the product, because it is something a person
+# double-clicks. The server keeps `rhizolog`, because that is something a
+# person types.
+[[bin]]
+name = "Rhizolog"
+path = "src/main.rs"
+
+[dependencies]
+# `embed-assets` is why this crate exists in the shape it does: the dashboard
+# has to be inside the executable for the executable to travel alone.
+rhizolog = { path = "../backend", features = ["embed-assets"] }
+
+anyhow = "1"
+tauri = "2"
+tauri-plugin-dialog = "2"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[build-dependencies]
+tauri-build = "2"

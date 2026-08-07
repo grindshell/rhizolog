@@ -15,16 +15,26 @@ What sets it apart:
 
 ## Repository layout
 
-This is a **git monorepo with a single `.git` at the root**.
+This is a **git monorepo with a single `.git` at the root**, and a **cargo
+workspace** whose members are `backend/` and `desktop/`.
 
 | Path | Purpose |
 |------|---------|
-| `backend/` | The Rust backend (cargo project, crate name `rhizolog`) |
+| `Cargo.toml` | The workspace. Build artifacts go to `target/` at the root, not `backend/target/` |
+| `backend/` | The Rust library and the headless `rhizolog` server (crate `rhizolog`) |
+| `desktop/` | The Tauri app (crate `rhizolog-desktop`, binary `Rhizolog`) |
 | `frontend/` | The TypeScript frontend, served by the backend |
 | `example-wiki/` | A small committed wiki *and time log* to run against; its `index.md` states what the dashboard should report about both |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
 | `README.md` | Setup and usage, for people who are not this file |
 | `CLAUDE.md` | This file |
+
+**The desktop crate may only use `Config` and `Server`** from the library. It
+can see `Store`, `Index` and `TimeStore` too, and using them would be the end of
+the property the whole design protects: the app must not be able to do anything
+a browser pointed at a remote Rhizolog cannot do over HTTP. When the shell needs
+wiki data it makes an HTTP request to itself. See
+`knowledge-base/desktop-app.md`.
 
 `backend/wiki/` is the default `RHIZOLOG_ROOT` and is gitignored, as is
 `.rhizolog/index.db` anywhere. Do not develop against `example-wiki/` — it is a
@@ -75,19 +85,43 @@ deployment.
   implementation approach changes, record it as a page in `knowledge-base/`
   in the same commit as the code where practical. `knowledge-base/index.md`
   is the entry point — keep it linking to every page.
-- Build artifacts never get committed: `backend/target/`, `node_modules/`, and
+- Build artifacts never get committed: `target/`, `node_modules/`, and
   frontend `dist/` output are gitignored at the root.
+- **One `Cargo.lock`, at the root.** It is the workspace's. A `Cargo.lock`
+  inside `backend/` or `desktop/` is a leftover and should be deleted.
 
 ## Commands
 
 Backend (run from `backend/`):
 
 ```
-cargo run        # start the server
+cargo run        # start the headless server
 cargo test       # run tests
 cargo fmt        # format
 cargo clippy     # lint
 ```
+
+`cargo test --features embed-assets` runs six more, covering the dashboard
+compiled into the binary. That feature reads `frontend\dist` at compile time,
+so `pnpm build` has to have run first.
+
+**Cargo unifies features across a workspace build**, so `cargo test --workspace`
+and `cargo build --workspace` turn `embed-assets` on whether you asked or not —
+`desktop/` depends on `rhizolog` with it enabled, and there is only one build of
+the library. Which means those two also need `pnpm build` behind them.
+`cargo test -p rhizolog` is the one that tests the library as the headless
+server actually ships it.
+
+Desktop app (run from `desktop\`, or anywhere with `-p rhizolog-desktop`):
+
+```
+cargo run                 # a window onto a server it starts itself
+cargo build --release     # the portable exe, at target\release\Rhizolog.exe
+```
+
+It depends on `rhizolog` with `embed-assets` on, so **`pnpm build` is a
+prerequisite of building it at all**. `desktop\icons\` are placeholders,
+generated so the crate would build; replace them with real artwork.
 
 Frontend (run from `frontend/`):
 

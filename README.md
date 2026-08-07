@@ -225,10 +225,14 @@ inside it.
 
 | Path | |
 |---|---|
-| `backend/` | The Rust server (crate `rhizolog`) |
+| `backend/` | The Rust library and the headless server (crate `rhizolog`) |
+| `desktop/` | The Tauri app (crate `rhizolog-desktop`, binary `Rhizolog`) |
 | `frontend/` | The dashboard: Vite, SolidJS, Tailwind, daisyUI |
 | `example-wiki/` | A small wiki, and a week of time, to run against |
 | `knowledge-base/` | Why the thing is built the way it is |
+
+`backend/` and `desktop/` are one cargo workspace, so there is a single
+`Cargo.lock` and a single `target/`, both at the root.
 
 Backend, from `backend/`:
 
@@ -250,6 +254,31 @@ cargo test --features embed-assets    # 370 tests
 
 A directory that exists still wins, so this changes nothing when you are working
 in a checkout.
+
+Cargo unifies features across a workspace, and the desktop crate enables that
+one — so `cargo test --workspace` builds with it too, and needs `pnpm build`
+first. `cargo test -p rhizolog` is the server as it actually ships.
+
+Desktop app, from `desktop/`:
+
+```
+cargo run                 # a window onto a server it starts itself
+cargo build --release     # target/release/Rhizolog.exe
+```
+
+It turns `embed-assets` on, so `pnpm build` has to have run before it will
+build at all. The icons in `desktop/icons/` are placeholders.
+
+### The desktop app is the server, in a window
+
+It starts a real Rhizolog on loopback in its own process and points a webview at
+it, so the dashboard in the window is talking to the same HTTP API anything else
+would — and `.rhizolog/server.json` says where, exactly as it does for the
+headless server. An agent can work against the app while you have it open,
+without knowing it is an app.
+
+That is the whole reason it is built this way: nothing the app can do is
+something a browser pointed at a remote Rhizolog cannot.
 
 Frontend, from `frontend/`:
 

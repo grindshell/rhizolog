@@ -1,6 +1,9 @@
 # Rust
 target/
 
+# Tauri regenerates these from the capability manifests on every build.
+desktop/gen/schemas/
+
 # Node / frontend
 node_modules/
 dist/
