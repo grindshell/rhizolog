@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod config;
+pub mod endpoint;
 pub mod error;
 pub mod frontmatter;
 pub mod index;
@@ -19,7 +20,8 @@ pub mod watcher;
 
 pub use api::usage::UsageTally;
 pub use api::{AppState, router};
-pub use config::Config;
+pub use config::{Config, Listen};
+pub use endpoint::Endpoint;
 pub use error::{AppError, AppResult};
 pub use index::{Index, IndexError, SyncReport};
 pub use page::{Frontmatter, Page, PageError};

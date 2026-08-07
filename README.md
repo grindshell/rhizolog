@@ -173,7 +173,8 @@ All optional, all environment variables.
 | `RHIZOLOG_ROOT` | `./wiki` | The wiki directory. Created if missing. |
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | The derived index. Safe to delete. |
 | — | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
-| `RHIZOLOG_ADDR` | `127.0.0.1:3000` | Where to listen. |
+| — | `<root>/.rhizolog/server.json` | Where the running server is. Gone when it stops. |
+| `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Where to listen. |
 | `RHIZOLOG_ASSETS` | `../frontend/dist` | The built dashboard. Missing is fine. |
 | `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter. |
 
@@ -182,6 +183,38 @@ Defaults are relative to the working directory, which is assumed to be
 
 Think before changing `RHIZOLOG_ADDR`. There is no authentication, and the API
 writes files.
+
+### Finding a running server
+
+By default the server takes port 3000 if it can and **any free port if it
+cannot**, so a second copy — or a machine where something else got there first
+— still starts. Setting `RHIZOLOG_ADDR` turns that off: an address you asked
+for by name is used or the server refuses to start, because you have probably
+written that port down somewhere else too.
+
+Which means the port is not always knowable in advance, so a running server
+writes it down:
+
+```json
+{
+  "url": "http://127.0.0.1:3000",
+  "wiki_root": "C:\\Users\\tim\\wiki",
+  "pid": 24601,
+  "version": "0.1.0",
+  "started": "2026-08-06T14:25:30Z"
+}
+```
+
+It appears at `<root>/.rhizolog/server.json` only once the server is **ready** —
+listening, with its index reconciled — so finding one means you can use it
+immediately. A clean shutdown removes it.
+
+For a script or an agent, the order to try is `RHIZOLOG_ADDR`, then
+`server.json` beside the wiki, then `http://127.0.0.1:3000`. Treat the file as a
+hint rather than proof: a server killed hard leaves it behind, and process ids
+get reused, so confirm with `GET /api/health` and check the `wiki_root` it
+reports is the wiki you meant. That is one request and it cannot be fooled by a
+stale file.
 
 ## Development
 

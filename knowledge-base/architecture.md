@@ -35,6 +35,7 @@ harmless and needs no suppression logic.
     rust/async.md
   .rhizolog/
     index.db                              # derived; safe to delete
+    server.json                           # volatile; where the server is
     times/
       2026-08/
         20260806T142530-123456789.md      # NOT derived; the only copy
@@ -46,8 +47,21 @@ and `.git/` out of the wiki.
 `.rhizolog/` is therefore **not all disposable**, despite what its name
 suggests. The database is; the time log beside it is authored data with no
 other copy. See [Time tracking](time-tracking.md) for why it sits under a
-dot-directory rather than in plain sight, and ignore `.rhizolog/index.db` by
+dot-directory rather than in plain sight, and ignore the derived files by
 name rather than the whole directory in a wiki kept in git.
+
+Three kinds of thing live there, and they want different treatment:
+
+| | |
+|---|---|
+| `index.db` | **derived** — rebuilt from the wiki; deleting it costs one scan |
+| `times/` | **authored** — the only copy; back it up |
+| `server.json` | **volatile** — where a running server is; meaningless once it stops |
+
+The last one is the [published endpoint](desktop-app.md). A server that may not
+get the port it asked for has to say where it ended up, and beside the wiki is
+where a caller can find it without being told anything it does not already
+know.
 
 ## Page identity
 
@@ -372,7 +386,21 @@ begun, which is what lets a caller hand out the address it bound. See
 |---|---|---|
 | `RHIZOLOG_ROOT` | `./wiki` | Wiki directory |
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | Derived index |
-| `RHIZOLOG_ADDR` | `127.0.0.1:3000` | Listen address |
+| `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Listen address |
 
 Binding to loopback by default is intentional: single-user, no auth, and the
-API can write files anywhere under the wiki root.
+API can write files anywhere under the wiki root. The fallback keeps the same
+host for that reason — a loopback default cannot become a public bind by
+giving way.
+
+### A default is a preference; a variable is a requirement
+
+`config::Listen` carries the difference. `RHIZOLOG_ADDR` is `Exactly`: it fails
+if the address is taken, because somebody who wrote a port down wrote it down
+somewhere else too, and quietly serving elsewhere would point that somewhere
+else at nothing. The default is `Preferably`: 3000 if it is free, otherwise
+whatever the OS hands out, because a second copy finding 3000 busy is ordinary
+and refusing to start would be a poor answer to it.
+
+Giving way is only survivable because the result gets published — see
+`.rhizolog/server.json` above.

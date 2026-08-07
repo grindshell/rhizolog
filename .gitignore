@@ -10,17 +10,20 @@ dist/
 # .rhizolog/. None of it belongs in the repo.
 backend/wiki/
 
-# Rhizolog's derived index inside any wiki directory, including example-wiki/.
-# It is built from the markdown beside it and rebuilds on startup.
+# Rhizolog's own files inside any wiki directory, including example-wiki/.
+# The index is built from the markdown beside it and rebuilds on startup;
+# server.json says where a running server is listening and means nothing once
+# that server stops.
 #
-# The database by name, not the whole directory: `.rhizolog/times/` sits beside
-# it and is a time log, which is authored data with no other copy. A wiki kept
-# in git should ignore these two lines and nothing more.
+# By name, not the whole directory: `.rhizolog/times/` sits beside them and is
+# a time log, which is authored data with no other copy. A wiki kept in git
+# should ignore these lines and nothing more.
 #
 # `**/` because a pattern with a slash in it is anchored to this file's own
 # directory: plain `.rhizolog/index.db` would miss `example-wiki/`'s.
 **/.rhizolog/index.db
 **/.rhizolog/index.db-*
+**/.rhizolog/server.json
 
 # Editor / OS noise
 .DS_Store

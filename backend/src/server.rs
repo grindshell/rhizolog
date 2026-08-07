@@ -12,6 +12,7 @@
 //! that has to tell somebody else where to connect needs something true to
 //! tell them. See `knowledge-base/desktop-app.md`.
 
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -23,7 +24,10 @@ use tokio::task::JoinHandle;
 
 use crate::api::graph::flush_usage;
 use crate::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
+use crate::config::Listen;
+use crate::endpoint::{self, Endpoint};
 use crate::index::sync::sync;
+use crate::store::display_path;
 use crate::{AppState, Config, Index, Store, TimeStore, UsageTally, watcher};
 
 /// How often API usage counts are moved from memory into the index.
@@ -49,8 +53,10 @@ pub struct Server {
 impl Server {
     /// The address actually bound.
     ///
-    /// Not necessarily `config.address`: port 0 means "whatever is free", and
-    /// the answer is only knowable after the bind.
+    /// Not necessarily the one that was asked for: a
+    /// [`Preferably`](Listen::Preferably) address gives way when it is taken,
+    /// and port 0 means "whatever is free". Either way the answer only exists
+    /// after the bind, which is why it is published rather than assumed.
     pub fn address(&self) -> SocketAddr {
         self.address
     }
@@ -60,6 +66,12 @@ impl Server {
         // A send error means every receiver is already gone, which is the state
         // being asked for rather than a problem.
         let _ = self.halt.send(true);
+
+        // Withdrawn before anything is waited for, so the window in which the
+        // file advertises a server that is going away is as small as it can be.
+        if let Err(error) = endpoint::withdraw(self.state.store.root()).await {
+            tracing::warn!(%error, "could not remove the endpoint file");
+        }
 
         // The server first, and awaited: graceful shutdown waits for requests
         // already in flight, and each of those still counts itself into the
@@ -114,9 +126,7 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
 
     reconcile(&store, &times, &index).await?;
 
-    let listener = TcpListener::bind(config.address)
-        .await
-        .with_context(|| format!("binding {}", config.address))?;
+    let listener = bind(config.listen).await?;
     let address = listener.local_addr().context("reading the bound address")?;
     // ASCII only: the Windows console defaults to a codepage that mangles
     // anything else, and this is the first line anyone sees.
@@ -152,6 +162,20 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
             .await
     });
 
+    // Last, and only now: the file exists exactly when there is a ready server
+    // to find. See `crate::endpoint`.
+    let root = state.store.root();
+    if let Err(error) = endpoint::publish(root, &Endpoint::new(address, root)).await {
+        // Discovery is a convenience. Refusing to serve a perfectly good wiki
+        // because a hint about it could not be written would be the wrong
+        // trade, so this is loud and not fatal.
+        tracing::warn!(
+            %error,
+            path = %display_path(&endpoint::path(root)),
+            "could not publish the endpoint file; callers will have to be told the address"
+        );
+    }
+
     Ok(Server {
         address,
         state,
@@ -160,6 +184,36 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
         flusher,
         watching,
     })
+}
+
+/// Take the address asked for, or the nearest thing to it that is allowed.
+///
+/// The fallback is deliberately loud. A server that quietly moved is a server
+/// somebody's bookmark no longer reaches, and the log is where they will look.
+async fn bind(listen: Listen) -> anyhow::Result<TcpListener> {
+    let address = listen.preferred();
+
+    match TcpListener::bind(address).await {
+        Ok(listener) => Ok(listener),
+        Err(error) if error.kind() == ErrorKind::AddrInUse => match listen {
+            Listen::Exactly(_) => Err(error).with_context(|| {
+                format!("binding {address}: something else is already listening there")
+            }),
+            Listen::Preferably(_) => {
+                tracing::warn!(
+                    %address,
+                    "that address is taken; falling back to any free port"
+                );
+                // Port 0: the OS picks. Same host, so a loopback-only default
+                // cannot become a public one by falling back.
+                let free = SocketAddr::new(address.ip(), 0);
+                TcpListener::bind(free)
+                    .await
+                    .with_context(|| format!("binding {free} after {address} was taken"))
+            }
+        },
+        Err(error) => Err(error).with_context(|| format!("binding {address}")),
+    }
 }
 
 /// Bring the index in line with the files before anything is served.

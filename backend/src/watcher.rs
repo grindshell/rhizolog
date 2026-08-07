@@ -371,6 +371,8 @@ mod tests {
     fn the_servers_own_files_are_ignored() {
         assert_eq!(planned(&[".rhizolog/index.db"]), None);
         assert_eq!(planned(&[".rhizolog/index.db-wal"]), None);
+        // The endpoint file, which this server writes about itself on startup.
+        assert_eq!(planned(&[".rhizolog/server.json"]), None);
         // Temporary files from an atomic write, in either tree.
         assert_eq!(planned(&[".notes.md.tmp"]), None);
         assert_eq!(planned(&["notes/.rhizome.md.tmp"]), None);

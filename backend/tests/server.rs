@@ -8,22 +8,38 @@
 
 use std::net::SocketAddr;
 
-use rhizolog::{Config, Index, server};
+use rhizolog::{Config, Index, Listen, endpoint, server};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 
 fn config(directory: &TempDir) -> Config {
+    listening(
+        directory,
+        Listen::Exactly(SocketAddr::from(([127, 0, 0, 1], 0))),
+    )
+}
+
+fn listening(directory: &TempDir, listen: Listen) -> Config {
     Config {
         root: directory.path().to_path_buf(),
         database: directory.path().join(".rhizolog").join("index.db"),
-        // Port 0, so these never fight each other — or the developer's own
-        // server — over 3000.
-        address: SocketAddr::from(([127, 0, 0, 1], 0)),
+        // Port 0 unless a test says otherwise, so these never fight each other
+        // — or the developer's own server — over 3000.
+        listen,
         // Nothing is built in a temp directory, which is a normal state rather
         // than an error.
         assets: directory.path().join("dist"),
     }
+}
+
+/// Hold a port open for as long as the returned listener lives.
+async fn occupied() -> (TcpListener, SocketAddr) {
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .expect("occupy a port");
+    let address = listener.local_addr().expect("its address");
+    (listener, address)
 }
 
 /// One HTTP/1.1 request, by hand.
@@ -129,6 +145,99 @@ async fn shutting_down_persists_the_usage_tally() {
         counts.contains(&("/api/pages".to_owned(), "GET".to_owned(), 1)),
         "{counts:?}"
     );
+}
+
+/// The endpoint file is how anything finds a server that may not be on the port
+/// it asked for. It has to appear only when there is something ready to find,
+/// and it has to go away again — a file pointing at a server that has stopped
+/// is worse than no file, because it reads as an answer.
+#[tokio::test]
+async fn the_endpoint_is_published_while_the_server_is_up_and_withdrawn_after() {
+    let directory = TempDir::new().expect("temp dir");
+    let server = server::start(&config(&directory)).await.expect("start");
+    let address = server.address();
+
+    let published = endpoint::read(directory.path())
+        .await
+        .expect("no endpoint was published");
+
+    assert_eq!(published.url, format!("http://{address}"));
+    assert_eq!(published.pid, std::process::id());
+    assert_eq!(published.version, env!("CARGO_PKG_VERSION"));
+
+    // The url is the point of the file, so follow it rather than trusting it.
+    let followed: SocketAddr = published
+        .url
+        .trim_start_matches("http://")
+        .parse()
+        .expect("the published url should parse as an address");
+    let response = get(followed, "/api/health").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(
+        response.contains(&published.wiki_root.replace('\\', "\\\\")),
+        "the endpoint and /api/health disagree about which wiki this is: \
+         {} vs {response}",
+        published.wiki_root
+    );
+
+    server.shutdown().await.expect("shutdown");
+
+    assert_eq!(
+        endpoint::read(directory.path()).await,
+        None,
+        "the endpoint outlived the server it described"
+    );
+}
+
+/// A second copy finding 3000 taken is an ordinary Tuesday, and refusing to
+/// start would be a poor answer to it. The published endpoint is what makes
+/// moving survivable.
+#[tokio::test]
+async fn a_preferred_address_that_is_taken_gives_way() {
+    let (held, taken) = occupied().await;
+    let directory = TempDir::new().expect("temp dir");
+
+    let server = server::start(&listening(&directory, Listen::Preferably(taken)))
+        .await
+        .expect("start should fall back rather than fail");
+
+    let address = server.address();
+    assert_ne!(address.port(), taken.port(), "it bound the occupied port");
+    assert_ne!(address.port(), 0);
+    assert_eq!(address.ip(), taken.ip(), "the fallback changed host");
+
+    let published = endpoint::read(directory.path()).await.expect("endpoint");
+    assert_eq!(
+        published.url,
+        format!("http://{address}"),
+        "the endpoint records where it wanted to be, not where it is"
+    );
+
+    let response = get(address, "/api/health").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+
+    server.shutdown().await.expect("shutdown");
+    drop(held);
+}
+
+/// An address somebody wrote down is a requirement, not a preference. Serving
+/// somewhere else would leave whatever they wrote it down in pointing at
+/// nothing, which is a worse failure than not starting.
+#[tokio::test]
+async fn an_exact_address_that_is_taken_is_an_error() {
+    let (held, taken) = occupied().await;
+    let directory = TempDir::new().expect("temp dir");
+
+    let result = server::start(&listening(&directory, Listen::Exactly(taken))).await;
+
+    assert!(result.is_err(), "it started on an address already in use");
+    assert_eq!(
+        endpoint::read(directory.path()).await,
+        None,
+        "a server that never started published an endpoint anyway"
+    );
+
+    drop(held);
 }
 
 /// Two servers over one wiki is a thing the desktop app has to prevent rather

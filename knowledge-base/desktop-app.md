@@ -187,11 +187,15 @@ instance: `RHIZOLOG_ADDR`, then `.rhizolog/server.json`, then
 
 ### Written on ready, so its existence means something
 
-The file is written after `start` returns and removed on clean shutdown. Since
-`start` only returns once the initial reconciliation is done, **the file
-appearing is the readiness signal** — a caller that finds it does not need to
-poll for a healthy index, and no `503 index_syncing` state has to be invented to
-cover the gap.
+`start` writes it as its last act, once the server is bound, reconciled and
+watching, and `shutdown` withdraws it first. So **the file appearing is the
+readiness signal** — a caller that finds one does not need to poll for a healthy
+index, and no `503 index_syncing` state has to be invented to cover the gap.
+
+Publishing belongs inside `start` rather than to whoever called it, precisely
+because that guarantee is easy to break from outside: a caller that writes the
+file when it feels ready rather than when the server is has reintroduced the
+gap, and nothing would catch it.
 
 The gap is real, though: on a large wiki the window has nothing to show while
 the scan runs, so the shell opens a splash window and swaps it for the real one
