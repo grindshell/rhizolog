@@ -8,6 +8,30 @@ The reasoning behind most of this lives in
 [`knowledge-base/`](knowledge-base/index.md); this file is the index of what is
 still outstanding, not a second place to argue design.
 
+## Before any of it goes to anyone
+
+These apply to a release of any kind, including one that is only "clone it and
+`cargo run`". They are cheap, and every one of them is invisible from inside the
+project — which is why they were not written down until somebody asked what a
+beta needs.
+
+- **There is no licence.** No `LICENSE` file, so the default is
+  all-rights-reserved: anybody who is handed a copy has no permission to run,
+  modify or pass it on. The cheapest item in this file and the only one that
+  stops a release outright.
+- **There is no release process, and no single definition of "the version".**
+  `backend/Cargo.toml`, `desktop/Cargo.toml` and `desktop/tauri.conf.json` all
+  say `0.1.0` and are bumped by hand in step; `frontend/package.json` says
+  `0.0.0` and nothing publishes it. The number travels in `server.json` and
+  `/api/health`, so it is the thing a bug report will quote. Tauri takes the
+  version from `Cargo.toml` when the field is omitted from `tauri.conf.json`,
+  which removes one of the three. There is also no changelog and no tag.
+- **The README is written for a contributor.** Its Quick Start opens with
+  `pnpm install`, which is right for somebody building the thing and useless to
+  somebody who was handed it. A reader who did not clone the repository needs
+  four things: what it does, where its data lives, that it binds loopback with
+  no authentication, and where to send a bug.
+
 ## Before the desktop app goes to anyone else
 
 The app works. These are the things that make the difference between "runs on
@@ -37,6 +61,11 @@ See [The desktop app](knowledge-base/desktop-app.md), "Portable, on Windows".
   a full scan, with nothing on screen to say so. The server is already started
   on a task rather than blocking the event loop, so this is a window to show,
   not a restructure.
+
+  Measuring that scan first found a defect rather than physics, and fixing it
+  took 5,000 pages from 27 s to 4.4 s and 20,000 from nearly nine minutes to
+  18 s. What is left is real but much smaller, and it is now linear, so the
+  window is worth showing on a large wiki and nothing is hiding behind it.
 - **A way to open the log folder.** A windowed binary has no stdout, so
   `%LOCALAPPDATA%\dev.rhizolog.app\logs\` is its only account of itself, and
   nothing in the app says where that is. A File menu item is the obvious answer;
@@ -51,7 +80,29 @@ See [The desktop app](knowledge-base/desktop-app.md), "Portable, on Windows".
 
 **There is no CI.** Everything below is run by hand today, which is the gap
 worth closing first, because two of these are configurations that break quietly.
+The remote is a self-hosted git rather than GitHub, so which runner this uses is
+itself an unmade decision.
 
+- **Large wikis, measured once by hand.** Synthetic wikis of 1,000 to 20,000
+  pages against the release server, timed from process start to
+  `.rhizolog/server.json` appearing. It found the quadratic FTS delete fixed in
+  `index/mod.rs`, and after that a first index runs at about 0.9 ms per page,
+  flat from 1,000 pages to 20,000 (0.88 s to 18 s). Warm starts are 0.1–0.7 s
+  throughout.
+
+  Worth becoming something that runs rather than something that was done once:
+  a reindex that grows with the wiki is invisible on `example-wiki/`'s nine
+  pages, which is exactly why it survived this long. Two things are still
+  unmeasured — the desktop app's own first launch, which puts a window and a
+  webview around the same scan, and how long a single page save takes on a wiki
+  that size.
+
+  Whatever runs it needs to handle a noisy machine. The first re-measurement
+  after the fix reported 5,000 pages as *slower* than before and 10,000 as
+  faster than 5,000, which is impossible for work that grows with the wiki; it
+  was background indexing of the 36,000 files the test had just created.
+  Repeating each size three times and taking the minimum gave a clean linear
+  result. A single timing on this machine is not evidence.
 - **`cargo test --features embed-assets`.** Six tests only compile under that
   feature — the ones covering the dashboard served out of the binary. A plain
   `cargo test` skips them silently, and a feature nothing exercises is a feature

@@ -277,6 +277,41 @@ search result excerpts.
 links, a URL for external ones. It is never resolved once and stored; see
 "Resolution is exact, and it is a query" above.
 
+### A full-text row is found by rowid, and nothing else will do
+
+`pages_fts` carries `slug` so a hit can name its page without a join, and
+`times_fts` carries `id` for the same reason. **Neither can be searched on.**
+Both are `unindexed` columns, and an FTS5 table has exactly two ways in: a
+`MATCH` against the text, and its `rowid`. Anything else is a full scan of the
+table.
+
+That is easy to write by accident, because the SQL looks ordinary. FTS5 has no
+upsert, so reindexing a page means deleting its old row first, and
+`delete from pages_fts where slug = ?` is the obvious spelling. It also scans
+every row in the table — so indexing the *n*th page reads *n* rows, and a full
+index is quadratic. On a wiki of 20,000 pages that was **eight minutes and
+fifty-five seconds** of blank screen before the server was ready, against
+eighteen seconds once the delete went by rowid. It was invisible for as long as
+it was because the example wiki has nine pages, where the difference is a
+millisecond.
+
+It was not only a startup cost. `upsert` runs on every API write and every file
+the watcher notices, so before the fix each save scanned the whole full-text
+table too, and a wiki got slower to edit as it grew.
+
+The rowid used is the `pages` (or `times`) row's own. That is what makes
+`insert or replace into pages` unusable: `replace` deletes the conflicting row
+and inserts a new one, which allocates a **new** rowid and orphans the full-text
+row keyed to the old one. Both tables are written with
+`on conflict(...) do update` instead, which updates in place and keeps the
+rowid — so the identity a page's searchable text hangs from lives exactly as
+long as the page does.
+
+Two tests in `index/mod.rs` and one in `index/times.rs` guard it, and they are
+written the way the failure actually presents: rewrite one page, then assert the
+*other* pages are still searchable. A mismatched rowid deletes somebody else's
+text, and the page being rewritten looks perfectly correct afterwards.
+
 ### There are no migrations
 
 The schema carries a version number. When it changes, the derived tables are

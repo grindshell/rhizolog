@@ -247,9 +247,19 @@ impl Index {
         self.with_connection(move |connection| {
             let transaction = connection.transaction()?;
 
+            // An upsert rather than `insert or replace`, because the two differ
+            // in a way the FTS row below depends on: `replace` deletes the
+            // conflicting row and inserts a new one, which allocates a new
+            // rowid, while this updates in place and keeps it. A page's rowid
+            // is therefore stable for as long as the page exists.
             transaction.execute(
-                "insert or replace into pages (slug, title, created, updated, size)
-                 values (?1, ?2, ?3, ?4, ?5)",
+                "insert into pages (slug, title, created, updated, size)
+                 values (?1, ?2, ?3, ?4, ?5)
+                 on conflict(slug) do update set
+                     title   = excluded.title,
+                     created = excluded.created,
+                     updated = excluded.updated,
+                     size    = excluded.size",
                 params![&slug, &title, created, updated, size],
             )?;
 
@@ -292,11 +302,23 @@ impl Index {
                 }
             }
 
-            // FTS5 has no upsert, so the old row goes first.
-            transaction.execute("delete from pages_fts where slug = ?1", params![&slug])?;
+            // FTS5 has no upsert, so the old row goes first — and it goes by
+            // **rowid**, which with `MATCH` is the only way an FTS5 table can be
+            // looked up at all. `slug` is an unindexed column, so
+            // `where slug = ?` has no index to use and scans the entire table:
+            // one full scan per page indexed, which is quadratic across a
+            // rebuild and was eight minutes on a wiki of twenty thousand pages.
+            // The rowid is the page's own, which is why the insert above had to
+            // stop being a `replace`.
+            let rowid: i64 = transaction.query_row(
+                "select rowid from pages where slug = ?1",
+                params![&slug],
+                |row| row.get(0),
+            )?;
+            transaction.execute("delete from pages_fts where rowid = ?1", params![rowid])?;
             transaction.execute(
-                "insert into pages_fts (slug, title, body) values (?1, ?2, ?3)",
-                params![&slug, &title, &body],
+                "insert into pages_fts (rowid, slug, title, body) values (?1, ?2, ?3, ?4)",
+                params![rowid, &slug, &title, &body],
             )?;
 
             transaction.commit()?;
@@ -310,13 +332,28 @@ impl Index {
 
         self.with_connection(move |connection| {
             let transaction = connection.transaction()?;
+
+            // Read before deleting: the FTS row is keyed by the page's rowid,
+            // and the row that holds it is about to go. A page that was never
+            // indexed has neither, which is an ordinary call rather than an
+            // error — `sync` removes a page it failed to read.
+            let rowid: Option<i64> = transaction
+                .query_row(
+                    "select rowid from pages where slug = ?1",
+                    params![&slug],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
             transaction.execute("delete from pages where slug = ?1", params![&slug])?;
             transaction.execute("delete from page_tags where slug = ?1", params![&slug])?;
             transaction.execute("delete from page_segments where slug = ?1", params![&slug])?;
             // Outbound links go with the page. Inbound ones do not: they belong
             // to the pages that wrote them, and they become wanted links.
             transaction.execute("delete from links where src_slug = ?1", params![&slug])?;
-            transaction.execute("delete from pages_fts where slug = ?1", params![&slug])?;
+            if let Some(rowid) = rowid {
+                transaction.execute("delete from pages_fts where rowid = ?1", params![rowid])?;
+            }
             transaction.commit()?;
             Ok(())
         })
@@ -753,6 +790,78 @@ mod tests {
         assert_eq!(index.count().await.unwrap(), 0);
         assert_eq!(index.search("branches", 10, 0).await.unwrap().total, 0);
         assert!(index.stamps().await.unwrap().is_empty());
+    }
+
+    /// Full-text rows are keyed by the rowid of the page they describe, so a
+    /// page's rowid has to survive being reindexed and has to stay its own.
+    /// Get either wrong and a rewrite silently takes somebody else's text out
+    /// of the search index — which nothing else here would notice, because the
+    /// rewritten page itself would look perfectly correct.
+    #[tokio::test]
+    async fn rewriting_one_page_leaves_the_others_searchable() {
+        let index = index().await;
+        for n in 0..5 {
+            index
+                .upsert(&page(
+                    &format!("notes/page-{n}"),
+                    "T",
+                    &[],
+                    &format!("distinctive-{n}"),
+                ))
+                .await
+                .unwrap();
+        }
+
+        // Rewrite one, twice, which is what an edit and a watcher echo do.
+        for body in ["rewritten once", "rewritten twice"] {
+            index
+                .upsert(&page("notes/page-2", "T", &[], body))
+                .await
+                .unwrap();
+        }
+
+        for n in [0, 1, 3, 4] {
+            assert_eq!(
+                index
+                    .search(&format!("distinctive-{n}"), 10, 0)
+                    .await
+                    .unwrap()
+                    .total,
+                1,
+                "rewriting page-2 lost page-{n} from the search index"
+            );
+        }
+
+        assert_eq!(index.count().await.unwrap(), 5);
+        assert_eq!(index.search("rewritten", 10, 0).await.unwrap().total, 1);
+        assert_eq!(index.search("distinctive-2", 10, 0).await.unwrap().total, 0);
+    }
+
+    /// The same property one level up: removing a page must take its own text
+    /// and nothing else.
+    #[tokio::test]
+    async fn removing_one_page_leaves_the_others_searchable() {
+        let index = index().await;
+        for n in 0..3 {
+            index
+                .upsert(&page(
+                    &format!("notes/page-{n}"),
+                    "T",
+                    &[],
+                    &format!("distinctive-{n}"),
+                ))
+                .await
+                .unwrap();
+        }
+
+        index
+            .remove(&Slug::parse("notes/page-1").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(index.search("distinctive-1", 10, 0).await.unwrap().total, 0);
+        assert_eq!(index.search("distinctive-0", 10, 0).await.unwrap().total, 1);
+        assert_eq!(index.search("distinctive-2", 10, 0).await.unwrap().total, 1);
     }
 
     #[tokio::test]

@@ -13,7 +13,13 @@
 
 /// Bump this whenever [`CREATE_DERIVED`] changes. The next startup will notice,
 /// drop the derived tables, and rebuild them from disk.
-pub const SCHEMA_VERSION: i64 = 5;
+///
+/// Version 6 changed no DDL. The full-text rows are now keyed by the rowid of
+/// the `pages` or `times` row they describe, and an index written before that
+/// has arbitrary rowids in its FTS tables — so a delete would miss, or hit
+/// somebody else's row. Rebuilding is what puts them back in step, and it costs
+/// one scan, which is the whole reason this mechanism exists.
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -114,6 +120,11 @@ create table links (
 
 create index links_by_target on links(target);
 
+-- Each row's rowid is the rowid of the `pages` row it describes, because that
+-- is the only handle an FTS5 table can be looked up by other than `MATCH`.
+-- `slug` is stored so a hit can name its page without a join, but it is
+-- `unindexed` and therefore useless to search on: `where slug = ?` scans every
+-- row, which is what made rebuilding an index quadratic.
 create virtual table pages_fts using fts5(
     slug unindexed,
     title,
@@ -175,6 +186,7 @@ create index time_pages_by_target on time_pages(target);
 -- That is a different question from `times.name = ?`, which is the group filter
 -- and is exact by design. This one is fuzzy and they intersect, so asking for
 -- `poll loop` inside `Deep work` is one request.
+-- Keyed by the rowid of its `times` row, exactly as `pages_fts` is.
 create virtual table times_fts using fts5(
     id unindexed,
     name,

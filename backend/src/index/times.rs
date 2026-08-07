@@ -248,9 +248,22 @@ impl Index {
         self.with_connection(move |connection| {
             let transaction = connection.transaction()?;
 
+            // An upsert, not `insert or replace`, for the reason
+            // [`Index::upsert`] gives: `replace` would delete the row and
+            // allocate a new rowid, and the FTS row below is keyed by this one.
+            // It also stops the delete cascading through `time_pages` on every
+            // write, which was harmless only because the next statement
+            // rewrites them anyway.
             transaction.execute(
-                "insert or replace into times (id, name, started, ended, has_note, updated, size)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "insert into times (id, name, started, ended, has_note, updated, size)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 on conflict(id) do update set
+                     name     = excluded.name,
+                     started  = excluded.started,
+                     ended    = excluded.ended,
+                     has_note = excluded.has_note,
+                     updated  = excluded.updated,
+                     size     = excluded.size",
                 params![&id, &name, started, ended, has_note, updated, size],
             )?;
 
@@ -264,12 +277,18 @@ impl Index {
                 }
             }
 
-            // FTS5 has no upsert, so the old row goes first — the same dance
-            // `Index::upsert` does for `pages_fts`.
-            transaction.execute("delete from times_fts where id = ?1", params![&id])?;
+            // FTS5 has no upsert, so the old row goes first — by rowid, and for
+            // the reason spelled out in `Index::upsert`: `id` is an unindexed
+            // column, so deleting by it scans the whole table.
+            let rowid: i64 = transaction.query_row(
+                "select rowid from times where id = ?1",
+                params![&id],
+                |row| row.get(0),
+            )?;
+            transaction.execute("delete from times_fts where rowid = ?1", params![rowid])?;
             transaction.execute(
-                "insert into times_fts (id, name, note) values (?1, ?2, ?3)",
-                params![&id, &name, &note],
+                "insert into times_fts (rowid, id, name, note) values (?1, ?2, ?3, ?4)",
+                params![rowid, &id, &name, &note],
             )?;
 
             transaction.commit()?;
@@ -283,8 +302,19 @@ impl Index {
 
         self.with_connection(move |connection| {
             let transaction = connection.transaction()?;
+
+            // Read the rowid before the row holding it goes; absent is ordinary,
+            // as it is for a page.
+            let rowid: Option<i64> = transaction
+                .query_row("select rowid from times where id = ?1", params![&id], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+
             transaction.execute("delete from time_pages where time_id = ?1", params![&id])?;
-            transaction.execute("delete from times_fts where id = ?1", params![&id])?;
+            if let Some(rowid) = rowid {
+                transaction.execute("delete from times_fts where rowid = ?1", params![rowid])?;
+            }
             transaction.execute("delete from times where id = ?1", params![&id])?;
             transaction.commit()?;
             Ok(())
@@ -1210,6 +1240,32 @@ mod tests {
         assert_eq!(matching(&index, "poll loop").await.len(), 2);
         assert_eq!(matching(&index, "poll recruiters").await.len(), 0);
         assert!(matching(&index, "kubernetes").await.is_empty());
+    }
+
+    /// The log's full-text rows are keyed by rowid too, so rewriting one entry
+    /// must not take another's note out of the index. Rewriting is ordinary
+    /// here: a `PATCH`, a stop, and a hand-edited file the watcher noticed all
+    /// arrive as an upsert of a row that already exists.
+    #[tokio::test]
+    async fn rewriting_one_entry_leaves_the_others_searchable() {
+        let index = index().await;
+        seed_notes(&index).await;
+
+        for note in ["Rewritten once.\n", "Rewritten twice.\n"] {
+            index
+                .upsert_time(&noted("Deep work", "2026-08-06T11:00:00Z", note))
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(matching(&index, "lifetime").await, ["Deep work"]);
+        assert_eq!(matching(&index, "recruiters").await, ["Email"]);
+        assert_eq!(matching(&index, "reading").await, ["Reading"]);
+        assert_eq!(matching(&index, "rewritten").await.len(), 1);
+        assert!(
+            matching(&index, "knowledge").await.is_empty(),
+            "the replaced note is still searchable"
+        );
     }
 
     /// The reason this is a filter on the listing rather than its own endpoint:

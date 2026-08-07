@@ -238,7 +238,7 @@ Backend, from `backend/`:
 
 ```
 cargo run        # start the server
-cargo test       # 373 tests
+cargo test       # 376 tests
 cargo fmt
 cargo clippy
 ```
@@ -249,7 +249,7 @@ the executable, so it can be run anywhere without a `dist/` beside it. It needs
 
 ```
 cargo build --features embed-assets
-cargo test --features embed-assets    # 379 tests
+cargo test --features embed-assets    # 382 tests
 ```
 
 A directory that exists still wins, so this changes nothing when you are working
