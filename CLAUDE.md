@@ -27,6 +27,7 @@ workspace** whose members are `backend/` and `desktop/`.
 | `example-wiki/` | A small committed wiki *and time log* to run against; its `index.md` states what the dashboard should report about both |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
 | `README.md` | Setup and usage, for people who are not this file |
+| `TODO.md` | Known and not done, with why — keep it current rather than growing a second one |
 | `CLAUDE.md` | This file |
 
 **`Store`, `Index` and `TimeStore` must not appear in `desktop/`.** The app uses

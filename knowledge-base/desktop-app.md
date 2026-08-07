@@ -522,6 +522,10 @@ lifecycle is what makes it reachable later.
 
 ## Deliberately out of scope
 
+These, and the packaging work still outstanding, are tracked in
+[`TODO.md`](../TODO.md) at the repository root. The reasoning stays here; what
+is left to do is listed there.
+
 - **Authentication.** Loopback is the whole security boundary today and that is
   written into `config.rs`. A remote instance needs a token, and the config
   should have somewhere to put one before that day, but shipping a desktop app
