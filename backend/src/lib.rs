@@ -5,6 +5,7 @@
 //! reasoning, and `knowledge-base/api-design.md` for the endpoint surface.
 
 pub mod api;
+pub mod assets;
 pub mod config;
 pub mod endpoint;
 pub mod error;
@@ -20,6 +21,7 @@ pub mod watcher;
 
 pub use api::usage::UsageTally;
 pub use api::{AppState, router};
+pub use assets::Assets;
 pub use config::{Config, Listen};
 pub use endpoint::Endpoint;
 pub use error::{AppError, AppResult};

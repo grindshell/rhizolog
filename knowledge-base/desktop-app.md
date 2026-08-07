@@ -229,9 +229,8 @@ is: a wiki kept in git must not have the whole directory ignored.
 
 ## The frontend ships inside the binary
 
-`AppState.assets` is an `Option<PathBuf>` served by `ServeDir`
-([`api/mod.rs:173`](../backend/src/api/mod.rs)). A portable single file cannot
-point at a directory that travels separately, so it becomes:
+A portable single file cannot point at a directory that travels separately, so
+`AppState.assets` is no longer an `Option<PathBuf>`:
 
 ```rust
 pub enum Assets { Dir(PathBuf), Embedded, None }
@@ -241,13 +240,26 @@ pub enum Assets { Dir(PathBuf), Embedded, None }
 feature on the library that `desktop/` turns on. That is a narrow feature — one
 small dependency and a build-time requirement that `frontend/dist` exists — not
 a gate on an entire GUI stack, which is the crate split paying for itself a
-second time.
+second time. It is off by default, so `cargo build` does not quietly acquire
+`pnpm build` as a prerequisite.
 
-`Dir` stays exactly as it is, so `pnpm dev`'s proxy loop and `RHIZOLOG_ASSETS`
-are untouched, and `None` keeps its current meaning and its message in
-`missing_route`. A headless `rhizolog` therefore still serves a built frontend
-from disk if pointed at one — the split is about what must compile, not about
-withdrawing the UI from the server.
+`Dir` stays exactly as it was, so `pnpm dev`'s proxy loop and `RHIZOLOG_ASSETS`
+are untouched, and `None` keeps its meaning and its message. A headless
+`rhizolog` therefore still serves a built frontend from disk if pointed at one —
+the split is about what must compile, not about withdrawing the UI from the
+server.
+
+**A directory that exists wins over the embedded copy.** Somebody who has
+pointed `RHIZOLOG_ASSETS` at a fresh build wants that build, not the one
+compiled in weeks ago, and the startup log says which was chosen. It also means
+the portable binary needs no special configuration: run it anywhere there is no
+`frontend/dist` and the compiled-in copy is simply what is there.
+
+**`rust-embed`'s `debug-embed` feature is on.** Without it a debug build reads
+the files from the absolute path baked in at compile time — which is exactly the
+trap `utoipa-swagger-ui` has already sprung on this project once, and it is
+worse here because a debug desktop build would look fine on the machine that
+made it. An embedded build should be embedded in both profiles.
 
 The alternative — let Tauri serve the SPA from its own asset protocol and leave
 axum with `/api` — is where local and remote quietly diverge. A remote instance
@@ -378,7 +390,10 @@ lifecycle is what makes it reachable later.
 
 - `Assets::Embedded` served through the same assertions
   `backend/tests/frontend.rs` already makes about a directory, including the SPA
-  fallback and the `/api` catch-all.
+  fallback and the `/api` catch-all. These only compile under
+  `--features embed-assets`, so a plain `cargo test` does not run them and CI
+  needs the second invocation — a feature nothing exercises is a feature that
+  breaks quietly.
 - `start` then `shutdown` round-tripping, with the usage tally flushed — the
   regression that would otherwise only show up as slowly wrong numbers in
   `/api/stats`.

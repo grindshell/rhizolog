@@ -3,6 +3,14 @@ name = "rhizolog"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+# Compile the built dashboard into the binary, for a build that has to travel
+# on its own. Requires `frontend/dist` to exist at compile time — the derive
+# reads it — so `pnpm build` has to have run. Off by default for that reason:
+# the headless server serves the directory and should not need one.
+embed-assets = ["dep:rust-embed"]
+
 [dependencies]
 anyhow = "1"
 axum = "0.8"
@@ -11,6 +19,12 @@ comrak = { version = "0.54", default-features = false }
 notify = "8"
 notify-debouncer-full = "0.7.0"
 rusqlite = { version = "0.40", features = ["bundled"] }
+# `debug-embed` deliberately: without it a debug build reads the files from the
+# absolute path baked in at compile time, which is exactly the trap
+# `utoipa-swagger-ui` has already sprung on this project once. An embedded
+# build should be embedded in both profiles or the difference will be found
+# somewhere unpleasant.
+rust-embed = { version = "8", features = ["mime-guess", "debug-embed"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"

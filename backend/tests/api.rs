@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use rhizolog::{AppState, Index, Store, TimeStore};
+use rhizolog::{AppState, Assets, Index, Store, TimeStore};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -46,7 +46,7 @@ impl App {
                 index,
                 usage: rhizolog::UsageTally::new(),
                 // API-only: the SPA fallback is covered in tests/frontend.rs.
-                assets: None,
+                assets: Assets::None,
             }),
             _directory: directory,
         }
@@ -182,7 +182,7 @@ async fn usage_counts_survive_a_restart() {
                 times,
                 index: index.clone(),
                 usage: usage.clone(),
-                assets: None,
+                assets: Assets::None,
             }),
             _directory: wiki,
         };
@@ -208,7 +208,7 @@ async fn usage_counts_survive_a_restart() {
             times,
             index,
             usage: rhizolog::UsageTally::new(),
-            assets: None,
+            assets: Assets::None,
         }),
         _directory: wiki,
     };

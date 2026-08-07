@@ -14,7 +14,6 @@
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -24,6 +23,7 @@ use tokio::task::JoinHandle;
 
 use crate::api::graph::flush_usage;
 use crate::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
+use crate::assets;
 use crate::config::Listen;
 use crate::endpoint::{self, Endpoint};
 use crate::index::sync::sync;
@@ -143,7 +143,7 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
         times,
         index,
         usage: UsageTally::new(),
-        assets: assets(&config.assets).await,
+        assets: assets::resolve(&config.assets).await,
     };
 
     let (halt, _) = watch::channel(false);
@@ -251,26 +251,6 @@ async fn reconcile(store: &Store, times: &TimeStore, index: &Index) -> anyhow::R
     }
 
     Ok(())
-}
-
-/// The built frontend to serve, if there is one.
-///
-/// A missing build is normal during frontend development, when `pnpm dev`
-/// serves the UI itself and proxies the API here.
-async fn assets(path: &Path) -> Option<PathBuf> {
-    match tokio::fs::try_exists(path).await {
-        Ok(true) => {
-            tracing::info!(path = %path.display(), "serving the built frontend");
-            Some(path.to_path_buf())
-        }
-        _ => {
-            tracing::info!(
-                path = %path.display(),
-                "no frontend build found; serving the API only"
-            );
-            None
-        }
-    }
 }
 
 async fn flush_usage_periodically(state: AppState, mut halt: watch::Receiver<bool>) {

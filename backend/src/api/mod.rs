@@ -14,8 +14,6 @@ pub mod search;
 pub mod times;
 pub mod usage;
 
-use std::path::PathBuf;
-
 use axum::Router;
 use axum::extract::Request;
 use axum::http::StatusCode;
@@ -24,6 +22,7 @@ use axum::routing::any;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
+use crate::assets::{self, Assets};
 use crate::error::AppError;
 use utoipa::OpenApi;
 use utoipa::openapi::OpenApi as OpenApiDocument;
@@ -49,8 +48,8 @@ pub struct AppState {
     pub index: Index,
     /// API calls since the last flush to the index.
     pub usage: usage::UsageTally,
-    /// The built frontend, if there is one to serve.
-    pub assets: Option<PathBuf>,
+    /// The built frontend, wherever it turned out to be.
+    pub assets: Assets,
 }
 
 #[derive(OpenApi)]
@@ -105,8 +104,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/{*rest}", any(missing_route));
 
     let router = match &state.assets {
-        Some(assets) => router.fallback_service(spa(assets)),
-        None => router.fallback(missing_route),
+        Assets::Dir(directory) => router.fallback_service(spa(directory)),
+        Assets::Embedded => router.fallback(assets::serve),
+        Assets::None => router.fallback(missing_route),
     };
 
     router
@@ -161,6 +161,14 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
     (router, api)
 }
 
+/// What to say when there is no frontend to serve.
+///
+/// Shared with [`crate::assets::serve`], which answers for the embedded case
+/// and reaches the same dead end when nothing was embedded.
+pub const NO_FRONTEND: &str = "No frontend has been built. Run `pnpm build` in frontend/, or set \
+                               RHIZOLOG_ASSETS to a built directory. The API is unaffected and is \
+                               available under /api.";
+
 /// Serve the built frontend, falling back to `index.html`.
 ///
 /// The fallback is what makes deep links work. `/pages/notes/rust/async` is a
@@ -169,7 +177,8 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
 /// navigating to it from inside the app.
 ///
 /// `ServeDir` still wins for anything that does exist, so real assets are not
-/// shadowed by the fallback.
+/// shadowed by the fallback. [`crate::assets::serve`] follows the same rule for
+/// the embedded copy, so the two are indistinguishable from outside.
 fn spa(assets: &std::path::Path) -> ServeDir<ServeFile> {
     ServeDir::new(assets).fallback(ServeFile::new(assets.join("index.html")))
 }
@@ -189,13 +198,7 @@ async fn missing_route(request: Request) -> Response {
     }
 
     // A browser route, but there is no frontend built to serve it.
-    (
-        StatusCode::NOT_FOUND,
-        "No frontend has been built. Run `pnpm build` in frontend/, or set \
-         RHIZOLOG_ASSETS to a built directory. The API is unaffected and is \
-         available under /api.",
-    )
-        .into_response()
+    (StatusCode::NOT_FOUND, NO_FRONTEND).into_response()
 }
 
 fn is_api_path(path: &str) -> bool {

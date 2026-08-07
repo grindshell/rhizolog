@@ -234,10 +234,22 @@ Backend, from `backend/`:
 
 ```
 cargo run        # start the server
-cargo test       # 336 tests
+cargo test       # 364 tests
 cargo fmt
 cargo clippy
 ```
+
+One optional feature: `--features embed-assets` compiles `frontend/dist` into
+the executable, so it can be run anywhere without a `dist/` beside it. It needs
+`pnpm build` to have happened first, and it adds six more tests:
+
+```
+cargo build --features embed-assets
+cargo test --features embed-assets    # 370 tests
+```
+
+A directory that exists still wins, so this changes nothing when you are working
+in a checkout.
 
 Frontend, from `frontend/`:
 

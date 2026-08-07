@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use rhizolog::{AppState, Index, Store, TimeStore};
+use rhizolog::{AppState, Assets, Index, Store, TimeStore};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -28,18 +28,24 @@ async fn app_with_assets() -> (TempDir, TempDir, Router) {
     )
     .expect("write bundle");
 
+    let router = app_serving(&wiki, Assets::Dir(assets.path().to_path_buf())).await;
+
+    (wiki, assets, router)
+}
+
+/// A wiki, and a router told where the dashboard is.
+async fn app_serving(wiki: &TempDir, assets: Assets) -> Router {
     let store = Store::open(wiki.path()).await.expect("open store");
     let times = TimeStore::open(wiki.path()).await.expect("open time log");
     let index = Index::open(None).await.expect("open index");
-    let router = rhizolog::router(AppState {
+
+    rhizolog::router(AppState {
         store,
         times,
         index,
         usage: rhizolog::UsageTally::new(),
-        assets: Some(assets.path().to_path_buf()),
-    });
-
-    (wiki, assets, router)
+        assets,
+    })
 }
 
 async fn get(router: &Router, path: &str) -> (StatusCode, String, Option<String>) {
@@ -245,16 +251,7 @@ async fn the_swagger_ui_link_in_the_navbar_resolves() {
 #[tokio::test]
 async fn a_missing_frontend_build_leaves_the_api_working() {
     let wiki = TempDir::new().expect("wiki dir");
-    let store = Store::open(wiki.path()).await.expect("open store");
-    let times = TimeStore::open(wiki.path()).await.expect("open time log");
-    let index = Index::open(None).await.expect("open index");
-    let router = rhizolog::router(AppState {
-        store,
-        times,
-        index,
-        usage: rhizolog::UsageTally::new(),
-        assets: None,
-    });
+    let router = app_serving(&wiki, Assets::None).await;
 
     let (status, _, _) = get(&router, "/api/health").await;
     assert_eq!(
@@ -275,4 +272,142 @@ async fn a_missing_frontend_build_leaves_the_api_working() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let json: serde_json::Value = serde_json::from_str(&body).expect("JSON");
     assert_eq!(json["error"]["code"], "route_not_found");
+}
+
+/// The same promises again, from the copy compiled into the binary.
+///
+/// A portable build serves the dashboard out of its own executable rather than
+/// a directory beside it, and the point of doing it that way is that nothing
+/// downstream can tell — so these are the directory tests over again, against
+/// the real `frontend/dist` this binary was built with.
+///
+/// Only compiled under `--features embed-assets`, because that is the only
+/// configuration in which there is anything embedded to ask about.
+#[cfg(feature = "embed-assets")]
+mod embedded {
+    use super::*;
+
+    async fn app(wiki: &TempDir) -> Router {
+        app_serving(wiki, Assets::Embedded).await
+    }
+
+    #[tokio::test]
+    async fn serves_the_app_shell_at_the_root() {
+        let wiki = TempDir::new().expect("wiki dir");
+        let router = app(&wiki).await;
+
+        let (status, body, content_type) = get(&router, "/").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("<div id=\"root\">"), "got {body}");
+        assert!(
+            content_type
+                .as_deref()
+                .is_some_and(|ct| ct.contains("html")),
+            "the shell was served as {content_type:?}"
+        );
+    }
+
+    /// Hashed bundle names change on every build, so the file to ask for is
+    /// discovered rather than written down.
+    #[tokio::test]
+    async fn serves_real_asset_files_with_their_content_types() {
+        let wiki = TempDir::new().expect("wiki dir");
+        let router = app(&wiki).await;
+
+        let paths = rhizolog::assets::embedded_paths();
+        let script = paths
+            .iter()
+            .find(|path| path.ends_with(".js"))
+            .unwrap_or_else(|| panic!("no bundle was embedded: {paths:?}"));
+
+        let (status, body, content_type) = get(&router, &format!("/{script}")).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.is_empty(), "{script} was served empty");
+        assert!(
+            content_type
+                .as_deref()
+                .is_some_and(|ct| ct.contains("javascript")),
+            "{script} was not served as JavaScript: {content_type:?}"
+        );
+    }
+
+    /// The reason `Embedded` cannot be a plain file lookup: a client route has
+    /// no file behind it, and a hard refresh has to work in the desktop app for
+    /// exactly the reason it has to work in a browser.
+    #[tokio::test]
+    async fn deep_links_fall_back_to_the_app_shell() {
+        let wiki = TempDir::new().expect("wiki dir");
+        let router = app(&wiki).await;
+
+        for path in ["/pages", "/pages/notes/rust/async", "/tags", "/times"] {
+            let (status, body, _) = get(&router, path).await;
+            assert_eq!(status, StatusCode::OK, "{path} did not fall back");
+            assert!(
+                body.contains("<div id=\"root\">"),
+                "{path} served something other than the shell"
+            );
+        }
+    }
+
+    /// The catch-all has to keep winning. An embedded SPA that swallowed
+    /// `/api/nonsense` would answer an agent's typo with a page of HTML and a
+    /// 200, which is the failure this whole arrangement exists to avoid.
+    #[tokio::test]
+    async fn unknown_api_routes_still_return_the_error_envelope() {
+        let wiki = TempDir::new().expect("wiki dir");
+        let router = app(&wiki).await;
+
+        for path in ["/api/nonsense", "/api/nope/deeper/still", "/api"] {
+            let (status, body, content_type) = get(&router, path).await;
+
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path} was not a 404");
+            assert!(
+                content_type
+                    .as_deref()
+                    .is_some_and(|ct| ct.contains("json")),
+                "{path} answered with {content_type:?}, not JSON"
+            );
+
+            let json: serde_json::Value = serde_json::from_str(&body)
+                .unwrap_or_else(|_| panic!("{path} did not return JSON: {body}"));
+            assert_eq!(json["error"]["code"], "route_not_found", "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_real_endpoints_and_the_spec_are_not_shadowed() {
+        let wiki = TempDir::new().expect("wiki dir");
+        let router = app(&wiki).await;
+
+        for path in ["/api/health", "/api/pages", "/api-docs/openapi.json"] {
+            let (status, _, content_type) = get(&router, path).await;
+            assert_eq!(status, StatusCode::OK, "{path} was shadowed");
+            assert!(
+                content_type
+                    .as_deref()
+                    .is_some_and(|ct| ct.contains("json")),
+                "{path} answered with {content_type:?}"
+            );
+        }
+    }
+
+    /// Swagger UI is embedded by a different crate with its own opinions about
+    /// compile-time paths, and it has gone missing here before. A build that
+    /// carries the dashboard should carry the manual too.
+    #[tokio::test]
+    async fn swagger_ui_survives_the_embedded_fallback() {
+        let wiki = TempDir::new().expect("wiki dir");
+        let router = app(&wiki).await;
+
+        let (status, bundle, _) = get(&router, "/swagger-ui/swagger-ui-bundle.js").await;
+
+        assert_eq!(status, StatusCode::OK, "the Swagger UI bundle is missing");
+        assert!(
+            bundle.len() > 100_000,
+            "the bundle is suspiciously small at {} bytes",
+            bundle.len()
+        );
+    }
 }

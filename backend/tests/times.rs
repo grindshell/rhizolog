@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use rhizolog::{AppState, Index, Store, TimeStore};
+use rhizolog::{AppState, Assets, Index, Store, TimeStore};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -44,7 +44,7 @@ impl App {
                 times,
                 index,
                 usage: rhizolog::UsageTally::new(),
-                assets: None,
+                assets: Assets::None,
             }),
             directory,
         }

@@ -70,3 +70,20 @@ particularly confusing thing to do to an agent.
 `RHIZOLOG_ASSETS` overrides the directory. A missing build is not an error:
 during frontend work `pnpm dev` serves the UI and proxies `/api`,
 `/api-docs`, and `/swagger-ui` to the backend.
+
+### The dashboard can also live inside the binary
+
+`assets::Assets` is `Dir`, `Embedded` or `None`. The middle one is the
+`embed-assets` cargo feature: `rust-embed` compiles `frontend/dist` into the
+executable, so a build that has to travel on its own has no directory to lose.
+It is off by default, because it makes `pnpm build` a prerequisite of `cargo
+build` and the headless server has a directory to point at.
+
+A directory that exists wins over the embedded copy, so a developer pointing
+`RHIZOLOG_ASSETS` at a fresh build gets the fresh build rather than whatever was
+compiled in. The startup log says which was chosen.
+
+The two are meant to be indistinguishable from outside — same SPA fallback, same
+`/api` catch-all — and `tests/frontend.rs` runs the same assertions against
+both. See [The desktop app](desktop-app.md) for why the server keeps serving the
+UI at all rather than handing that job to a native shell.
