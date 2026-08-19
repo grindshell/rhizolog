@@ -86,7 +86,14 @@ export default function Dashboard() {
               <div class="stat-title">Tracked</div>
               <div class="stat-value text-2xl">{server.times}</div>
               <div class="stat-desc">
-                {server.running_timers > 0
+                {/*
+                  `/api/health` withholds its counts from a caller that has not
+                  signed in, so these are optional on the wire. This screen is
+                  behind the session gate and never sees that case — but the
+                  type is right to insist, and the fallback is the honest one
+                  rather than a `!`.
+                */}
+                {(server.running_timers ?? 0) > 0
                   ? `${server.running_timers} running`
                   : 'time entries'}
               </div>

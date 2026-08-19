@@ -18,9 +18,11 @@ What makes it different from the wikis you already know:
   the routes, so it cannot drift from them. Errors are uniform and carry stable
   machine-readable codes. The dashboard is the API's first client, not its
   privileged one.
-- **Single user.** No accounts, no roles, no tenancy. It binds to loopback and
-  it has no authentication, deliberately — this is a developer tool for
-  managing a knowledge base, not a public wiki engine.
+- **Single user by default.** A wiki with no accounts is open: it binds to
+  loopback, asks nobody to sign in, and refuses nothing. Creating an account is
+  what turns authentication on, which is how you serve one over a network. This
+  is a developer tool for managing a knowledge base, not a public wiki engine —
+  a handful of named accounts, not registration and moderation.
 - **It tracks time, too.** Timers you can start and stop, entries you can type
   in after the fact, and a note on any of them. Attach an entry to the pages it
   was spent on and the dashboard will tell you where the hours went. Entries
@@ -173,16 +175,56 @@ All optional, all environment variables.
 | `RHIZOLOG_ROOT` | `./wiki` | The wiki directory. Created if missing. |
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | The derived index. Safe to delete. |
 | — | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
+| — | `<root>/.rhizolog/users/` | Accounts. **Not** derived, and secret; back it up, don't commit it. |
 | — | `<root>/.rhizolog/server.json` | Where the running server is. Gone when it stops. |
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Where to listen. |
 | `RHIZOLOG_ASSETS` | `../frontend/dist` | The built dashboard. Missing is fine. |
 | `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter. |
+| `RHIZOLOG_SECURE_COOKIES` | off | Mark the session cookie `Secure`. Set it behind a TLS proxy. |
 
 Defaults are relative to the working directory, which is assumed to be
 `backend/`.
 
-Think before changing `RHIZOLOG_ADDR`. There is no authentication, and the API
-writes files.
+Think before changing `RHIZOLOG_ADDR`. **A wiki with no accounts is open**, and
+the API writes files — so binding anything but loopback means anybody who can
+reach the port can read and write every page. The server says so at startup, in
+a warning it is worth not ignoring.
+
+## Accounts
+
+A fresh wiki has none, and behaves exactly as it always did: no login page,
+nothing refused, every request treated as the one user. That is the intended
+state for a wiki on your own machine, and for the desktop app.
+
+**Creating the first account is what turns authentication on.** Go to
+`/accounts` in the dashboard and fill in the form, or:
+
+```powershell
+$body = '{"username":"tim","password":"correct horse battery staple"}'
+Invoke-RestMethod -Uri http://127.0.0.1:3000/api/users -Method Post -ContentType application/json -Body $body
+```
+
+Anybody may create that first account, because until it exists the wiki is
+already fully readable and writable by anybody who can reach it. Every account
+after it needs an owner, and the first one is always an owner.
+
+From then on every `/api` request has to say who it is. Signing in gives you
+both a cookie, which the dashboard uses, and a token for everything else:
+
+```powershell
+$login = Invoke-RestMethod -Uri http://127.0.0.1:3000/api/auth/login -Method Post -ContentType application/json -Body $body
+Invoke-RestMethod -Uri http://127.0.0.1:3000/api/pages -Headers @{ Authorization = "Bearer $($login.token)" }
+```
+
+Accounts are files under `.rhizolog/users/`, one per account, holding an Argon2
+hash of the password. Back that directory up — there is no other copy — and keep
+it out of git, which the repository's `.gitignore` already does.
+
+Serving over a network in earnest wants TLS in front and
+`RHIZOLOG_SECURE_COOKIES=1` with it; without that, passwords cross the network
+in the clear. There is no rate limiting on sign-in yet, and **pages cannot yet
+be marked private** — every signed-in account can see the whole wiki. Both are
+in [`TODO.md`](TODO.md).
 
 ### Finding a running server
 
@@ -302,8 +344,11 @@ than start somewhere you were not expecting. Saving restarts the app on the new
 port; it reopens the same wiki. `RHIZOLOG_ADDR` overrides it, and the window
 says so instead of leaving a box that does nothing.
 
-Only the port, deliberately. Rhizolog binds loopback and there is no
-authentication, so the host is not something the app offers to change.
+Only the port, deliberately. The app is for a wiki on this machine, so it binds
+loopback and does not offer to change the host — a box that accepts `0.0.0.0`
+would put a wiki on the network by typing, which is a decision for a shell and a
+firewall rather than a settings field. Serving one to other people is what
+`RHIZOLOG_ADDR` and an account are for.
 
 The same window names the **log folder** and opens it. A window has no console
 to print to, so that file is the app's only account of itself and the first
@@ -377,16 +422,22 @@ was taken to mean concretely.
 The MVP is complete: pages, search, tags, the link graph, meta-stats, live
 pickup of outside edits, and a dashboard you can write in. Since then: pinned
 pages, time tracking end to end (timers, manual entries, notes, groups, search
-over the log, and the statistics section), the drawn graph, and the desktop app
-described above.
+over the log, and the statistics section), the drawn graph, the desktop app
+described above, and accounts.
+
+Accounts are half a feature, and the half that is missing is the interesting
+one: signing in works, but **a page cannot yet be marked private**, so every
+signed-in account sees the whole wiki. Serving one over a network is therefore
+useful for people you would have given the whole wiki to anyway, and not yet for
+anything else.
 
 The desktop app runs and is not yet a download — real icons, a check for a
 missing WebView2 runtime, and code signing are what stand between the two.
 [`TODO.md`](TODO.md) has that list and the rest of what is known and not done,
 each entry with the reason it is not done.
 
-Not implemented, on purpose: page history and diffs, authentication, anything
-multi-user, link rewriting on move, file attachments, and transclusion.
+Not implemented, on purpose: page history and diffs, link rewriting on move,
+file attachments, and transclusion.
 
 ## Licence
 

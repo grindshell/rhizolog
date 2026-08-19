@@ -260,6 +260,72 @@ async fn reconcile(store: &Store, times: &TimeStore, index: &Index) -> anyhow::R
     Ok(())
 }
 
+/// What this server will answer to, and whether that is alarming.
+///
+/// Separated from the logging so it can be tested. The alarming combination is
+/// the one nobody assembles on purpose: it takes an address set in one place and
+/// an account never created in another, and those two acts are far enough apart
+/// in time that startup is the only moment they meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Access {
+    /// No accounts, bound to loopback. The ordinary local wiki.
+    Open,
+    /// No accounts, reachable from the network. Anybody who can find it can
+    /// read and write every page in it.
+    OpenToTheNetwork,
+    /// Accounts, and either loopback or TLS in front.
+    Authenticated,
+    /// Accounts, off loopback, over plain HTTP — so passwords and session
+    /// tokens cross the network in the clear.
+    AuthenticatedInTheClear,
+}
+
+impl Access {
+    pub(crate) fn of(accounts: usize, config: &Config) -> Self {
+        let exposed = !config.listen.preferred().ip().is_loopback();
+
+        match (accounts > 0, exposed) {
+            (false, false) => Self::Open,
+            (false, true) => Self::OpenToTheNetwork,
+            // `secure_cookies` is the closest thing the server has to being told
+            // there is TLS in front of it. It is not proof, but somebody who set
+            // it has thought about the question, and warning them anyway would
+            // train them to ignore the line.
+            (true, true) if !config.secure_cookies => Self::AuthenticatedInTheClear,
+            (true, _) => Self::Authenticated,
+        }
+    }
+
+    /// The line worth logging on every start.
+    pub(crate) fn summary(self) -> &'static str {
+        match self {
+            Self::Open | Self::OpenToTheNetwork => {
+                "this wiki has no accounts; every request is the single user"
+            }
+            Self::Authenticated | Self::AuthenticatedInTheClear => {
+                "this wiki requires authentication"
+            }
+        }
+    }
+
+    /// What to say loudly, when there is anything.
+    pub(crate) fn warning(self) -> Option<&'static str> {
+        match self {
+            Self::Open | Self::Authenticated => None,
+            Self::OpenToTheNetwork => Some(
+                "this wiki has no accounts and is not bound to loopback: anybody who can reach \
+                 this address can read and write every page. Create an account to require a \
+                 sign-in.",
+            ),
+            Self::AuthenticatedInTheClear => Some(
+                "serving off loopback over plain HTTP: passwords and session tokens cross the \
+                 network in the clear. Put a TLS proxy in front and set \
+                 RHIZOLOG_SECURE_COOKIES=1.",
+            ),
+        }
+    }
+}
+
 /// Say, once, who this server will answer to.
 ///
 /// Worth a line in the log on every start, because the answer is a property of
@@ -267,40 +333,20 @@ async fn reconcile(store: &Store, times: &TimeStore, index: &Index) -> anyhow::R
 /// no flag to read back, and "does this instance require a sign-in" is otherwise
 /// only discoverable by trying it.
 ///
-/// The warning is the point. An address that is not loopback puts the API on a
-/// network, and with no accounts that API reads and writes files for anybody who
-/// can reach the port. It is a warning rather than a refusal because a
-/// deliberately open instance behind a firewall is a legitimate thing to run —
-/// but nobody should arrive at one by accident, and the two ways to get there
-/// (setting an address, and never creating an account) are far enough apart in
-/// time that this is the only place they meet.
+/// The warnings stay warnings rather than refusals: a deliberately open instance
+/// behind a firewall is a legitimate thing to run. Nobody should arrive at one by
+/// accident, which is a different problem and the one a log line solves.
 async fn announce_access(users: &UserStore, config: &Config) -> anyhow::Result<()> {
     let accounts = users
         .count()
         .await
         .context("counting the accounts in the wiki")?;
 
-    if accounts > 0 {
-        tracing::info!(accounts, "this wiki requires authentication");
+    let access = Access::of(accounts, config);
+    tracing::info!(accounts, "{}", access.summary());
 
-        if !config.secure_cookies && !config.listen.preferred().ip().is_loopback() {
-            tracing::warn!(
-                "serving off loopback over plain HTTP: passwords and session tokens cross the \
-                 network in the clear. Put a TLS proxy in front and set RHIZOLOG_SECURE_COOKIES=1."
-            );
-        }
-
-        return Ok(());
-    }
-
-    tracing::info!("this wiki has no accounts; every request is the single user");
-
-    if !config.listen.preferred().ip().is_loopback() {
-        tracing::warn!(
-            address = %config.listen.preferred(),
-            "this wiki has no accounts and is not bound to loopback: anybody who can reach this \
-             address can read and write every page. Create an account to require a sign-in."
-        );
+    if let Some(warning) = access.warning() {
+        tracing::warn!(address = %config.listen.preferred(), "{warning}");
     }
 
     Ok(())
@@ -316,5 +362,86 @@ async fn flush_usage_periodically(state: AppState, mut halt: watch::Receiver<boo
             _ = ticker.tick() => flush_usage(&state.index, &state.usage).await,
             _ = halt.changed() => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::path::PathBuf;
+
+    fn config(address: &str, secure_cookies: bool) -> Config {
+        Config {
+            root: PathBuf::from("/wiki"),
+            database: PathBuf::from("/wiki/.rhizolog/index.db"),
+            listen: Listen::Exactly(address.parse().expect("an address")),
+            assets: PathBuf::from("/wiki/dist"),
+            secure_cookies,
+        }
+    }
+
+    /// The default, and the state the desktop app spends its life in.
+    #[test]
+    fn no_accounts_on_loopback_is_the_ordinary_wiki() {
+        let access = Access::of(0, &config("127.0.0.1:3000", false));
+
+        assert_eq!(access, Access::Open);
+        assert_eq!(access.warning(), None);
+    }
+
+    /// The combination nobody assembles on purpose: an unauthenticated API that
+    /// writes files, reachable from the network.
+    #[test]
+    fn no_accounts_off_loopback_is_the_one_worth_shouting_about() {
+        for address in ["0.0.0.0:3000", "192.168.1.10:3000", "[::]:3000"] {
+            let access = Access::of(0, &config(address, false));
+
+            assert_eq!(access, Access::OpenToTheNetwork, "for {address}");
+            assert!(access.warning().is_some(), "for {address}");
+        }
+    }
+
+    /// Secure cookies do not make an open wiki safe. There is nothing to
+    /// protect a session for when there are no sessions.
+    #[test]
+    fn tls_does_not_excuse_an_open_wiki() {
+        assert_eq!(
+            Access::of(0, &config("0.0.0.0:3000", true)),
+            Access::OpenToTheNetwork
+        );
+    }
+
+    #[test]
+    fn accounts_on_loopback_are_quiet() {
+        let access = Access::of(1, &config("127.0.0.1:3000", false));
+
+        assert_eq!(access, Access::Authenticated);
+        assert_eq!(access.warning(), None);
+    }
+
+    /// Passwords and session tokens crossing a network in the clear.
+    #[test]
+    fn accounts_off_loopback_over_plain_http_is_alarming() {
+        let access = Access::of(2, &config("0.0.0.0:3000", false));
+
+        assert_eq!(access, Access::AuthenticatedInTheClear);
+        assert!(access.warning().is_some());
+    }
+
+    /// Somebody who set the flag has thought about the question. Warning anyway
+    /// would train them to ignore the line.
+    #[test]
+    fn saying_there_is_tls_in_front_settles_it() {
+        let access = Access::of(2, &config("0.0.0.0:3000", true));
+
+        assert_eq!(access, Access::Authenticated);
+        assert_eq!(access.warning(), None);
+    }
+
+    /// IPv6 loopback is loopback.
+    #[test]
+    fn ipv6_loopback_counts_as_loopback() {
+        assert_eq!(Access::of(0, &config("[::1]:3000", false)), Access::Open);
     }
 }

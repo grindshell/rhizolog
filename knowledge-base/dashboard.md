@@ -15,14 +15,63 @@ Setup and versions live in [Tech stack](tech-stack.md).
 | `/tags` | Every tag, linking into the filtered listing |
 | `/graph` | The link graph, drawn; narrowed by `?root=`, `?depth=`, `?prefix=`, `?tag=`, `?wanted=` |
 | `/times` | The time log: running timers, entries, groups; narrowed by `?q=`, `?name=`, `?page=` |
+| `/accounts` | Accounts, and — on a wiki that has none — the form that creates the first |
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
+
+There is deliberately no `/login`. See below.
 
 There is deliberately no `/times/:id`. An id is a machine's handle — unlike a
 slug it is not something anyone would link to — so an entry is read and edited
 in the log itself.
 
-The app shell carries two dropdowns that are not navigation. **Pins** is
+## Signing in is not a route
+
+`SessionGate` wraps the router rather than living inside it, and swaps the whole
+app for a sign-in form when the session says to. There is no `/login` and
+nothing redirects.
+
+The reason is that in this app **an address is a page**. A link to
+`/pages/notes/rust/async` sent to somebody who is not signed in should still
+open that page once they are, and a redirect to `/login` throws that away — it
+has to be stashed somewhere and put back, which is a small amount of state that
+is wrong exactly when it matters. Rendering the form in place leaves the URL
+untouched, so signing in re-renders the router at the address the browser is
+already on and there is nothing to restore.
+
+It costs one thing: the gate cannot use anything router-shaped, since it sits
+outside the `Router`. That is fine — its whole body is one three-way switch, and
+the three cases are worth naming:
+
+- **Still asking.** A spinner, and nothing else. Guessing "open" flashes the
+  dashboard at somebody who is not signed in; guessing "signed out" flashes a
+  login page at the single user of an open wiki. Both last one round trip and
+  both look like a bug.
+- **Unreachable.** The error, not the form. A server that is not answering is
+  not a sign-in problem, and a login nobody can complete is a worse answer than
+  saying what is wrong.
+- **Answered.** The form, or the app.
+
+On a wiki with no accounts only the last case is ever reached and the login page
+is never built. See [Accounts](accounts.md).
+
+### A session can end without this tab doing anything
+
+It expires, an owner deletes the account, or a password change elsewhere ends
+every session it had. The first sign of any of those is a `401` on an ordinary
+request, so `client.ts` calls a handler on exactly that — `unauthorized`, and
+not `forbidden`, which says the session is fine and the account is not allowed,
+and not `invalid_credentials`, which is a failed sign-in the form should keep
+its message about.
+
+The handler is registered once at module load rather than per component. One
+that came and went with a mounted route would miss the requests made while
+navigating, which is most of them.
+
+The app shell carries three dropdowns that are not navigation. **Accounts**
+renders nothing at all on a wiki with no accounts — that is the point rather
+than an edge case, since the single-user local dashboard should not grow a menu
+telling it that it is signed in as nobody. **Pins** is
 described in [Pins](pins.md). **Timers** sits before it and shows the
 longest-running timer's clock rather than a count, because a count tells you
 something is running and a clock tells you whether it should be; a pin left in

@@ -1,5 +1,6 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { A } from '@solidjs/router'
+import AccountMenu from './AccountMenu'
 import PinsMenu from './PinsMenu'
 import TimerMenu from './TimerMenu'
 
@@ -52,6 +53,12 @@ export default function Layout(props: RouteSectionProps) {
           <A class="btn btn-primary btn-sm" href="/new">
             New
           </A>
+          {/*
+            Renders nothing on a wiki with no accounts, which is the ordinary
+            local case — so the single-user dashboard does not grow a menu
+            telling it that it is nobody.
+          */}
+          <AccountMenu />
         </nav>
       </div>
 

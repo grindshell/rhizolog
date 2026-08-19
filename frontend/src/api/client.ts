@@ -56,6 +56,16 @@ export type ReindexResponse = Schemas['ReindexResponse']
 export type Health = Schemas['Health']
 export type ErrorResponse = Schemas['ErrorResponse']
 export type ErrorDetail = Schemas['ErrorDetail']
+export type Username = Schemas['Username']
+export type Role = Schemas['Role']
+export type UserView = Schemas['UserView']
+export type UsersResponse = Schemas['UsersResponse']
+export type CreateUser = Schemas['CreateUser']
+export type PatchUser = Schemas['PatchUser']
+export type PatchUserResponse = Schemas['PatchUserResponse']
+export type LoginRequest = Schemas['LoginRequest']
+export type LoginResponse = Schemas['LoginResponse']
+export type SessionStatus = Schemas['SessionStatus']
 
 /** Query parameters, taken straight from the generated operations. */
 export type ListPagesQuery = NonNullable<operations['list']['parameters']['query']>
@@ -94,6 +104,37 @@ export class ApiError extends Error {
   get isTransport(): boolean {
     return this.code === 'network_error' || this.code === 'malformed_error_response'
   }
+}
+
+/**
+ * Called whenever the server says this request had no valid session.
+ *
+ * A session can end without this tab doing anything: it expires, an owner
+ * deletes the account, or a password change elsewhere ends every session it had.
+ * The first sign of any of those is a `401` on an ordinary request, and the app
+ * has to turn back into a login page rather than showing a wall of error
+ * notices.
+ *
+ * A callback rather than an import of the session store, because that store is
+ * built on the functions in this file and the cycle would be real.
+ */
+let unauthorizedHandler: (() => void) | undefined
+
+export function onUnauthorized(handler: () => void): void {
+  unauthorizedHandler = handler
+}
+
+/**
+ * Whether a failure means "you are not signed in".
+ *
+ * Two codes are deliberately not here. `forbidden` (403) says the session is
+ * perfectly good and the account is not allowed, so signing out in response
+ * would be both wrong and infuriating. `invalid_credentials` (401) is a failed
+ * sign-in, where the form should keep its message rather than reset the state it
+ * is already in.
+ */
+function isSignedOut(status: number, code: string): boolean {
+  return status === 401 && code === 'unauthorized'
 }
 
 function isErrorResponse(value: unknown): value is ErrorResponse {
@@ -243,6 +284,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     }
     if (isErrorResponse(payload)) {
       const { code, message, details } = payload.error
+      // Told before the error is thrown, so the app is already showing a login
+      // page by the time whoever called this decides what to do about it.
+      if (isSignedOut(response.status, code)) {
+        unauthorizedHandler?.()
+      }
       throw new ApiError(code, message, response.status, details)
     }
     throw new ApiError(
@@ -500,6 +546,87 @@ export function timeStats(
 ): Promise<TimeStatsResponse> {
   return request<TimeStatsResponse>('/time-stats', {
     query: { offset: utcOffsetMinutes(), ...query },
+    signal,
+  })
+}
+
+/* -------------------------------------------------------------- accounts -- */
+
+/**
+ * `GET /api/auth/session` — does this wiki want a sign-in, and is this browser
+ * signed in?
+ *
+ * The first call the app makes, and the one endpoint that never returns 401:
+ * a refusal here would be indistinguishable from the session having just
+ * expired, which is the thing being asked about.
+ *
+ * `authentication_required: false` is a wiki with no accounts. There is no login
+ * page in that case and nothing is refused — see `knowledge-base/accounts.md`.
+ */
+export function session(signal?: AbortSignal): Promise<SessionStatus> {
+  return request<SessionStatus>('/auth/session', { signal })
+}
+
+/**
+ * `POST /api/auth/login` — sign in.
+ *
+ * The browser never touches the `token` in the response. The same session
+ * arrives as an `HttpOnly` cookie the browser attaches by itself, and that
+ * cookie is deliberately unreadable from JavaScript: this app renders markdown
+ * somebody else may have written. The token field is there for scripts and
+ * agents, which cannot use a cookie jar.
+ *
+ * `401` (`invalid_credentials`) covers both a wrong password and an account that
+ * does not exist, on purpose.
+ */
+export function login(body: LoginRequest, signal?: AbortSignal): Promise<LoginResponse> {
+  return request<LoginResponse>('/auth/login', { method: 'POST', body, signal })
+}
+
+/** `POST /api/auth/logout` — end this session. `204` even if there was none. */
+export function logout(signal?: AbortSignal): Promise<void> {
+  return request<void>('/auth/logout', { method: 'POST', signal })
+}
+
+/** `GET /api/users` — every account. Any signed-in account may ask. */
+export function listUsers(signal?: AbortSignal): Promise<UsersResponse> {
+  return request<UsersResponse>('/users', { signal })
+}
+
+/**
+ * `POST /api/users` — create an account.
+ *
+ * Needs no credentials for the **first** account on a wiki, which is what turns
+ * authentication on; every one after that needs an owner. The first account is
+ * an owner whatever this asks for.
+ */
+export function createUser(body: CreateUser, signal?: AbortSignal): Promise<UserView> {
+  return request<UserView>('/users', { method: 'POST', body, signal })
+}
+
+/**
+ * `PATCH /api/users/{username}` — merge only the fields present.
+ *
+ * Sending a `password` ends every session that account has, **including this
+ * one**. `sessions_ended` in the response says how many, and the caller has to
+ * sign in again.
+ */
+export function patchUser(
+  username: string,
+  body: PatchUser,
+  signal?: AbortSignal,
+): Promise<PatchUserResponse> {
+  return request<PatchUserResponse>(`/users/${encodeURIComponent(username)}`, {
+    method: 'PATCH',
+    body,
+    signal,
+  })
+}
+
+/** `DELETE /api/users/{username}` — 204, or 409 (`last_owner`). */
+export function deleteUser(username: string, signal?: AbortSignal): Promise<void> {
+  return request<void>(`/users/${encodeURIComponent(username)}`, {
+    method: 'DELETE',
     signal,
   })
 }
