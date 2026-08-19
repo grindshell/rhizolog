@@ -21,12 +21,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod settings;
+mod settings_window;
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rhizolog::{Config, Fallbacks, Server};
+use rhizolog::config::DEFAULT_ADDRESS;
+use rhizolog::{Config, Fallbacks, Listen, Server};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::webview::{NewWindowFeatures, NewWindowResponse};
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, Wry};
@@ -42,6 +45,9 @@ struct Running(Mutex<Option<Server>>);
 /// The id of the menu item that changes which wiki is open.
 const OPEN_WIKI: &str = "open-wiki";
 
+/// The id of the menu item that opens the settings window.
+const SETTINGS: &str = "settings";
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -55,12 +61,23 @@ fn main() {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        // The settings window's own page, which is the shell's and not the
+        // wiki's. A scheme rather than a route on the server: the dashboard has
+        // to be the same page a browser loads from a remote instance, and this
+        // is a control only a local app can honour.
+        .register_uri_scheme_protocol(settings_window::SCHEME, |context, request| {
+            settings_window::respond(context.app_handle(), context.webview_label(), &request)
+        })
         .manage(Running::default())
         .on_menu_event(|handle, event| {
             if event.id() == OPEN_WIKI {
                 let handle = handle.clone();
                 // The picker blocks, and this runs on the main thread.
                 tauri::async_runtime::spawn(async move { open_another_wiki(handle).await });
+            } else if event.id() == SETTINGS
+                && let Err(error) = settings_window::open(handle)
+            {
+                tracing::error!(%error, "could not open the settings window");
             }
         })
         .setup(|app| {
@@ -122,13 +139,18 @@ async fn launch(handle: AppHandle) {
 }
 
 async fn start(handle: &AppHandle) -> anyhow::Result<()> {
+    // Read once, and before the wiki question: the port is remembered whether
+    // or not `RHIZOLOG_ROOT` answered that one, and the two settings have
+    // nothing to do with each other.
+    let stored = settings::load(handle);
+
     // `RHIZOLOG_ROOT` decides on its own when it is set, so there is nothing to
     // remember and nobody to ask — that is how the app gets pointed at a
     // scratch wiki without disturbing whatever it normally opens.
     let mut fallback_root = if environment_names_a_wiki() {
         None
     } else {
-        match remembered_or_chosen(handle).await? {
+        match remembered_or_chosen(handle, &stored).await? {
             Some(root) => Some(root),
             // The picker was declined. Nothing to open, and nothing that needs
             // explaining in a dialog: they were asked, and they said no.
@@ -144,11 +166,11 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
     // different wikis is a perfectly reasonable thing to want, and two on the
     // same one means two writers on an index, two file watchers, and an
     // endpoint file that can only describe the newer of them.
-    let config = loop {
+    let mut config = loop {
         let config = Config::resolve(Fallbacks {
             root: fallback_root.clone(),
             assets: beside_executable("dist"),
-            ..Fallbacks::default()
+            listen: listen_for(stored.port),
         })?;
 
         let Some(existing) = rhizolog::endpoint::live(&config.root).await else {
@@ -170,7 +192,26 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
         fallback_root = Some(instead);
     };
 
-    let server = rhizolog::server::start(&config).await?;
+    let server = match rhizolog::server::start(&config).await {
+        Ok(server) => server,
+        // A port somebody chose in the settings window is `Exactly`, so a
+        // machine that has since acquired something else on it is an app that
+        // will not start — every launch, with no way in to change the setting,
+        // because the way in is a menu on a window that never appears.
+        Err(error) if a_chosen_port_is_taken(&config, &error) => {
+            tracing::warn!("{error:#}");
+
+            if !offer_an_automatic_port(handle, config.listen.preferred().port()).await {
+                handle.exit(0);
+                return Ok(());
+            }
+
+            forget_the_port(handle)?;
+            config.listen = Listen::Preferably(DEFAULT_ADDRESS);
+            rhizolog::server::start(&config).await?
+        }
+        Err(error) => return Err(error),
+    };
 
     // The address is only knowable after the bind, which is why the window is
     // built here rather than declared in `tauri.conf.json`.
@@ -197,9 +238,10 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
 /// Which wiki to open: what was chosen last time, or ask.
 ///
 /// `None` means the picker was declined.
-async fn remembered_or_chosen(handle: &AppHandle) -> anyhow::Result<Option<PathBuf>> {
-    let stored = settings::load(handle);
-
+async fn remembered_or_chosen(
+    handle: &AppHandle,
+    stored: &settings::Settings,
+) -> anyhow::Result<Option<PathBuf>> {
     if let Some(root) = &stored.wiki_root {
         if root.is_dir() {
             return Ok(Some(root.clone()));
@@ -272,6 +314,66 @@ async fn already_open(
 fn remember(handle: &AppHandle, root: &Path) -> anyhow::Result<()> {
     let mut stored = settings::load(handle);
     stored.wiki_root = Some(root.to_path_buf());
+    settings::save(handle, &stored)
+}
+
+/// What to bind, for whatever the environment did not say.
+///
+/// A port from the settings window is [`Listen::Exactly`], for the same reason
+/// `RHIZOLOG_ADDR` is: somebody who chose a port chose it *for* something —
+/// a bookmark, a proxy, an agent's configuration — and a server that quietly
+/// started somewhere else would point that something at nothing. `None` is the
+/// ordinary case and stays a preference.
+///
+/// Only the port is theirs to choose. Loopback is the entire security boundary,
+/// and it is also what keeps a wiki from asking for a firewall exception the
+/// first time it runs.
+fn listen_for(port: Option<u16>) -> Listen {
+    match port {
+        Some(port) => Listen::Exactly(SocketAddr::new(DEFAULT_ADDRESS.ip(), port)),
+        None => Listen::Preferably(DEFAULT_ADDRESS),
+    }
+}
+
+/// Whether this is a port the app chose and could stop choosing.
+///
+/// `RHIZOLOG_ADDR` produces the same [`Listen::Exactly`] and is not the app's
+/// to withdraw: somebody set it deliberately, in a shell, and the right answer
+/// there is the error.
+fn a_chosen_port_is_taken(config: &Config, error: &anyhow::Error) -> bool {
+    matches!(config.listen, Listen::Exactly(_))
+        && !environment_names_an_address()
+        && error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::AddrInUse)
+        })
+}
+
+/// Offer to stop insisting on a port that is not available.
+///
+/// `true` to carry on with a negotiated one.
+async fn offer_an_automatic_port(handle: &AppHandle, port: u16) -> bool {
+    handle
+        .dialog()
+        .message(format!(
+            "Rhizolog is set to serve on port {port}, and something else on this machine is \
+             already using it.\n\nRhizolog can forget that setting and take any free port \
+             instead."
+        ))
+        .kind(MessageDialogKind::Warning)
+        .title("Rhizolog")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Use any free port".to_owned(),
+            "Quit".to_owned(),
+        ))
+        .blocking_show()
+}
+
+/// Stop asking for a particular port.
+fn forget_the_port(handle: &AppHandle) -> anyhow::Result<()> {
+    let mut stored = settings::load(handle);
+    stored.port = None;
     settings::save(handle, &stored)
 }
 
@@ -471,8 +573,13 @@ fn menu(handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         !environment_names_a_wiki(),
         None::<&str>,
     )?;
+    // Always enabled, even when the environment has decided the address: the
+    // window is where "this box does nothing, and here is what is overriding
+    // it" gets said, and a greyed-out menu item cannot say it.
+    let settings = MenuItem::with_id(handle, SETTINGS, "Settings…", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(handle)?;
     let quit = PredefinedMenuItem::quit(handle, None)?;
-    let file = Submenu::with_items(handle, "File", true, &[&open, &quit])?;
+    let file = Submenu::with_items(handle, "File", true, &[&open, &settings, &separator, &quit])?;
 
     Menu::with_items(handle, &[&file])
 }
@@ -498,6 +605,10 @@ async fn stop(handle: &AppHandle) {
 
 fn environment_names_a_wiki() -> bool {
     std::env::var_os(rhizolog::config::ENV_ROOT).is_some()
+}
+
+fn environment_names_an_address() -> bool {
+    std::env::var_os(rhizolog::config::ENV_ADDRESS).is_some()
 }
 
 /// A path next to the executable.
@@ -596,6 +707,26 @@ mod tests {
                 "{path} gave {label}"
             );
         }
+    }
+
+    /// The distinction `Listen` exists for, arriving from a third place. A
+    /// remembered port was typed by somebody who meant it; the absence of one
+    /// is a preference the server may give way on.
+    #[test]
+    fn a_remembered_port_is_binding_and_no_port_is_not() {
+        assert_eq!(
+            listen_for(Some(8080)),
+            Listen::Exactly("127.0.0.1:8080".parse().expect("an address"))
+        );
+        assert_eq!(listen_for(None), Listen::Preferably(DEFAULT_ADDRESS));
+    }
+
+    /// The host is not part of the choice. Binding anything but loopback would
+    /// put an unauthenticated API that writes files on the network, and raise a
+    /// firewall prompt on the way.
+    #[test]
+    fn a_remembered_port_stays_on_loopback() {
+        assert!(listen_for(Some(8080)).preferred().ip().is_loopback());
     }
 
     /// Two pages must not share a window, and nothing may collide with `main` —

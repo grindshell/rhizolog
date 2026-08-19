@@ -294,6 +294,17 @@ to, it falls back to the usual per-user config directory.
 the app at a scratch wiki for an afternoon. The environment always wins; a
 remembered choice never overrides something you typed.
 
+**File → Settings…** picks the port. Leave the box empty for the usual
+behaviour — 3000 when it is free, any free port when it is not. A port you type
+is a requirement rather than a preference, the same as `RHIZOLOG_ADDR`: if
+something else has it, Rhizolog says so and offers to forget the setting rather
+than start somewhere you were not expecting. Saving restarts the app on the new
+port; it reopens the same wiki. `RHIZOLOG_ADDR` overrides it, and the window
+says so instead of leaving a box that does nothing.
+
+Only the port, deliberately. Rhizolog binds loopback and there is no
+authentication, so the host is not something the app offers to change.
+
 **One window per wiki.** Opening the app again on a wiki it is already serving
 tells you where that window is and offers to open a different wiki instead —
 two of them on one wiki would mean two writers on one index and a published

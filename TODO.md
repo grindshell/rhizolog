@@ -109,6 +109,13 @@ itself an unmade decision.
   feature — the ones covering the dashboard served out of the binary. A plain
   `cargo test` skips them silently, and a feature nothing exercises is a feature
   that breaks without telling anyone. It needs `pnpm build` to have run.
+- **The settings form, clicked.** `desktop/src/settings_window.rs` unit-tests
+  everything on the Rust side of the webview: what the form parses to, what the
+  page renders, that `RHIZOLOG_ADDR` disables it, that a request from any other
+  window is refused. What none of them touch is whether WebView2 hands a form
+  post on a custom scheme to the handler — the half where being wrong is a
+  button that does nothing. `respond` logs at info on both the GET and the post,
+  so the app log says which half happened.
 - **`cargo build -p rhizolog` somewhere with no GUI toolkit.** The crate graph
   is what guarantees the headless server needs no display libraries; a path
   dependency added in the wrong direction would revoke that, and only a build on
@@ -124,6 +131,12 @@ itself an unmade decision.
 Not oversights. Each of these was considered and deferred, and the reason is
 worth keeping so the question does not get reopened from scratch.
 
+- **Changing the port without a restart.** Closer than the wiki case below and
+  blocked by something else: the stores are all bound to a root that is not
+  moving, and `server::start`/`shutdown` already round-trip. What is on the old
+  origin is the *window* — the webview, the `target="_blank"` handler that
+  closes over the URL, and any second window opened from it. Rebinding means
+  rebuilding all of that, which is more than a restart costs.
 - **Switching wikis without a restart.** `Store`, `TimeStore`, `Index` and the
   watcher are each bound to one root at startup. File → Open Wiki… saves the
   choice, stops the server properly and relaunches, which is correct and cheap.

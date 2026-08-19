@@ -1,7 +1,9 @@
 //! What the app remembers between runs.
 //!
-//! One thing so far: which wiki. There is no shell environment behind a
-//! double-click, so something has to hold the answer the user gave last time.
+//! Which wiki, and which port. There is no shell environment behind a
+//! double-click, so something has to hold the answers the user gave last time —
+//! and the `RHIZOLOG_*` variables still win over both, because somebody who
+//! sets one means it.
 //!
 //! ## Beside the executable, then the config directory
 //!
@@ -30,6 +32,16 @@ const FILE: &str = "rhizolog.settings.json";
 pub struct Settings {
     /// The wiki to open. `None` until somebody has chosen one.
     pub wiki_root: Option<PathBuf>,
+    /// The port to serve on, if one was asked for.
+    ///
+    /// `None` is the ordinary answer and means "negotiate": prefer 3000 and
+    /// take any free port when it is busy. A number here is a requirement
+    /// rather than a preference — see [`crate::listen_for`].
+    ///
+    /// Only the port. The host stays loopback, which is the whole security
+    /// boundary and also the difference between starting quietly and raising a
+    /// Windows Defender prompt.
+    pub port: Option<u16>,
 }
 
 /// Read the settings, from wherever they turn out to be.
@@ -124,6 +136,7 @@ mod tests {
         let path = directory.path().join(FILE);
         let settings = Settings {
             wiki_root: Some(PathBuf::from("/somewhere/wiki")),
+            port: Some(8080),
         };
 
         write(&path, &settings).expect("write");
@@ -171,6 +184,26 @@ mod tests {
             read(&path),
             Some(Settings {
                 wiki_root: Some(PathBuf::from("/somewhere/wiki")),
+                port: None,
+            })
+        );
+    }
+
+    /// The other direction, and the one that actually happened: a file written
+    /// before there was a port setting has to keep opening the same wiki rather
+    /// than sending its owner back to the folder picker.
+    #[test]
+    fn a_file_from_before_the_port_existed_still_reads() {
+        let directory = TempDir::new().expect("temp dir");
+        let path = directory.path().join(FILE);
+
+        std::fs::write(&path, r#"{"wiki_root": "/somewhere/wiki"}"#).expect("write");
+
+        assert_eq!(
+            read(&path),
+            Some(Settings {
+                wiki_root: Some(PathBuf::from("/somewhere/wiki")),
+                port: None,
             })
         );
     }
@@ -185,6 +218,7 @@ mod tests {
         let path = directory.path().join(FILE);
         let settings = Settings {
             wiki_root: Some(PathBuf::from("/somewhere/wiki")),
+            port: None,
         };
 
         let mut bytes = vec![0xEF, 0xBB, 0xBF];

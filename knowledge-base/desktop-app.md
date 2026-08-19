@@ -154,6 +154,9 @@ is the caller's business, because each binary is right about a different set.
 `Config::from_env` is now that call with the server's answers, so the headless
 path is unchanged.
 
+The app's answers are the two things it remembers — which wiki, and which port —
+and everything else stays a default.
+
 `Fallbacks::root` is an **`Option`**, and that is the interesting part. The
 desktop app has nothing to put there when `RHIZOLOG_ROOT` is set — it never
 asked the user, because it did not need to — and `None` with no variable either
@@ -211,6 +214,87 @@ see the BOM section of [Architecture](architecture.md). It was found the way the
 first one was: by writing the file from PowerShell and watching the app ask a
 question it should have known the answer to.
 
+### The port is a setting, and it is a requirement
+
+`Settings::port` is an `Option<u16>` that becomes `Fallbacks::listen`, so it
+loses to `RHIZOLOG_ADDR` and beats the default. `None` — the ordinary state — is
+`Listen::Preferably`, which is the negotiation described below. A number is
+`Listen::Exactly`, for exactly the reason the environment variable is: somebody
+who picks a port picks it *for* something, and a server that quietly started
+elsewhere would point that something at nothing.
+
+**Only the port, never the host.** The obvious generalisation is a box that
+takes a whole `SocketAddr`, and it is the one thing this must not offer. Loopback
+is the entire security boundary — no authentication, and an API that writes
+files — and it is also what keeps a wiki from asking for a firewall exception
+the first time somebody runs it. A `u16` cannot express `0.0.0.0`; a text field
+can, and would eventually.
+
+Zero is refused rather than passed through, even though the OS would accept it
+and pick a port. That is what leaving the box empty already means, and rather
+more clearly.
+
+#### A chosen port that stops being free must not brick the app
+
+`Listen::Exactly` is a hard error on `AddrInUse`, which is right for a server
+started from a shell: it fails, says so, and whoever typed the address fixes it.
+The desktop app has a worse version of the same event. The setting outlives the
+session that made it, so a machine that later acquires something else on that
+port is an application that will not start **on any launch** — and the way to
+change the setting is a menu on a window that no longer appears.
+
+So a failed bind on a port the *app* chose offers to forget it and take a free
+one instead. It is deliberately not silent: the whole point of `Exactly` is that
+moving without saying so is the bad outcome, and a dialog is the difference
+between moving and being moved.
+
+The offer is only made for the app's own setting. `RHIZOLOG_ADDR` produces the
+same failure and is not the app's to withdraw — it was set deliberately, in a
+shell, by somebody who is in a position to unset it.
+
+### The controls are a window of the shell's own
+
+A port that can only be changed by editing JSON is not really configurable, and
+the dashboard is not allowed to grow a settings screen: it has to stay the page
+a browser loads from a remote instance, and a control that only worked inside
+Tauri would make those two different applications.
+
+There is also a mechanical trap, and it is circular. The dashboard's origin is
+`http://127.0.0.1:<port>`, which Tauri v2 treats as remote, so reaching Tauri
+from it needs a capability naming that URL — and the port is the thing that
+varies. A port-setting page in the dashboard would have to hardcode the port it
+exists to change.
+
+So the settings are a **second window, owned by the shell**, served over
+`rhizolog-settings://` by a URI scheme handler in `desktop/src/settings_window.rs`.
+The origin is fixed, which is precisely what the dashboard's is not. It never
+loads the dashboard and never calls the API.
+
+`tauri-plugin-dialog` has message boxes, file pickers and no text input, which
+is what makes this a window rather than a prompt. The window is the better
+answer anyway: it has somewhere to put the current address, and somewhere to say
+that `RHIZOLOG_ADDR` is overriding the box rather than leaving a control that
+silently does nothing.
+
+**It still has no JavaScript and no IPC.** Its own scheme would allow both, and
+neither is needed: the page is an HTML form that posts back to the same scheme,
+and the handler answers the post. One language, no capability file, and nothing
+to keep in step. The form is a single box where empty means automatic —
+the shape that suggests itself, a pair of radio buttons with a number beside
+one of them, is the shape that needs a script to keep the two in step.
+
+**A registered scheme is visible to every webview in the process**, the
+dashboard's included, and the dashboard renders whatever the wiki says. So the
+handler answers only requests whose webview label is the settings window's —
+otherwise a note in a wiki could change which port the app serves on.
+
+Changing the port restarts, the way changing wikis does, and for less reason:
+`Store`, `TimeStore`, `Index` and the watcher are all bound to a root that is
+not moving, so an in-process rebind is genuinely within reach. What stops it is
+the *window* rather than the server — the webview is on the old origin, the
+`target="_blank"` handler closes over it, and any second window opened from it
+is on it too. A restart is correct and cheap; see [`TODO.md`](../TODO.md).
+
 ## The port is negotiated, and the result is written down
 
 Hardcoding `127.0.0.1:3000` ([`config.rs:59`](../backend/src/config.rs)) is
@@ -221,8 +305,11 @@ The policy:
 
 1. `RHIZOLOG_ADDR`, if set, is binding. An explicit address that is taken is an
    error, not a hint — someone asked for that port for a reason.
-2. Otherwise try `127.0.0.1:3000`, because a predictable URL is worth having.
-3. On `AddrInUse`, bind `127.0.0.1:0` and take what the OS gives.
+2. Otherwise a port from the app's settings, if one was chosen, and binding for
+   the same reason. See above for what happens when it is not free.
+3. Otherwise try `127.0.0.1:3000`, because a predictable URL is worth having.
+4. On `AddrInUse`, bind `127.0.0.1:0` and take what the OS gives — which is the
+   fallback for 3 only, since 1 and 2 are requirements rather than preferences.
 
 Which means the port is no longer knowable in advance, so the server publishes
 it: `<wiki root>/.rhizolog/server.json`.
@@ -394,7 +481,9 @@ which an `AtomicBool` absorbs rather than letting it recurse.
 
 A folder picker for "open wiki", "reveal in Explorer", a tray icon, a global
 hotkey to start a timer — all of them belong to the Tauri shell, calling the
-same HTTP API, with **no Tauri JavaScript in the SPA at all**.
+same HTTP API, with **no Tauri JavaScript in the SPA at all**. So does the
+settings window, which is the case where "the shell" had to grow a page of its
+own rather than a menu item.
 
 Besides keeping the promise at the top of this page, there is a mechanical
 reason. The webview loads an `http://127.0.0.1:<port>` origin, which Tauri v2
@@ -484,7 +573,8 @@ desktop/
   tauri.conf.json   # no frontendDist, no windows: both are made at runtime
   icons/            # placeholders; replace with real artwork
   src/main.rs       # windows_subsystem = "windows"; window, logging, lifecycle
-  src/settings.rs   # which wiki, remembered between runs
+  src/settings.rs   # which wiki and which port, remembered between runs
+  src/settings_window.rs  # the shell's own page, on its own scheme
 ```
 
 ### The binary cannot be called `Rhizolog`
@@ -553,6 +643,11 @@ lifecycle is what makes it reachable later.
   including the copied-directory case, where it answers for a different one.
 - Port fallback: a second instance on a busy 3000 lands somewhere else and says
   where.
+- The settings form's whole round trip through the webview. The Rust halves —
+  what the form parses to, what the page renders, that the environment disables
+  it, that another window is refused — are unit tests, and the part they cannot
+  reach is whether WebView2 delivers a form post to a custom scheme handler at
+  all. That is the half where being wrong means a button that does nothing.
 - `swagger_ui_serves_its_own_assets` against a release build.
 - `cargo build -p rhizolog` on a container with no GUI toolkit installed. The
   crate graph is what guarantees the server needs no display libraries, and a
