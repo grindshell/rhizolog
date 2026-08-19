@@ -50,18 +50,30 @@ Two consequences:
   nothing this reads as confidence, and the audience for a developer tool checks
   anyway.
 
-**No em dashes.** The README uses them heavily and they are its house voice, but
-they are also the single most recognisable tell of machine-written marketing
-copy, and a landing page is read by people deciding whether a project is
-serious. The rule applies to `site/` only; the README and this knowledge base
-keep theirs.
+**No em dashes.** They are the single most recognisable tell of machine-written
+prose, and a landing page is read by people deciding whether a project is
+serious.
+
+This started as a rule for `site/` alone, on the reasoning that the em dash was
+the existing house voice everywhere else and marketing copy was the only place
+it would be read as a tell. That reasoning did not survive contact with the
+question of who else reads this repository: the README is the first thing a
+stranger sees, the knowledge base is the argument for taking the design
+seriously, and a doc comment is published into the OpenAPI document that agents
+read as the manual. None of those are less exposed than the landing page.
+
+So the rule is project-wide, and it lives in [`AGENTS.md`](../AGENTS.md) under
+House style along with its three exceptions, all of which are specimens rather
+than prose: the encoding warnings that use a literal em dash to show what
+mojibake does to it, `example-wiki/` because it is a fixture, and generated
+files, which get fixed upstream and regenerated.
 
 ## The mark
 
 The accent is the mint green of the branching-node glyph in `desktop/icons/`,
-which is six nodes and five edges with no trunk — a rhizome, which is where the
-project's name comes from and the only thing in the repository that was already
-saying so visually.
+which is six nodes and five edges with no trunk. That is a rhizome, which is
+where the project's name comes from and the only thing in the repository that
+was already saying so visually.
 
 `frontend/public/favicon.svg` used to be an unrelated purple zigzag, evidently
 downloaded, carrying a stack of Figma blur filters and no relationship to
@@ -98,9 +110,10 @@ through the API and renders a browsable copy: pages, search, the graph, tags and
 the time log.
 
 It **reuses the dashboard's own SolidJS components**, prerendered, rather than
-reimplementing them. That costs a real build step — the components have to be
-rendered and frozen rather than just fetched as JSON — and buys the property
-worth having: the demo cannot show a UI that the download does not have, and a
+reimplementing them. That costs a real build step, since the components have to
+be rendered and frozen rather than just fetched as JSON, and it buys the
+property worth having: the demo cannot show a UI that the download does not
+have, and a
 dashboard change appears in the demo on the next build without anybody redrawing
 anything.
 

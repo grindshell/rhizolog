@@ -3,7 +3,7 @@ members = ["backend", "desktop"]
 resolver = "3"
 
 # Stated once. Two crates that disagreed about the licence would be a licence
-# nobody could rely on, and the answer is the same for both — `LICENSE` at the
+# nobody could rely on, and the answer is the same for both. `LICENSE` at the
 # root is the text.
 [workspace.package]
 license = "AGPL-3.0-or-later"

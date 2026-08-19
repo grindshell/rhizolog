@@ -1,11 +1,11 @@
 # Rhizolog
 
 A wiki over a directory of markdown files, with an HTTP API that is meant to be
-used — by you, and by whatever agents you point at it.
+used by you, and by whatever agents you point at it.
 
 "Rhizome" plus "log". A rhizome is a root system with no trunk: any point
 connects to any other and there is no privileged centre. That is the bet this
-project makes about notes — that knowledge branches off chaotically, and that
+project makes about notes: that knowledge branches off chaotically, and that
 filing it as though it were a tree loses the connections worth keeping.
 
 What makes it different from the wikis you already know:
@@ -23,7 +23,7 @@ What makes it different from the wikis you already know:
   what turns authentication on, which is how you serve one over a network. From
   then on a page can be public, internal, restricted to named readers, or
   private. This is a developer tool for managing a knowledge base, not a public
-  wiki engine — a handful of named accounts, not registration and moderation.
+  wiki engine: a handful of named accounts, not registration and moderation.
 - **It tracks time, too.** Timers you can start and stop, entries you can type
   in after the fact, and a note on any of them. Attach an entry to the pages it
   was spent on and the dashboard will tell you where the hours went. Entries
@@ -55,13 +55,13 @@ Then open:
 The first compile takes a while: SQLite is built from source, and Swagger UI is
 unpacked at build time.
 
-`example-wiki/` is nine pages arranged to show the features off — nested slugs,
+`example-wiki/` is nine pages arranged to show the features off: nested slugs,
 wikilinks, a page that is linked but not written, two orphans, and the same
 directory name in two places, which is what makes the two path filters differ.
 It also carries a week of tracked time: eighteen entries, two overlapping
 timers, a session that runs past midnight, and hours logged against the page
 nobody has written. Read [its index](example-wiki/index.md) first; it explains
-what the dashboard will say about it and why — including why Today is empty.
+what the dashboard will say about it and why, including why Today is empty.
 
 To use your own notes instead, point `RHIZOLOG_ROOT` at any directory of
 markdown files. Nothing needs importing.
@@ -88,7 +88,7 @@ Futures are lazy. See [[notes/rust/pinning]].
 
 Everything in the frontmatter is optional, including the whole block. Without a
 `title` the page takes one from its first heading, and failing that from its
-slug — and it keeps following that heading as you edit it.
+slug. It keeps following that heading as you edit it.
 
 A page's **slug** is its path under the wiki root without the `.md`:
 `notes/rust/async.md` is `notes/rust/async`. Slugs are validated against the
@@ -97,21 +97,21 @@ one stays valid on the other.
 
 Links come in two spellings and both are tracked:
 
-- `[[notes/rust/pinning]]` — a wikilink, always absolute from the wiki root.
-- `[pinning](pinning.md)` — an ordinary markdown link, resolved relative to the
+- `[[notes/rust/pinning]]`: a wikilink, always absolute from the wiki root.
+- `[pinning](pinning.md)`: an ordinary markdown link, resolved relative to the
   page it appears in. The `.md` is optional.
 
 A link to a page that does not exist is not an error. It is a **wanted page**,
 it shows up on the dashboard, and it starts working the moment somebody writes
-it — no reindex. Links inside code fences are not links, because they are pulled
+it, with no reindex. Links inside code fences are not links, because they are pulled
 out of the parsed document rather than scanned for.
 
 ## The graph
 
 `/graph` draws the pages and the links between them, and `GET /api/graph`
 returns the same thing as nodes and edges. Wanted pages are drawn too, as dashed
-rings — they are branches the wiki has reached for, and leaving them out would
-make it look tidier than it is.
+rings, because they are branches the wiki has reached for and leaving them out
+would make it look tidier than it is.
 
 Narrow it with `?root=` for one page's neighbourhood (a walk of `?depth=` hops,
 following links in both directions), or with the same `?prefix=` and `?tag=`
@@ -125,8 +125,8 @@ shape that changed means the wiki changed.
 ## Time
 
 A time entry has a name, a start, usually an end, and optionally a markdown
-note and a list of pages it was spent on. Entries are grouped by name — there
-is nothing to create or delete, a group exists because entries carry its name.
+note and a list of pages it was spent on. Entries are grouped by name. There
+is nothing to create or delete; a group exists because entries carry its name.
 
 ```markdown
 ---
@@ -143,7 +143,7 @@ Chased down a lifetime error in the poll loop.
 They live in `<root>/.rhizolog/times/<YYYY-MM>/`, beside the derived index but
 **not** derived: that directory is the only copy, so ignore
 `.rhizolog/index.db` in git rather than the whole directory. They are not
-pages — they will not appear in a listing or in search.
+pages, so they will not appear in a listing or in search.
 
 Start one from the top bar, from any page, or with
 `POST /api/times {"name": "Deep work"}`. Several can run at once and they are
@@ -159,7 +159,7 @@ in.
 Names and notes are searchable with `GET /api/times?q=`, or the box on the Time
 screen. It is a filter rather than a mode: it narrows the log alongside the
 group, page and date filters instead of replacing them, and it leaves the log in
-order — so "what did I write about the poll loop last week" is one request.
+order, so "what did I write about the poll loop last week" is one request.
 Entries are deliberately absent from `/api/search`, which is about pages.
 
 Time attached to a page shows on that page as one line with a total on it, not
@@ -175,9 +175,9 @@ All optional, all environment variables.
 |---|---|---|
 | `RHIZOLOG_ROOT` | `./wiki` | The wiki directory. Created if missing. |
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | The derived index. Safe to delete. |
-| — | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
-| — | `<root>/.rhizolog/users/` | Accounts. **Not** derived, and secret; back it up, don't commit it. |
-| — | `<root>/.rhizolog/server.json` | Where the running server is. Gone when it stops. |
+| none | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
+| none | `<root>/.rhizolog/users/` | Accounts. **Not** derived, and secret; back it up, don't commit it. |
+| none | `<root>/.rhizolog/server.json` | Where the running server is. Gone when it stops. |
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Where to listen. |
 | `RHIZOLOG_ASSETS` | `../frontend/dist` | The built dashboard. Missing is fine. |
 | `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter. |
@@ -188,7 +188,7 @@ Defaults are relative to the working directory, which is assumed to be
 `backend/`.
 
 Think before changing `RHIZOLOG_ADDR`. **A wiki with no accounts is open**, and
-the API writes files — so binding anything but loopback means anybody who can
+the API writes files, so binding anything but loopback means anybody who can
 reach the port can read and write every page. The server says so at startup, in
 a warning it is worth not ignoring.
 
@@ -219,12 +219,12 @@ Invoke-RestMethod -Uri http://127.0.0.1:3000/api/pages -Headers @{ Authorization
 ```
 
 Accounts are files under `.rhizolog/users/`, one per account, holding an Argon2
-hash of the password. Back that directory up — there is no other copy — and keep
-it out of git, which the repository's `.gitignore` already does.
+hash of the password. Back that directory up, because there is no other copy,
+and keep it out of git, which the repository's `.gitignore` already does.
 
 Serving over a network in earnest wants TLS in front and
 `RHIZOLOG_SECURE_COOKIES=1` with it; without that, passwords cross the network
-in the clear. There is no rate limiting on sign-in yet — see [`TODO.md`](TODO.md).
+in the clear. There is no rate limiting on sign-in yet; see [`TODO.md`](TODO.md).
 
 ## Who can read which page
 
@@ -242,7 +242,7 @@ readers: [alice, bob]
 | | Who |
 |---|---|
 | `public` | Anyone, including callers who have not signed in |
-| `internal` | Any account on this wiki — **and what a page with no `visibility:` means** |
+| `internal` | Any account on this wiki, and **what a page with no `visibility:` means** |
 | `restricted` | The `readers` list, plus the owner |
 | `private` | The owner alone |
 
@@ -251,7 +251,7 @@ not hide it from yourself. A word that is not one of the four reads as `private`
 somebody who typed `privte` was trying to restrict a page, and the safe way to
 get that wrong is to hide too much.
 
-A page you may not read answers `404`, the same as one that is not there — and
+A page you may not read answers `404`, the same as one that is not there, and
 not just when you ask for it directly. It is absent from the listing, from search,
 from the tag counts, from the graph, from every total, and from the titles a pin
 or a time entry resolves.
@@ -269,8 +269,8 @@ that is not `internal`.
 ### Finding a running server
 
 By default the server takes port 3000 if it can and **any free port if it
-cannot**, so a second copy — or a machine where something else got there first
-— still starts. Setting `RHIZOLOG_ADDR` turns that off: an address you asked
+cannot**, so a second copy still starts, and so does one on a machine where
+something else got there first. Setting `RHIZOLOG_ADDR` turns that off: an address you asked
 for by name is used or the server refuses to start, because you have probably
 written that port down somewhere else too.
 
@@ -287,8 +287,8 @@ writes it down:
 }
 ```
 
-It appears at `<root>/.rhizolog/server.json` only once the server is **ready** —
-listening, with its index reconciled — so finding one means you can use it
+It appears at `<root>/.rhizolog/server.json` only once the server is **ready**:
+listening, with its index reconciled. So finding one means you can use it
 immediately. A clean shutdown removes it.
 
 For a script or an agent, the order to try is `RHIZOLOG_ADDR`, then
@@ -300,7 +300,7 @@ stale file.
 
 ## Development
 
-This is one git repository. Scaffolding tools like to create nested ones — if a
+This is one git repository. Scaffolding tools like to create nested ones. If a
 generator leaves a `.git` inside `backend/` or `frontend/`, delete it, or the
 root repository will treat that directory as opaque and stop tracking what is
 inside it.
@@ -339,7 +339,7 @@ A directory that exists still wins, so this changes nothing when you are working
 in a checkout.
 
 Cargo unifies features across a workspace, and the desktop crate enables that
-one — so `cargo test --workspace` builds with it too, and needs `pnpm build`
+one, so `cargo test --workspace` builds with it too and needs `pnpm build`
 first. `cargo test -p rhizolog` is the server as it actually ships.
 
 Desktop app, from `desktop/`:
@@ -356,7 +356,7 @@ build at all. The icons in `desktop/icons/` are placeholders.
 
 It starts a real Rhizolog on loopback in its own process and points a webview at
 it, so the dashboard in the window is talking to the same HTTP API anything else
-would — and `.rhizolog/server.json` says where, exactly as it does for the
+would, and `.rhizolog/server.json` says where, exactly as it does for the
 headless server. An agent can work against the app while you have it open,
 without knowing it is an app.
 
@@ -364,7 +364,7 @@ That is the whole reason it is built this way: nothing the app can do is
 something a browser pointed at a remote Rhizolog cannot.
 
 **It asks which wiki to open**, the first time and any time the one it
-remembers has gone. There is no default, deliberately — the API creates
+remembers has gone. There is no default, deliberately: the API creates
 directories it is pointed at, so a guess would mean an empty wiki materialising
 somewhere you would never look for it. **File → Open Wiki…** changes it, which
 restarts the app.
@@ -373,12 +373,12 @@ The answer is remembered in `rhizolog.settings.json` **beside the executable**,
 so a copied folder takes its wiki with it. If that directory cannot be written
 to, it falls back to the usual per-user config directory.
 
-`RHIZOLOG_ROOT` overrides all of that and is not remembered — it is how to point
+`RHIZOLOG_ROOT` overrides all of that and is not remembered. It is how to point
 the app at a scratch wiki for an afternoon. The environment always wins; a
 remembered choice never overrides something you typed.
 
 **File → Settings…** picks the port. Leave the box empty for the usual
-behaviour — 3000 when it is free, any free port when it is not. A port you type
+behaviour: 3000 when it is free, any free port when it is not. A port you type
 is a requirement rather than a preference, the same as `RHIZOLOG_ADDR`: if
 something else has it, Rhizolog says so and offers to forget the setting rather
 than start somewhere you were not expecting. Saving restarts the app on the new
@@ -386,7 +386,7 @@ port; it reopens the same wiki. `RHIZOLOG_ADDR` overrides it, and the window
 says so instead of leaving a box that does nothing.
 
 Only the port, deliberately. The app is for a wiki on this machine, so it binds
-loopback and does not offer to change the host — a box that accepts `0.0.0.0`
+loopback and does not offer to change the host. A box that accepts `0.0.0.0`
 would put a wiki on the network by typing, which is a decision for a shell and a
 firewall rather than a settings field. Serving one to other people is what
 `RHIZOLOG_ADDR` and an account are for.
@@ -396,8 +396,8 @@ to print to, so that file is the app's only account of itself and the first
 thing worth attaching to a bug report.
 
 **One window per wiki.** Opening the app again on a wiki it is already serving
-tells you where that window is and offers to open a different wiki instead —
-two of them on one wiki would mean two writers on one index and a published
+tells you where that window is and offers to open a different wiki instead.
+Two of them on one wiki would mean two writers on one index and a published
 address that is only true for one. Two windows on two *different* wikis is fine
 and works.
 
@@ -422,7 +422,7 @@ pnpm typecheck   # astro check
 ```
 
 This one is independent of everything above: the backend does not serve it and
-does not know it exists. Note that `pnpm dev` daemonises — the command returns
+does not know it exists. Note that `pnpm dev` daemonises: the command returns
 and the server keeps running, so `pnpm exec astro dev status` is how you find
 out whether one is up, and `pnpm exec astro dev stop` ends it.
 
@@ -441,11 +441,11 @@ compiled routes.
 That exists because downloading it is a trap on Windows, and the obvious way is
 the one that does not work. `curl` in PowerShell 5.1 is an alias for
 `Invoke-WebRequest`, which decodes a body as Latin-1 when its `Content-Type`
-carries no charset — and `application/json` from here carries none. Every
-em-dash in the spec turns from `E2 80 94` into `C3 A2 C2 80 C2 94`. The file
-stays valid JSON, stays one line, and the diff still reads like an ordinary
-regeneration, so nothing catches it. `>` and `Out-File` are no better; they
-re-encode too, and add a BOM.
+carries no charset, and `application/json` from here carries none. Every
+non-ASCII character in the spec comes back mangled, each of its bytes re-encoded
+as two. The file stays valid JSON, stays one line, and the diff still reads like
+an ordinary regeneration, so nothing catches it. `>` and `Out-File` are no
+better; they re-encode too, and add a BOM.
 
 If you do fetch it over HTTP, download bytes and write them verbatim:
 
@@ -454,11 +454,12 @@ $data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/ap
 [System.IO.File]::WriteAllBytes("$PWD\frontend\openapi.json", $data)
 ```
 
-Worth checking after a refresh either way: the file should have no BOM, and its
-first non-ASCII bytes should be `E2 80 94`.
+Worth checking after a refresh either way: the file should have no BOM, and it
+should contain no `Ã` and no `â€`, which are what mangled UTF-8 looks like once
+it has been read back as Latin-1.
 
 Windows PowerShell 5.1 has no `&&`; use `;` to chain. And do not round-trip a
-source file through `Get-Content` and `Set-Content` — 5.1 reads as ANSI and
+source file through `Get-Content` and `Set-Content`: 5.1 reads as ANSI and
 writes UTF-8 with a BOM, which mangles every non-ASCII character in the file and
 adds a byte-order mark that has, in this project, already hidden a page's
 frontmatter once.
@@ -483,7 +484,7 @@ What is still thin about serving one over a network is the operational half:
 there is no TLS of its own, no rate limiting on sign-in, and no audit log.
 Put it behind a reverse proxy.
 
-The desktop app runs and is not yet a download — real icons, a check for a
+The desktop app runs and is not yet a download. Real icons, a check for a
 missing WebView2 runtime, and code signing are what stand between the two.
 [`TODO.md`](TODO.md) has that list and the rest of what is known and not done,
 each entry with the reason it is not done.
@@ -497,7 +498,7 @@ Copyright (C) 2026 Tim Yuen. Rhizolog is free software under the
 [GNU Affero General Public License](LICENSE), version 3 or later.
 
 The Affero clause is why that one rather than the ordinary GPL. Rhizolog is a
-server, so the usual way to use somebody else's copy is over a network — which
+server, so the usual way to use somebody else's copy is over a network, which
 the GPL says nothing about, because it is not distribution. Section 13 does: a
 modified Rhizolog that other people are allowed to talk to over a network has to
 offer them its source as well. Running your own copy, changing it, and never

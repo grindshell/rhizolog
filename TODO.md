@@ -12,14 +12,14 @@ still outstanding, not a second place to argue design.
 
 These apply to a release of any kind, including one that is only "clone it and
 `cargo run`". They are cheap, and every one of them is invisible from inside the
-project — which is why they were not written down until somebody asked what a
+project, which is why they were not written down until somebody asked what a
 beta needs.
 
 - **Dependency licences are unreviewed.** The AGPL is strong copyleft, so a
   dependency under terms it cannot be combined with is a real problem rather
   than a paperwork one. The Rust and npm trees here are almost entirely
   MIT/Apache-2.0, which is fine in this direction, but nothing has actually
-  checked — `cargo-license` or `cargo-deny` over the workspace, and
+  checked. `cargo-license` or `cargo-deny` over the workspace, and
   `pnpm licenses list`, would say so in a minute. Worth doing once before
   anybody is handed a copy, and worth having in CI after that.
 - **No per-file licence notices.** `LICENSE` and the `license` fields in the
@@ -45,13 +45,13 @@ beta needs.
 The app works. These are the things that make the difference between "runs on
 the machine that built it" and "is a download".
 
-- **Real icons.** `desktop/icons/` are placeholders — a small branching glyph
+- **Real icons.** `desktop/icons/` are placeholders: a small branching glyph
   generated so `tauri-build` would produce an executable at all. They are not
   artwork and should not ship as any.
 - **Detect a missing WebView2 runtime.** Tauri's `webviewInstallMode` only
   governs the NSIS and MSI installers, so a portable `.exe` gets no help from
   it. The runtime ships with Windows 10 (April 2018 or later) and Windows 11, so
-  in practice it is there — but when it is not, the current failure mode is a
+  in practice it is there. When it is not, the current failure mode is a
   blank window rather than a sentence explaining what to install.
 - **Set `WEBVIEW2_USER_DATA_FOLDER` deliberately.** Otherwise "portable" leaks
   webview state into a directory the user did not choose and will not think to
@@ -80,11 +80,11 @@ pieces that are known to be missing.
   and a different one.
 - **Pins and the time log have no visibility of their own.** They are wiki-wide
   state shared by every account. Their page *titles* are filtered, so a pin to a
-  page you cannot read has none — but the slug stays, because it is the pin's own
+  page you cannot read has none, but the slug stays, because it is the pin's own
   content.
-- **No rate limiting on sign-in.** Argon2 is a real natural throttle — roughly
+- **No rate limiting on sign-in.** Argon2 is a real natural throttle, roughly
   twenty attempts a second per core, and each costs the attacker what it costs
-  the server — but it is not a lockout, and a network instance wants one. Also
+  the server. It is not a lockout, though, and a network instance wants one. Also
   the first thing on this list that needs shared mutable state keyed by
   something other than a session, so it is not a five-line change.
 - **`/api/health` discloses `wiki_root` to anonymous callers.** The counts are
@@ -98,7 +98,7 @@ pieces that are known to be missing.
   does not do is survive a password change or carry a label saying what it is
   for, and revoking one script means signing that account out everywhere.
 - **No password reset.** No email and no second factor, so recovery is an owner
-  setting a new password — or editing the file on the server, which a remote
+  setting a new password, or editing the file on the server, which a remote
   administrator cannot do. Worth a plan before anybody but its author runs one.
 - **Sessions are not listable.** `count_sessions` exists and nothing exposes it.
   "Where am I signed in, and sign that one out" is the natural next endpoint.
@@ -109,11 +109,11 @@ pieces that are known to be missing.
   on both a page and an account, and these were deliberately left out rather than
   forgotten: a bare date on `created` fills in a time that was never there, while
   a timer that "started on the 19th" is a claim about when, and midnight is a
-  guess at it rather than a convention for it. Cheap to change — one attribute
-  each — if hand-written entries turn out to want it.
+  guess at it rather than a convention for it. Cheap to change, one attribute
+  each, if hand-written entries turn out to want it.
 - **A splash window while a large wiki reconciles.** `server::start` returns
   once the index is in step with the files, and the window is only built after
-  that — so on a big wiki the gap between double-click and anything appearing is
+  that, so on a big wiki the gap between double-click and anything appearing is
   a full scan, with nothing on screen to say so. The server is already started
   on a task rather than blocking the event loop, so this is a window to show,
   not a restructure.
@@ -125,7 +125,7 @@ pieces that are known to be missing.
 - **The single-instance check is a courtesy, not a mutex.** Two launches close
   enough together both confirm nothing is serving the wiki before either
   publishes, and both start. Closing it properly needs an OS-level lock taken
-  before the bind. What is there covers the case that actually happens —
+  before the bind. What is there covers the case that actually happens:
   launching while a window is already open.
 
 ## Verification gaps
@@ -145,7 +145,7 @@ itself an unmade decision.
   Worth becoming something that runs rather than something that was done once:
   a reindex that grows with the wiki is invisible on `example-wiki/`'s nine
   pages, which is exactly why it survived this long. Two things are still
-  unmeasured — the desktop app's own first launch, which puts a window and a
+  unmeasured: the desktop app's own first launch, which puts a window and a
   webview around the same scan, and how long a single page save takes on a wiki
   that size.
 
@@ -156,14 +156,14 @@ itself an unmade decision.
   Repeating each size three times and taking the minimum gave a clean linear
   result. A single timing on this machine is not evidence.
 - **`cargo test --features embed-assets`.** Six tests only compile under that
-  feature — the ones covering the dashboard served out of the binary. A plain
+  feature: the ones covering the dashboard served out of the binary. A plain
   `cargo test` skips them silently, and a feature nothing exercises is a feature
   that breaks without telling anyone. It needs `pnpm build` to have run.
 - **The settings form, clicked.** `desktop/src/settings_window.rs` unit-tests
   everything on the Rust side of the webview: what the form parses to, what the
   page renders, that `RHIZOLOG_ADDR` disables it, that a request from any other
   window is refused. What none of them touch is whether WebView2 hands a form
-  post on a custom scheme to the handler — the half where being wrong is a
+  post on a custom scheme to the handler, the half where being wrong is a
   button that does nothing. `respond` logs at info on both the GET and the post,
   so the app log says which half happened.
 - **`cargo build -p rhizolog` somewhere with no GUI toolkit.** The crate graph
@@ -184,7 +184,7 @@ worth keeping so the question does not get reopened from scratch.
 - **Changing the port without a restart.** Closer than the wiki case below and
   blocked by something else: the stores are all bound to a root that is not
   moving, and `server::start`/`shutdown` already round-trip. What is on the old
-  origin is the *window* — the webview, the `target="_blank"` handler that
+  origin is the *window*: the webview, the `target="_blank"` handler that
   closes over the URL, and any second window opened from it. Rebinding means
   rebuilding all of that, which is more than a restart costs.
 - **Switching wikis without a restart.** `Store`, `TimeStore`, `Index` and the
@@ -196,7 +196,7 @@ worth keeping so the question does not get reopened from scratch.
   needs it. `tower-http`'s `cors` feature was enabled and unused; it is now off,
   because a feature switched on in advance of a decision is how the decision
   gets made by accident. An agent reaching a remote instance from a browser
-  context is what would change this — and accounts make that more likely than it
+  context is what would change this, and accounts make that more likely than it
   was, so this is closer than the rest of this list.
 - **Auto-update.** A portable executable that rewrites itself is a different
   product decision. For now, replacing the file is the update.
@@ -205,5 +205,5 @@ worth keeping so the question does not get reopened from scratch.
 - **Revisions and history.** A wiki directory is very likely a git repository
   already, which covers history for whoever holds the disk. Accounts make "who
   changed this" a question with more than one answer, so this is closer than it
-  was — but git still answers it, and answering it twice is worse. See
+  was, but git still answers it, and answering it twice is worse. See
   [Architecture](knowledge-base/architecture.md).
