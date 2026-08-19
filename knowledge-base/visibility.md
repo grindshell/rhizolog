@@ -236,6 +236,34 @@ exactly this, and quietly writing their own name instead would be ignoring what
 they said — so it comes back as `ownerless_page`, a `400` naming the slug and
 the visibility.
 
+### Three nulls, and an account called `null`
+
+`null` is a legal username. The reserved list holds Windows device names, and
+`NUL` is one of them while `NULL` is not. So `owner` is a field where three
+different nulls meet — the JSON token, the YAML scalar, and the four-character
+string — and they are kept apart in two different ways.
+
+**The JSON pair is structural.** `{"owner": null}` and `{"owner": "null"}` are
+different tokens, and `present_or_absent` — the same deserialiser `title` uses to
+tell "clear it" from "leave it alone" — carries that through as `Some(None)`
+against `Some(Some(_))`. Nothing has to guess, and the account named `null` sends
+its own name exactly as anybody else does.
+
+**The YAML one is not**, and that is the one worth knowing about. In a file,
+`owner: null` *is* the scalar. A page belonging to that account therefore has to
+be written `owner: 'null'`, or it reads back as a page with no owner — which for
+a `private` page means readable by nobody, its author included.
+`serde_yaml_ng` quotes it, and
+`an_account_called_null_owns_pages_like_any_other` in
+`backend/tests/visibility.rs` asserts that rather than trusting the emitter's
+good manners. The same applies to `readers`, where a bare `- null` would be a
+reader nobody can be.
+
+A file **hand-edited** to say `owner: null` still means nobody, and there is no
+way for it not to: at that point the four characters never existed. That fails
+closed, which is the direction this field should fail in, and it is the same
+answer an owner naming an account that has been deleted gets.
+
 ## What is not built
 
 - **Per-directory or per-tag defaults.** Every page carries its own line. A wiki

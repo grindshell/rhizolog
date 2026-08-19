@@ -314,6 +314,96 @@ fn app_page_path(app: &App, slug: &str) -> std::path::PathBuf {
     app._directory.path().join(format!("{slug}.md"))
 }
 
+/// `null` is a legal username — the reserved list holds Windows device names,
+/// and `NUL` is one while `NULL` is not. Which means three different nulls meet
+/// on the `owner` field: the JSON token, the YAML scalar, and the four-character
+/// string. None of them may be mistaken for another.
+///
+/// The JSON pair is structural, and `present_or_absent` is what keeps it so.
+/// The YAML one is not: `owner: null` in a file is the *scalar*, so a serialiser
+/// that emitted this owner bare would write a page whose owner is nobody — and
+/// for a `private` page that means readable by nobody, its author included.
+#[tokio::test]
+async fn an_account_called_null_owns_pages_like_any_other() {
+    let app = App::new().await;
+    let tim = app.account("tim", None).await;
+    let null = app.account("null", Some(&tim)).await;
+
+    app.write(
+        &null,
+        json!({
+            "slug": "secret/acquisition",
+            "title": "Project Roadrunner",
+            "content": "The counterparty is Acme.\n",
+            "visibility": "private",
+        }),
+    )
+    .await;
+
+    let read = app.get("/api/pages/secret/acquisition", &null).await;
+    assert_eq!(read.status, StatusCode::OK, "{:?}", read.body);
+    assert_eq!(read.body["owner"], "null");
+    // An owner is not a superuser over content, and that does not change because
+    // the other account's name looks like a keyword.
+    assert_eq!(
+        app.get("/api/pages/secret/acquisition", &tim).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    let file =
+        std::fs::read_to_string(app_page_path(&app, "secret/acquisition")).expect("the page");
+    assert!(
+        file.contains("owner: 'null'"),
+        "the owner was written as a bare YAML null, which reads back as no owner:\n{file}"
+    );
+
+    // A restricted page naming the same account as a reader, for the same reason
+    // — a bare `- null` in the list would be a reader nobody can be.
+    app.write(
+        &tim,
+        json!({
+            "slug": "notes/shared",
+            "content": "x",
+            "visibility": "restricted",
+            "readers": ["null"],
+        }),
+    )
+    .await;
+    assert_eq!(
+        app.get("/api/pages/notes/shared", &null).await.status,
+        StatusCode::OK
+    );
+
+    // And `PATCH` still tells the string from the token: one names an owner, the
+    // other asks for a page nobody could read and is refused.
+    let named = app
+        .send(
+            Method::PATCH,
+            "/api/pages/secret/acquisition",
+            Some(json!({ "owner": "null" })),
+            Some(&null),
+        )
+        .await;
+    assert_eq!(named.status, StatusCode::OK, "{:?}", named.body);
+    assert_eq!(named.body["owner"], "null");
+
+    let cleared = app
+        .send(
+            Method::PATCH,
+            "/api/pages/secret/acquisition",
+            Some(json!({ "owner": null })),
+            Some(&null),
+        )
+        .await;
+    assert_eq!(
+        cleared.status,
+        StatusCode::BAD_REQUEST,
+        "{:?}",
+        cleared.body
+    );
+    assert_eq!(cleared.code(), "ownerless_page");
+}
+
 // ------------------------------------------------------ the exhaustive check
 
 /// The test this file exists for.
