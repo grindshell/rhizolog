@@ -28,8 +28,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rhizolog::{Config, Fallbacks, Server};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::{NewWindowFeatures, NewWindowResponse};
+use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_opener::OpenerExt;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -43,6 +45,16 @@ const OPEN_WIKI: &str = "open-wiki";
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Only ever called from Rust, by [`open_elsewhere`]. The plugin's own
+        // answer to `target="_blank"` is a script it injects into the page,
+        // which cancels the click and then calls Tauri IPC — and this page is a
+        // remote origin with no capability, so it would swap one link that does
+        // nothing for another. Off, and the shell answers instead.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .manage(Running::default())
         .on_menu_event(|handle, event| {
             if event.id() == OPEN_WIKI {
@@ -175,6 +187,7 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
         .inner_size(1280.0, 860.0)
         .min_inner_size(720.0, 480.0)
         .menu(menu(handle)?)
+        .on_new_window(link_handler(handle, &url))
         .build()?;
 
     tracing::info!(%url, wiki = %config.root.display(), "opened the window");
@@ -317,6 +330,132 @@ async fn pick_wiki(handle: &AppHandle, title: &str) -> Option<PathBuf> {
     }
 }
 
+/// The shell's answer to `target="_blank"`, ready to hand to a window builder.
+///
+/// Every window gets one, the ones opened by [`new_window`] included: a second
+/// window is a browser with no tabs for the same reason the first one is, and
+/// Swagger UI's own links out are as dead there as the dashboard's were here.
+///
+/// It closes over the server's address, which is only knowable once the bind
+/// has happened — the same reason the window is built in `start` rather than
+/// declared in `tauri.conf.json`.
+fn link_handler(
+    handle: &AppHandle,
+    ours: &Url,
+) -> impl Fn(Url, NewWindowFeatures) -> NewWindowResponse<Wry> + Send + 'static {
+    let handle = handle.clone();
+    let ours = ours.clone();
+
+    move |requested, features| new_window(&handle, &ours, requested, features)
+}
+
+/// Answer a `target="_blank"`.
+///
+/// A webview is a browser with no tabs, and WebView2's default for a new-window
+/// request that nothing is listening for is to mark it handled and drop it —
+/// so the dashboard's "API docs" link, and every external link in a page body,
+/// silently does nothing when clicked. Neither is an exotic request; a browser
+/// would honour both, and the app has to look like one.
+///
+/// This wiki's own pages get a second window onto the same server. Everything
+/// else is the open web and goes to the real browser: a Tauri window has no
+/// address bar, no back button and nothing that says whose site is in it.
+fn new_window(
+    handle: &AppHandle,
+    ours: &Url,
+    requested: Url,
+    features: NewWindowFeatures,
+) -> NewWindowResponse<Wry> {
+    if !is_ours(ours, &requested) {
+        open_elsewhere(handle, &requested);
+        return NewWindowResponse::Deny;
+    }
+
+    // A second click on the same link should come back to the window the first
+    // one opened, not stack another identical one on top of it.
+    let label = label_for(&requested);
+    if let Some(already) = handle.get_webview_window(&label) {
+        let _ = already.unminimize();
+        let _ = already.set_focus();
+        return NewWindowResponse::Deny;
+    }
+
+    // `window_features` is not decoration: on Windows a webview made for a
+    // new-window request has to share the opener's WebView2 environment, and
+    // that is what carries it.
+    //
+    // No menu, deliberately. File → Open Wiki… restarts the application, which
+    // is not a thing to offer from a window looking at one page.
+    let built = WebviewWindowBuilder::new(handle, &label, WebviewUrl::External(requested.clone()))
+        .title("Rhizolog")
+        .inner_size(1100.0, 820.0)
+        .min_inner_size(480.0, 360.0)
+        .window_features(features)
+        .on_new_window(link_handler(handle, ours))
+        // Two windows both called "Rhizolog" say nothing about which is which,
+        // so this one is named by whatever it ends up showing.
+        .on_document_title_changed(|window, title| {
+            let _ = window.set_title(&title);
+        })
+        .build();
+
+    match built {
+        Ok(window) => NewWindowResponse::Create { window },
+        Err(error) => {
+            tracing::error!(url = %requested, %error, "could not open a second window");
+            NewWindowResponse::Deny
+        }
+    }
+}
+
+/// Whether a URL is a page of the server this window is showing.
+///
+/// The origin, so the port is part of the answer — two instances on two wikis
+/// are both `127.0.0.1`, and the other one's pages are no more this window's
+/// business than any other site is.
+fn is_ours(ours: &Url, requested: &Url) -> bool {
+    requested.origin() == ours.origin()
+}
+
+/// Hand a link to whatever the machine opens links with.
+///
+/// The scheme list is the check, not a nicety. A wiki page body can carry any
+/// URL it likes, and this ends at `ShellExecute` on Windows — so `file:` and
+/// anything else that names a program stops here rather than being launched by
+/// a click on a wiki page.
+fn open_elsewhere(handle: &AppHandle, url: &Url) {
+    if !matches!(url.scheme(), "http" | "https" | "mailto" | "tel") {
+        tracing::warn!(%url, "not opening a link with that scheme");
+        return;
+    }
+
+    if let Err(error) = handle.opener().open_url(url.as_str(), None::<&str>) {
+        tracing::error!(%url, %error, "could not hand the link to a browser");
+    }
+}
+
+/// The label of the window showing a page of this server.
+///
+/// Labels have to be unique, and this one is also how the next click finds the
+/// window the last one opened — so it names the page rather than the click.
+/// Tauri accepts alphanumerics and a little punctuation, which a URL path does
+/// not promise, so everything else becomes a dash.
+fn label_for(url: &Url) -> String {
+    let path: String = url
+        .path()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    format!("view{path}")
+}
+
 /// The window's menu.
 ///
 /// Native conveniences belong here rather than in the page: the dashboard has
@@ -398,4 +537,80 @@ fn init_tracing(handle: &AppHandle) {
                 .with_writer(file)
         }))
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn url(text: &str) -> Url {
+        Url::parse(text).expect("a url")
+    }
+
+    /// The link that started this: the dashboard's "API docs" is a plain
+    /// `target="_blank"` anchor to a path on the very server the window is
+    /// already showing, so it must be recognised as ours and not posted off to
+    /// a browser.
+    #[test]
+    fn a_page_of_this_server_is_ours() {
+        let ours = url("http://127.0.0.1:3000/");
+
+        assert!(is_ours(&ours, &url("http://127.0.0.1:3000/swagger-ui")));
+        assert!(is_ours(&ours, &url("http://127.0.0.1:3000/api/health")));
+    }
+
+    /// The port is negotiated, so two instances on two wikis differ only there.
+    /// The other one's pages are somebody else's window's business.
+    #[test]
+    fn another_instance_is_not_ours() {
+        assert!(!is_ours(
+            &url("http://127.0.0.1:3000/"),
+            &url("http://127.0.0.1:49812/swagger-ui")
+        ));
+    }
+
+    #[test]
+    fn the_web_is_not_ours() {
+        let ours = url("http://127.0.0.1:3000/");
+
+        assert!(!is_ours(&ours, &url("https://v2.tauri.app/")));
+        assert!(!is_ours(&ours, &url("file:///C:/Windows/System32/")));
+        assert!(!is_ours(&ours, &url("about:blank")));
+    }
+
+    /// Tauri rejects a label with punctuation in it, and a URL path is mostly
+    /// punctuation. A label that cannot be built is a window that never opens.
+    #[test]
+    fn a_label_is_alphanumerics_and_dashes() {
+        for path in [
+            "/swagger-ui",
+            "/",
+            "/pages/notes/a page.md",
+            "/pages/tags?q=a%20b#top",
+        ] {
+            let label = label_for(&url(&format!("http://127.0.0.1:3000{path}")));
+            assert!(
+                label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-'),
+                "{path} gave {label}"
+            );
+        }
+    }
+
+    /// Two pages must not share a window, and nothing may collide with `main` —
+    /// building a window with a label already in use fails, and the failure
+    /// would look exactly like the bug this all fixes.
+    #[test]
+    fn a_label_names_the_page() {
+        let swagger = label_for(&url("http://127.0.0.1:3000/swagger-ui"));
+
+        assert_eq!(
+            swagger,
+            label_for(&url("http://127.0.0.1:3000/swagger-ui")),
+            "the same page twice is the same window"
+        );
+        assert_ne!(swagger, label_for(&url("http://127.0.0.1:3000/api/health")));
+        assert_ne!(swagger, "main");
+    }
 }

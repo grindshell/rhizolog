@@ -68,8 +68,10 @@ See [The desktop app](knowledge-base/desktop-app.md), "Portable, on Windows".
   window is worth showing on a large wiki and nothing is hiding behind it.
 - **A way to open the log folder.** A windowed binary has no stdout, so
   `%LOCALAPPDATA%\dev.rhizolog.app\logs\` is its only account of itself, and
-  nothing in the app says where that is. A File menu item is the obvious answer;
-  it needs a way to open a folder, which is one more Tauri plugin.
+  nothing in the app says where that is. A File menu item is the obvious answer.
+  It needed a Tauri plugin that opens a folder; `tauri-plugin-opener` is now a
+  dependency anyway, for links out of the dashboard, so what is left is the
+  menu item.
 - **The single-instance check is a courtesy, not a mutex.** Two launches close
   enough together both confirm nothing is serving the wiki before either
   publishes, and both start. Closing it properly needs an OS-level lock taken

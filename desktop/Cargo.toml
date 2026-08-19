@@ -23,6 +23,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = "2"
 tauri-plugin-dialog = "2"
+# Only for handing a link to the real browser. Its JavaScript half is switched
+# off in `main.rs`: it works by injecting Tauri IPC into the page, which is the
+# one thing the dashboard may not have.
+tauri-plugin-opener = "2"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

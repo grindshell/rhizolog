@@ -403,6 +403,50 @@ listing that URL. The documented wildcard support is for subdomains, and the
 port here is negotiated at startup — so the one thing that would have to be
 wildcarded is the one thing that varies.
 
+### A webview has no tabs, so `target="_blank"` is the shell's problem
+
+The dashboard's "API docs" link is a plain anchor to `/swagger-ui` with
+`target="_blank"`, and in the app it did nothing at all — no window, no error,
+no log line. WebView2 raises `NewWindowRequested` for a `_blank` anchor as it
+does for `window.open`, and wry's default when no handler is registered is to
+mark the event handled and drop it. Tauri only registers one when the window was
+built with `on_new_window`, so the request died inside the webview and the click
+had no effect anybody could see.
+
+It was never only the API docs. Every external link in a rendered page body
+carries `target="_blank"` — the frontend puts it there so nothing in a page can
+navigate the dashboard's own tab away — and so does every external link in the
+"Links out" panel. The whole class of "open this elsewhere" was dead in the app
+and fine in a browser, which is this page's divergence arriving from the other
+direction: not the app doing something a browser cannot, but failing at
+something a browser does.
+
+So the shell answers, since there is nowhere else to answer from and the page
+must not learn it is inside Tauri. What the answer is depends on where the link
+points:
+
+- **A page of this server gets a second window** onto the same origin, with the
+  same handler attached to it — otherwise Swagger UI's own links out would be
+  dead one level down. The window's label is derived from the URL's path, which
+  is what makes a second click on the same link raise the window the first one
+  opened rather than stack another behind it. It carries no menu: File → Open
+  Wiki… restarts the application, which is not a thing to offer from a window
+  looking at one page.
+- **Everything else goes to the real browser.** A Tauri window has no address
+  bar, no back button and nothing that says whose site is in it, which is not
+  something to point at the open web. Only `http`, `https`, `mailto` and `tel`
+  are handed over: that call ends at `ShellExecute` on Windows, and a `file:`
+  URL in a wiki page should not be a way to start a program.
+
+`tauri-plugin-opener` opens the browser, **with its JavaScript half switched
+off**. The plugin's own answer to `target="_blank"` is a script injected into the
+page that cancels the click and calls Tauri IPC — which is both the Tauri
+JavaScript in the SPA that the section above forbids and, on a remote origin
+with no capability, a second way for the link to do nothing.
+
+The plugin also opens folders, which is what the log-folder menu item in
+[`TODO.md`](../TODO.md) was waiting for.
+
 ## Portable, on Windows
 
 **Tauri has no portable bundle target.** NSIS and MSI are the Windows bundles;
