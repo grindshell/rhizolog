@@ -61,20 +61,27 @@ the machine that built it" and "is a download".
 
 See [The desktop app](knowledge-base/desktop-app.md), "Portable, on Windows".
 
-## Accounts
+## Accounts and visibility
 
-Identity is built: accounts on disk, sessions, and a gate in front of `/api`.
-See [Accounts](knowledge-base/accounts.md) for the reasoning. These are the
+Both halves are built: accounts on disk, sessions, a gate in front of `/api`,
+and a page's `visibility` applied to every query that can return one. See
+[Accounts](knowledge-base/accounts.md) and
+[Page visibility](knowledge-base/visibility.md) for the reasoning. These are the
 pieces that are known to be missing.
 
-- **Page visibility is not built.** `public` / `internal` / `restricted` /
-  `private` in frontmatter, and the index and query work to apply it. Identity
-  had to come first — there is no way to scope a page to an account before
-  accounts exist — but until this lands, every signed-in account sees every page,
-  which is the *whole* wiki and not a subset of it. This is the larger half:
-  it has to reach listing, search, the graph, links, tags, stats and pins,
-  because an access-control model that is not applied to search is not an
-  access-control model.
+- **No per-directory or per-tag visibility defaults.** Every page carries its own
+  line, which is fine for a handful and tedious for a branch. The natural shape
+  is a `.rhizolog/visibility.toml` of prefix rules; the reason to wait is that it
+  introduces a *second* place a page's visibility is decided, and the first
+  second place already costs a test to keep honest.
+- **No groups, and no write permission distinct from read.** `readers:` is a list
+  of accounts, which on a wiki with three people is a group and clearer than one.
+  Anybody who can read a page can edit it; splitting the two is a real feature
+  and a different one.
+- **Pins and the time log have no visibility of their own.** They are wiki-wide
+  state shared by every account. Their page *titles* are filtered, so a pin to a
+  page you cannot read has none — but the slug stays, because it is the pin's own
+  content.
 - **No rate limiting on sign-in.** Argon2 is a real natural throttle — roughly
   twenty attempts a second per core, and each costs the attacker what it costs
   the server — but it is not a lockout, and a network instance wants one. Also
@@ -190,5 +197,7 @@ worth keeping so the question does not get reopened from scratch.
 - **macOS and Linux bundles.** The architecture is portable; the packaging work
   is not, and development is on Windows.
 - **Revisions and history.** A wiki directory is very likely a git repository
-  already, which covers history for the one user who exists. See
+  already, which covers history for whoever holds the disk. Accounts make "who
+  changed this" a question with more than one answer, so this is closer than it
+  was — but git still answers it, and answering it twice is worse. See
   [Architecture](knowledge-base/architecture.md).

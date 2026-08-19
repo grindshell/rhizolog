@@ -50,6 +50,7 @@ async fn app_serving(wiki: &TempDir, assets: Assets) -> Router {
         usage: rhizolog::UsageTally::new(),
         assets,
         secure_cookies: false,
+        anonymous_read: false,
     })
 }
 

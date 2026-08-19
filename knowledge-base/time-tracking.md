@@ -146,6 +146,15 @@ and cached, so time can be tracked against a page before it is written and
 attaches itself the moment somebody writes it. That is the same property the
 [link graph](architecture.md) has and it is worth the consistency.
 
+They share the [visibility](visibility.md) filter on that join too, and where it
+lands is worth stating. The **title** is the page's, so an entry against a page
+the caller cannot read reports none — the same answer a slug with nothing written
+at it gives. The **slug** is the entry's own content and stays: an entry says
+which pages the time was spent on, the log is wiki-wide state shared by every
+account, and hiding a row would be hiding somebody's own working history from
+them. The statistics rank such a page under its slug rather than dropping it,
+because the time really was spent.
+
 ### Only the frontmatter counts
 
 A wikilink written inside an entry's *note* renders as a link and is not

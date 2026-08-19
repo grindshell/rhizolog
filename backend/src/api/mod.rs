@@ -65,6 +65,12 @@ pub struct AppState {
     /// a sign-in that succeeds and then immediately has not happened. On behind
     /// TLS, where it must be on; see [`crate::config`].
     pub secure_cookies: bool,
+    /// Whether a caller who has not signed in may read pages marked `public`.
+    ///
+    /// Off by default. Publishing to the open internet takes two deliberate
+    /// acts — this, and marking the page — and neither is much use without the
+    /// other. See [`crate::config`].
+    pub anonymous_read: bool,
 }
 
 #[derive(OpenApi)]

@@ -144,6 +144,11 @@ Knowledge branches off chaotically. See [[notes/rust/async]].
   humanized basename.
 - **`tags`** — optional list.
 - **`created`** — set once, on creation.
+- **`visibility`** — optional, one of `public`, `internal`, `restricted`,
+  `private`. Absent means `internal`, and an unrecognised word means `private`.
+- **`owner`** and **`readers`** — optional; who a `private` or `restricted` page
+  belongs to and who else may read it. All three do nothing on a wiki with no
+  accounts. See [Page visibility](visibility.md).
 - **There is no `updated` field.** It is read from the file's mtime instead.
 
 That last one matters: if `updated` lived in frontmatter, every hand-edit and
@@ -232,8 +237,9 @@ silently rotting. Link-rewriting on move is a post-MVP convenience.
 Derived from the wiki, and therefore disposable:
 
 ```sql
-pages(slug PK, title, created, updated, size)
+pages(slug PK, title, created, updated, size, visibility, owner)
 page_tags(slug, tag)
+page_readers(slug, username)            -- who a restricted page admits
 page_segments(slug, segment, depth)     -- the directories a page sits in
 links(src_slug, target, display, kind)  -- kind: wiki | internal | external
 pages_fts                               -- FTS5 over (slug unindexed, title, body)
@@ -254,6 +260,15 @@ would drown its backlinks and make it the most-linked page in the wiki. See
 `ended` and `started`, not `end` and `start`: `end` closes a `case` in SQLite,
 and a column that must be quoted in every query it appears in is a column that
 eventually will not be.
+
+`visibility`, `owner` and `page_readers` are what every page-returning query
+filters on, and they are derived like everything else here — the frontmatter is
+the truth, and a page's visibility on the wire comes from the file that was just
+read rather than from whatever the last scan wrote down. Storing them anyway is
+what lets the listing be filtered in SQL instead of by reading ten thousand files
+off disk. The schema version was bumped when they landed, because an index built
+before them has `visibility` nowhere and would serve every page to everybody.
+See [Page visibility](visibility.md).
 
 `page_segments` is redundant with the slug in `pages` and exists only to make
 "every page in a `rust` directory" an indexed lookup instead of a scan. `depth`
@@ -434,6 +449,7 @@ src/
   users/         Username, User, the accounts on disk, password hashing
   auth.rs        who a request is: sessions, the Viewer, the gate in front of /api
   index/         SQLite: schema, upsert, search, links, tags, pins, times, sessions, stats
+                 audience.rs: the one visibility predicate every page query pastes in
   watcher.rs     notify -> reindex queue
   assets.rs      the built dashboard: Dir | Embedded | None
   endpoint.rs    .rhizolog/server.json: publish, withdraw, confirm
@@ -466,6 +482,7 @@ begun, which is what lets a caller hand out the address it bound. See
 | `RHIZOLOG_ASSETS` | `../frontend/dist` | Built dashboard; missing is fine |
 | `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter |
 | `RHIZOLOG_SECURE_COOKIES` | off | Mark the session cookie `Secure`; on behind TLS |
+| `RHIZOLOG_ANONYMOUS_READ` | off | Serve `public` pages to callers who have not signed in |
 
 Binding to loopback by default is intentional, and [accounts](accounts.md) did
 not change it: a wiki with no accounts is open, and its API can write files
@@ -474,6 +491,15 @@ it ever was. The fallback keeps the same host for that reason — a loopback
 default cannot become a public bind by giving way. What is new is that binding
 wider is now a supported thing to *choose*, and `server::start` warns at startup
 when an instance is bound off loopback with no accounts to sign in to.
+
+`RHIZOLOG_ANONYMOUS_READ` is the other half of marking a page `public`, and it is
+a variable rather than something derived from the wiki because it answers a
+question nothing on disk knows: not "does this wiki have accounts", which is a
+fact about a directory, but "should strangers be able to read this instance",
+which is a statement of deployment intent. Publishing therefore takes two
+deliberate acts in two places — a line in a file and a variable in a deployment —
+and neither is much use without the other. See
+[Page visibility](visibility.md).
 
 `RHIZOLOG_SECURE_COOKIES` has to default off, because the server speaks HTTP and
 a browser discards a `Secure` cookie that arrives over one — which presents as a

@@ -135,6 +135,26 @@ Renaming is a `POST /api/move`, which operates on the file rather than on what i
 in the textarea — hence the interlock. Inbound links are not rewritten, so a
 rename turns them into wanted pages, visible immediately on the dashboard.
 
+## The visibility control is not there until it means something
+
+The editor's "Who can read this" select and its readers field appear only when
+the session says the wiki has accounts. On a wiki with no accounts the four rungs
+in [Page visibility](visibility.md) are a distinction between nobody and nobody,
+and a control that does nothing is worse than no control — it invites somebody to
+mark a page `private` and believe it.
+
+The badge on a read page is narrower still: it says nothing for an `internal`
+page, which is most of them. A badge on every page is a badge nobody reads, and
+the one that matters — `public`, the only rung where a mistake is a disclosure
+rather than an inconvenience — is coloured as a warning so it is not the same
+grey as the rest.
+
+**Saving is a `PUT`, so the editor sends the owner back whether or not it shows
+it.** A field left out of a `PUT` is a field cleared, and the backend fills a
+missing owner in from whoever is saving — so an editor that dropped it would hand
+every page it touched to the last person who pressed Save, including pages shared
+*with* that person by somebody else.
+
 ## The editor divides its space three ways
 
 Editor / Split / Preview, chosen from a segmented control in the editor's

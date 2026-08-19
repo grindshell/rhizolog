@@ -22,9 +22,102 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use utoipa::ToSchema;
 
 use crate::frontmatter::{self, FrontmatterError};
 use crate::slug::Slug;
+use crate::users::Username;
+
+/// Who may read a page.
+///
+/// A ladder rather than a set of flags, and the ordering is the point: each rung
+/// is strictly narrower than the one above it, so "can this account read this
+/// page" is one comparison rather than a policy engine.
+///
+/// The default is [`Visibility::Internal`], which is what an unmarked page means
+/// — and unmarked is what every page in an existing wiki is. That choice is why
+/// turning authentication on does not silently publish a wiki to the internet,
+/// and why it does not silently hide it from the people already using it.
+///
+/// **None of this is a boundary against whoever holds the disk.** Anybody who
+/// can read the wiki directory can read every page in it. See
+/// `knowledge-base/visibility.md`.
+/// The `description` is set here rather than taken from the doc comment above,
+/// for the reason [`crate::slug::Slug`]'s is: that comment is written for
+/// somebody reading this file, and it links to Rust items that mean nothing on
+/// the wire. What a caller needs is the four words and what each one does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+#[schema(
+    example = "internal",
+    description = "Who may read a page.\n\n\
+                   - `public` — anyone, including callers who have not signed in. Only \
+                   reaches them when the instance sets `RHIZOLOG_ANONYMOUS_READ`; without \
+                   that it behaves as `internal`.\n\
+                   - `internal` — any account on this wiki. **This is what an unmarked page \
+                   means.**\n\
+                   - `restricted` — the accounts in `readers`, plus the owner.\n\
+                   - `private` — the owner alone.\n\n\
+                   An unrecognised word reads as `private` rather than as the default: a typo \
+                   in this field must never be the thing that publishes a page.\n\n\
+                   On a wiki with no accounts this is inert — there is nobody to keep a page \
+                   from. It is also not a boundary against anyone who can read the wiki \
+                   directory itself."
+)]
+pub enum Visibility {
+    /// Anyone, including callers who have not signed in.
+    ///
+    /// Only reaches an anonymous caller when the instance has opted into serving
+    /// them at all — see `RHIZOLOG_ANONYMOUS_READ` in [`crate::config`]. Without
+    /// that, this behaves as [`Visibility::Internal`], so marking a page public
+    /// on a wiki that is not serving the public does nothing.
+    Public,
+    /// Any account on this wiki. What an unmarked page means.
+    #[default]
+    Internal,
+    /// The `readers` list, plus the owner.
+    Restricted,
+    /// The owner alone.
+    Private,
+}
+
+impl Visibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Internal => "internal",
+            Self::Restricted => "restricted",
+            Self::Private => "private",
+        }
+    }
+
+    /// Parse the value as it appears in frontmatter.
+    ///
+    /// A word nobody recognises is **not** an error and does not fall back to
+    /// the default. It reads as [`Visibility::Private`], because the one thing a
+    /// typo in this field must never do is publish a page: somebody who wrote
+    /// `visibility: privte` was trying to restrict it, and treating that as
+    /// "internal" would do the opposite of what they asked.
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "public" => Self::Public,
+            "internal" => Self::Internal,
+            "restricted" => Self::Restricted,
+            _ => Self::Private,
+        }
+    }
+
+    /// Whether this page needs an owner to be readable by anybody.
+    pub fn needs_owner(self) -> bool {
+        matches!(self, Self::Restricted | Self::Private)
+    }
+}
+
+impl std::fmt::Display for Visibility {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 /// The frontmatter block, exactly as it appears in the file.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,11 +131,43 @@ pub struct Frontmatter {
     /// Set once, when the page is created. Absent for files written by hand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<DateTime<Utc>>,
+
+    /// Who may read this page. Absent means [`Visibility::Internal`].
+    ///
+    /// Deserialised through a plain `String` rather than straight into the enum
+    /// so that an unrecognised word is a *value* rather than a parse failure. A
+    /// page whose frontmatter will not parse is reported as malformed and is
+    /// invisible in listings, which for a typo in this field would be a strange
+    /// way to find out — and would take the rest of the frontmatter with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+
+    /// The account this page belongs to.
+    ///
+    /// Set automatically when a page is created or first restricted, to the
+    /// account doing it. Required for `restricted` and `private` to mean
+    /// anything: a private page with no owner is readable by nobody, which is
+    /// the safe direction to fail in but is rarely what anyone wanted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+
+    /// Accounts that may read this page when it is `restricted`.
+    ///
+    /// Ignored for every other visibility, and kept in the file rather than
+    /// dropped, so that widening a page and narrowing it again does not lose the
+    /// list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub readers: Vec<String>,
 }
 
 impl Frontmatter {
     pub fn is_empty(&self) -> bool {
-        self.title.is_none() && self.tags.is_empty() && self.created.is_none()
+        self.title.is_none()
+            && self.tags.is_empty()
+            && self.created.is_none()
+            && self.visibility.is_none()
+            && self.owner.is_none()
+            && self.readers.is_empty()
     }
 }
 
@@ -160,6 +285,43 @@ impl Page {
     /// written by hand and never carried the field.
     pub fn created(&self) -> DateTime<Utc> {
         self.frontmatter.created.unwrap_or(self.updated)
+    }
+
+    /// Who may read this page.
+    ///
+    /// An absent field is [`Visibility::Internal`] — any account — and an
+    /// unrecognised one is [`Visibility::Private`]. See [`Visibility::parse`]
+    /// for why a typo fails closed rather than falling back to the default.
+    pub fn visibility(&self) -> Visibility {
+        match &self.frontmatter.visibility {
+            Some(raw) => Visibility::parse(raw),
+            None => Visibility::default(),
+        }
+    }
+
+    /// The account this page belongs to, if the name is one that could exist.
+    ///
+    /// An owner that will not parse as a username names nobody, so it is treated
+    /// as absent rather than as a value nothing will ever match. The distinction
+    /// only matters for the message a reader gets, since neither is readable.
+    pub fn owner(&self) -> Option<Username> {
+        self.frontmatter
+            .owner
+            .as_deref()
+            .and_then(|raw| Username::parse(raw).ok())
+    }
+
+    /// The accounts named in `readers`, ignoring any that are not valid names.
+    ///
+    /// Only meaningful when [`Page::visibility`] is [`Visibility::Restricted`];
+    /// the list is kept on other pages rather than dropped, so narrowing a page
+    /// again does not lose it.
+    pub fn readers(&self) -> Vec<Username> {
+        self.frontmatter
+            .readers
+            .iter()
+            .filter_map(|raw| Username::parse(raw).ok())
+            .collect()
     }
 }
 

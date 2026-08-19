@@ -24,10 +24,12 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::api::AppState;
-use crate::api::pages::parse_slug;
+use crate::api::pages::{parse_slug, readable};
+use crate::auth::Viewer;
 use crate::error::{AppError, AppResult};
 use crate::index::Pin;
 use crate::slug::Slug;
+use crate::store::StoreError;
 
 /// How many pages may be pinned at once.
 ///
@@ -82,11 +84,14 @@ pub struct PinsResponse {
     tag = "pins",
     responses((status = 200, description = "The pinned pages, oldest first", body = PinsResponse)),
 )]
-pub async fn list_pins(State(state): State<AppState>) -> AppResult<Json<PinsResponse>> {
+pub async fn list_pins(
+    State(state): State<AppState>,
+    viewer: Viewer,
+) -> AppResult<Json<PinsResponse>> {
     Ok(Json(PinsResponse {
         pins: state
             .index
-            .pins()
+            .pins(&viewer.audience())
             .await?
             .into_iter()
             .map(PinView::from)
@@ -113,15 +118,24 @@ pub async fn list_pins(State(state): State<AppState>) -> AppResult<Json<PinsResp
 )]
 pub async fn pin_page(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
 ) -> AppResult<Json<PinView>> {
     let slug = parse_slug(&raw)?;
 
-    // Pinning something that is not there would be a typo every time. The store
-    // answers rather than the index, because the store is the source of truth
-    // and a page written a moment ago is on disk before it is indexed.
-    if !state.store.exists(&slug).await? {
-        return Err(AppError::Store(crate::store::StoreError::NotFound { slug }));
+    // Pinning something that is not there would be a typo every time, and
+    // pinning something you may not read would answer the one question its slug
+    // was hiding — so both come back as the same 404. The store answers rather
+    // than the index, because the store is the source of truth and a page
+    // written a moment ago is on disk before it is indexed.
+    match state.store.read(&slug).await {
+        Ok(page) if !readable(&page, &viewer) => {
+            return Err(AppError::Store(StoreError::NotFound { slug }));
+        }
+        // A page whose frontmatter will not parse has no visibility to read, and
+        // it is still a page. Pinning it is how somebody gets back to it.
+        Ok(_) | Err(StoreError::Malformed { .. }) => {}
+        Err(error) => return Err(error.into()),
     }
 
     // Checked before inserting, and skipped when the page is already pinned so
@@ -134,7 +148,7 @@ pub async fn pin_page(
 
     let pin = state
         .index
-        .pins()
+        .pins(&viewer.audience())
         .await?
         .into_iter()
         .find(|pin| pin.slug == slug)

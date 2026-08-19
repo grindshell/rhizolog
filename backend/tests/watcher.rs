@@ -11,6 +11,10 @@ use std::time::{Duration, Instant};
 use rhizolog::{Index, Store, TimeStore, watcher};
 use tempfile::TempDir;
 
+/// The wikis in this file have no accounts, so every page is visible. What
+/// happens when they do is `tests/visibility.rs`.
+const EVERYONE: rhizolog::index::Audience = rhizolog::index::Audience::Everything;
+
 /// Generous on purpose: the debounce window is 500ms, and a loaded machine can
 /// take a while to deliver events. A test that fails here should mean the
 /// watcher is broken, not that the machine was busy.
@@ -68,11 +72,14 @@ async fn picks_up_a_page_created_outside_the_api() {
     .expect("write page");
 
     eventually("the new page to be indexed", || async {
-        index.count().await.unwrap_or(0) == 1
+        index.count(&EVERYONE).await.unwrap_or(0) == 1
     })
     .await;
 
-    let hits = index.search("editor", 10, 0).await.expect("search");
+    let hits = index
+        .search("editor", 10, 0, &EVERYONE)
+        .await
+        .expect("search");
     assert_eq!(hits.total, 1);
     assert_eq!(hits.hits[0].slug.as_str(), "external");
     assert_eq!(hits.hits[0].title, "External");
@@ -128,7 +135,12 @@ async fn the_index_database_beside_the_time_log_is_still_ignored() {
         .expect("write page");
 
     eventually("the page to be indexed", || async {
-        index.search("rhizomes", 10, 0).await.unwrap().total == 1
+        index
+            .search("rhizomes", 10, 0, &EVERYONE)
+            .await
+            .unwrap()
+            .total
+            == 1
     })
     .await;
     assert_eq!(
@@ -147,7 +159,12 @@ async fn picks_up_an_edit_made_outside_the_api() {
         .await
         .expect("write page");
     eventually("the page to be indexed", || async {
-        index.search("Original", 10, 0).await.unwrap().total == 1
+        index
+            .search("Original", 10, 0, &EVERYONE)
+            .await
+            .unwrap()
+            .total
+            == 1
     })
     .await;
 
@@ -156,11 +173,20 @@ async fn picks_up_an_edit_made_outside_the_api() {
         .expect("edit page");
 
     eventually("the edit to be picked up", || async {
-        index.search("Replaced", 10, 0).await.unwrap().total == 1
+        index
+            .search("Replaced", 10, 0, &EVERYONE)
+            .await
+            .unwrap()
+            .total
+            == 1
     })
     .await;
     assert_eq!(
-        index.search("Original", 10, 0).await.unwrap().total,
+        index
+            .search("Original", 10, 0, &EVERYONE)
+            .await
+            .unwrap()
+            .total,
         0,
         "the old text is still searchable"
     );
@@ -175,14 +201,14 @@ async fn picks_up_a_deletion_made_outside_the_api() {
         .await
         .expect("write page");
     eventually("the page to be indexed", || async {
-        index.count().await.unwrap_or(0) == 1
+        index.count(&EVERYONE).await.unwrap_or(0) == 1
     })
     .await;
 
     tokio::fs::remove_file(&path).await.expect("delete page");
 
     eventually("the deletion to be picked up", || async {
-        index.count().await.unwrap_or(1) == 0
+        index.count(&EVERYONE).await.unwrap_or(1) == 0
     })
     .await;
 }
@@ -204,7 +230,7 @@ async fn picks_up_a_directory_removed_outside_the_api() {
         .await
         .expect("write b");
     eventually("both pages to be indexed", || async {
-        index.count().await.unwrap_or(0) == 2
+        index.count(&EVERYONE).await.unwrap_or(0) == 2
     })
     .await;
 
@@ -213,7 +239,7 @@ async fn picks_up_a_directory_removed_outside_the_api() {
         .expect("remove directory");
 
     eventually("both pages to be dropped", || async {
-        index.count().await.unwrap_or(2) == 0
+        index.count(&EVERYONE).await.unwrap_or(2) == 0
     })
     .await;
 }
@@ -233,6 +259,7 @@ async fn the_apis_own_writes_do_not_corrupt_the_index() {
                 title: Some("Written by the API".to_owned()),
                 tags: vec!["api".to_owned()],
                 created: None,
+                ..rhizolog::Frontmatter::default()
             },
             "Body about rhizomes.\n",
         )
@@ -244,11 +271,11 @@ async fn the_apis_own_writes_do_not_corrupt_the_index() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     assert_eq!(
-        index.count().await.unwrap(),
+        index.count(&EVERYONE).await.unwrap(),
         1,
         "the echo duplicated a page"
     );
-    let hits = index.search("rhizomes", 10, 0).await.unwrap();
+    let hits = index.search("rhizomes", 10, 0, &EVERYONE).await.unwrap();
     assert_eq!(hits.total, 1);
     assert_eq!(hits.hits[0].title, "Written by the API");
     assert_eq!(hits.hits[0].tags, ["api"]);

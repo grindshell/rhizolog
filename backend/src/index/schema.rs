@@ -19,7 +19,12 @@
 /// has arbitrary rowids in its FTS tables — so a delete would miss, or hit
 /// somebody else's row. Rebuilding is what puts them back in step, and it costs
 /// one scan, which is the whole reason this mechanism exists.
-pub const SCHEMA_VERSION: i64 = 6;
+///
+/// Version 7 adds `pages.visibility`, `pages.owner` and `page_readers`. An index
+/// written before it has neither, and every page in it would read as visible to
+/// everybody — so this is one of the bumps where *not* rebuilding is a leak
+/// rather than a stale row. The rebuild is the same one scan it always is.
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -93,13 +98,47 @@ create index if not exists sessions_by_username on sessions(username);
 /// against the filesystem's, and integers compare exactly where round-tripped
 /// RFC 3339 invites precision bugs.
 pub const CREATE_DERIVED: &str = "
+-- `visibility` and `owner` are here rather than in a table of their own because
+-- every query that returns a page has to consult them, and a join that is never
+-- optional is a column. `not null` on `visibility` matters: a null would make
+-- the audience predicate's comparisons null rather than false, and a `where`
+-- clause that is null excludes the row — which fails safe, but by accident and
+-- in a way nobody reading the SQL would predict. The default is written by the
+-- indexer from `Page::visibility`, so there is exactly one place that decides
+-- what an unmarked page means.
+--
+-- `owner` is nullable, and a nullable owner is why the predicate guards every
+-- comparison with `:viewer is not null`: in SQL `null = null` is null, so an
+-- anonymous caller must never be allowed to reach a comparison against an
+-- ownerless page and have it read as a match.
 create table pages (
-    slug    text    primary key,
-    title   text    not null,
-    created integer not null,
-    updated integer not null,
-    size    integer not null
+    slug       text    primary key,
+    title      text    not null,
+    created    integer not null,
+    updated    integer not null,
+    size       integer not null,
+    visibility text    not null default 'internal',
+    owner      text
 ) strict;
+
+create index pages_by_visibility on pages(visibility);
+create index pages_by_owner on pages(owner);
+
+-- The `readers:` list of a restricted page, one row each. The same shape as
+-- `page_tags`, because it is the same kind of question: which pages carry this
+-- name.
+--
+-- Rows are kept for pages that are not restricted, exactly as the file keeps the
+-- list — widening a page and narrowing it again should not lose who could read
+-- it. The predicate only consults this table when `visibility = 'restricted'`,
+-- so a stale row grants nothing.
+create table page_readers (
+    slug     text not null references pages(slug) on delete cascade,
+    username text not null,
+    primary key (slug, username)
+) strict;
+
+create index page_readers_by_username on page_readers(username);
 
 create table page_tags (
     slug text not null references pages(slug) on delete cascade,
@@ -222,6 +261,7 @@ pub const DROP_DERIVED: &str = "
 drop table if exists links;
 drop table if exists page_tags;
 drop table if exists page_segments;
+drop table if exists page_readers;
 drop table if exists pages_fts;
 drop table if exists pages;
 drop table if exists time_pages;

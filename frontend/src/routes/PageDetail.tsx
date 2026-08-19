@@ -22,6 +22,7 @@ import Duration, { formatDuration } from '../components/Duration'
 import Markdown from '../components/Markdown'
 import SlugPath from '../components/SlugPath'
 import { PageTimerButton } from '../components/TimerMenu'
+import VisibilityBadge from '../components/VisibilityBadge'
 
 /**
  * Read one page.
@@ -140,7 +141,20 @@ export default function PageDetail() {
             <article class="card bg-base-100 shadow">
               <div class="card-body">
                 <div class="flex flex-wrap items-start justify-between gap-3">
-                  <h1 class="card-title text-2xl">{loaded().title}</h1>
+                  <h1 class="card-title text-2xl">
+                    {loaded().title}
+                    {/*
+                      Only when it is worth saying. An unmarked page is
+                      `internal`, which is most of them, and a badge on every
+                      page is a badge nobody reads — so the one that means
+                      "anyone on the internet" stays legible.
+                    */}
+                    <VisibilityBadge
+                      visibility={loaded().visibility}
+                      owner={loaded().owner}
+                      readers={loaded().readers}
+                    />
+                  </h1>
                   <div class="flex items-center gap-2">
                     {/*
                       Starting a timer here rather than only on the Time screen:

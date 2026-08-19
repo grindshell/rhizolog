@@ -43,7 +43,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 
-use crate::index::{Index, IndexError, Stamp, from_nanos, to_fts_query, to_nanos};
+use crate::index::audience::{Audience, VISIBLE};
+use crate::index::{Index, IndexError, Stamp, bindings, from_nanos, to_fts_query, to_nanos};
 use crate::index::{
     SortOrder,
     schema::{FTS_NOTE_COLUMN, TOP_N},
@@ -380,7 +381,9 @@ impl Index {
         &self,
         options: TimeListOptions,
         now: DateTime<Utc>,
+        audience: &Audience,
     ) -> Result<TimeList, IndexError> {
+        let audience = audience.clone();
         let TimeListOptions {
             query,
             name,
@@ -490,7 +493,7 @@ impl Index {
                 }
             }
 
-            attach_pages(connection, &mut times)?;
+            attach_pages(connection, &mut times, &audience)?;
 
             Ok(TimeList {
                 times,
@@ -572,13 +575,19 @@ impl Index {
     /// [`crate::times::stats`] for why — so this hands back rows rather than
     /// totals. Page titles come along because the statistics rank pages, and
     /// looking each one up afterwards would be a query per page.
+    ///
+    /// Those titles are the audience's to see or not, so the join carries the
+    /// predicate and a page the caller may not read is ranked under its slug —
+    /// the label an unwritten page already gets.
     pub async fn time_samples(
         &self,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
+        audience: &Audience,
     ) -> Result<Vec<Sample>, IndexError> {
         let from = to_nanos(from, "from")?;
         let to = to_nanos(to, "to")?;
+        let audience = audience.clone();
 
         self.with_connection(move |connection| {
             // A running entry has no `ended`, so it overlaps anything that has
@@ -606,19 +615,22 @@ impl Index {
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let mut pages_of = connection.prepare(
+            let visible = audience.params();
+            let mut pages_of = connection.prepare(&format!(
                 "select time_pages.target, pages.title
                  from time_pages
-                 left join pages on pages.slug = time_pages.target
-                 where time_pages.time_id = ?1
+                 left join pages on pages.slug = time_pages.target and {VISIBLE}
+                 where time_pages.time_id = :time_id
                  order by time_pages.target",
-            )?;
+            ))?;
 
             for (id, sample) in &mut samples {
+                let id_param = id.as_str();
                 sample.pages = pages_of
-                    .query_map(params![id.as_str()], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-                    })?
+                    .query_map(
+                        bindings(&[(":time_id", &id_param)], &visible).as_slice(),
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                    )?
                     .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
                     .filter_map(|(target, title)| {
@@ -717,8 +729,13 @@ impl Index {
     }
 
     /// One entry as the index holds it, or `None` if it is not indexed.
-    pub async fn time_record(&self, id: &TimeId) -> Result<Option<TimeRecord>, IndexError> {
+    pub async fn time_record(
+        &self,
+        id: &TimeId,
+        audience: &Audience,
+    ) -> Result<Option<TimeRecord>, IndexError> {
         let id = id.to_string();
+        let audience = audience.clone();
 
         self.with_connection(move |connection| {
             let record = connection
@@ -735,7 +752,7 @@ impl Index {
                 .flatten();
 
             let mut records: Vec<TimeRecord> = record.into_iter().collect();
-            attach_pages(connection, &mut records)?;
+            attach_pages(connection, &mut records, &audience)?;
             Ok(records.pop())
         })
         .await
@@ -772,21 +789,29 @@ fn read_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<TimeRecord>> 
 }
 
 /// Fill in each record's attached pages, resolving titles by joining `pages`.
+///
+/// The join is filtered, so a page the caller may not read arrives with
+/// `title: None` — the same answer a slug with no page behind it gives. The
+/// slug itself is the entry's own content and stays: an entry says which pages
+/// it was about, and the log is wiki-wide.
 fn attach_pages(
     connection: &rusqlite::Connection,
     records: &mut [TimeRecord],
+    audience: &Audience,
 ) -> Result<(), IndexError> {
-    let mut pages_of = connection.prepare(
+    let visible = audience.params();
+    let mut pages_of = connection.prepare(&format!(
         "select time_pages.target, pages.title
          from time_pages
-         left join pages on pages.slug = time_pages.target
-         where time_pages.time_id = ?1
+         left join pages on pages.slug = time_pages.target and {VISIBLE}
+         where time_pages.time_id = :time_id
          order by time_pages.target",
-    )?;
+    ))?;
 
     for record in records {
+        let id = record.id.as_str();
         record.pages = pages_of
-            .query_map(params![record.id.as_str()], |row| {
+            .query_map(bindings(&[(":time_id", &id)], &visible).as_slice(), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?
@@ -816,6 +841,11 @@ mod tests {
     use super::*;
 
     use crate::page::{Frontmatter, Page};
+
+    /// Every case here runs against a wiki with no accounts. What an entry
+    /// attached to a page the caller cannot read looks like is
+    /// `tests/visibility.rs`.
+    const EVERYONE: Audience = Audience::Everything;
 
     async fn index() -> Index {
         Index::open(None).await.expect("open in-memory index")
@@ -877,7 +907,11 @@ mod tests {
         );
 
         index.upsert_time(&written).await.unwrap();
-        let record = index.time_record(&written.id).await.unwrap().unwrap();
+        let record = index
+            .time_record(&written.id, &EVERYONE)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(record.name, "Deep work");
         assert_eq!(record.seconds(now()), 3600);
@@ -904,7 +938,13 @@ mod tests {
         index.upsert_time(&written).await.unwrap();
 
         assert_eq!(
-            index.time_record(&written.id).await.unwrap().unwrap().pages[0].title,
+            index
+                .time_record(&written.id, &EVERYONE)
+                .await
+                .unwrap()
+                .unwrap()
+                .pages[0]
+                .title,
             None
         );
 
@@ -912,7 +952,12 @@ mod tests {
         seed_page(&index, "notes/later", "Later").await;
 
         assert_eq!(
-            index.time_record(&written.id).await.unwrap().unwrap().pages[0]
+            index
+                .time_record(&written.id, &EVERYONE)
+                .await
+                .unwrap()
+                .unwrap()
+                .pages[0]
                 .title
                 .as_deref(),
             Some("Later")
@@ -930,7 +975,11 @@ mod tests {
         index.upsert_time(&written).await.unwrap();
 
         assert_eq!(index.count_times().await.unwrap(), 1);
-        let record = index.time_record(&written.id).await.unwrap().unwrap();
+        let record = index
+            .time_record(&written.id, &EVERYONE)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(record.name, "Shallow work");
         assert_eq!(record.pages.len(), 1, "the old attachment survived");
         assert_eq!(record.pages[0].slug.as_str(), "notes/b");
@@ -945,7 +994,13 @@ mod tests {
         index.remove_time(&written.id).await.unwrap();
 
         assert_eq!(index.count_times().await.unwrap(), 0);
-        assert!(index.time_record(&written.id).await.unwrap().is_none());
+        assert!(
+            index
+                .time_record(&written.id, &EVERYONE)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             index
                 .page_times(&Slug::parse("notes/a").unwrap(), now())
@@ -981,6 +1036,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -996,6 +1052,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1038,7 +1095,7 @@ mod tests {
         }
 
         let all = index
-            .list_times(TimeListOptions::default(), now())
+            .list_times(TimeListOptions::default(), now(), &EVERYONE)
             .await
             .unwrap();
         let starts: Vec<String> = all
@@ -1055,6 +1112,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1067,6 +1125,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1106,6 +1165,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1138,6 +1198,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1169,6 +1230,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1188,7 +1250,7 @@ mod tests {
     }
 
     async fn found(index: &Index, options: TimeListOptions) -> Vec<String> {
-        let list = index.list_times(options, now()).await.unwrap();
+        let list = index.list_times(options, now(), &EVERYONE).await.unwrap();
         assert_eq!(list.total, list.times.len(), "nothing was paginated away");
         list.times.into_iter().map(|record| record.name).collect()
     }
@@ -1347,6 +1409,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1366,6 +1429,7 @@ mod tests {
                         ..TimeListOptions::default()
                     },
                     now(),
+                    &EVERYONE,
                 )
                 .await;
             assert!(list.is_ok(), "sorting by {sort:?} failed: {list:?}");
@@ -1384,6 +1448,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1402,6 +1467,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1409,7 +1475,7 @@ mod tests {
 
         // And nothing carries one when nothing was searched for.
         let unsearched = index
-            .list_times(TimeListOptions::default(), now())
+            .list_times(TimeListOptions::default(), now(), &EVERYONE)
             .await
             .unwrap();
         assert!(
@@ -1484,6 +1550,7 @@ mod tests {
                         ..TimeListOptions::default()
                     },
                     now(),
+                    &EVERYONE,
                 )
                 .await;
             assert!(result.is_ok(), "query {query:?} failed: {result:?}");
@@ -1504,6 +1571,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1513,7 +1581,7 @@ mod tests {
         // Whereas no query at all is no filter.
         assert_eq!(
             index
-                .list_times(TimeListOptions::default(), now())
+                .list_times(TimeListOptions::default(), now(), &EVERYONE)
                 .await
                 .unwrap()
                 .total,
@@ -1544,6 +1612,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -1674,7 +1743,11 @@ mod tests {
             .unwrap();
 
         let samples = index
-            .time_samples(at("2026-01-01T00:00:00Z"), at("2027-01-01T00:00:00Z"))
+            .time_samples(
+                at("2026-01-01T00:00:00Z"),
+                at("2027-01-01T00:00:00Z"),
+                &EVERYONE,
+            )
             .await
             .unwrap();
 

@@ -173,6 +173,18 @@ pub enum AppError {
     #[error("this is the only owner; promote another account first")]
     LastOwner,
 
+    /// A page narrowed to `restricted` or `private` with nobody able to read it.
+    ///
+    /// Refused rather than written. The result would be a page invisible to
+    /// everyone including its author, recoverable only by editing the file on
+    /// the server's disk — which is the one thing somebody using a remote
+    /// instance cannot do.
+    #[error("a {visibility} page needs an owner, and {slug} would have none")]
+    OwnerlessPage {
+        slug: Slug,
+        visibility: &'static str,
+    },
+
     #[error("{message}")]
     Internal { message: String },
 }
@@ -222,6 +234,9 @@ impl AppError {
             // The account is real and unusable, which is a state of the server
             // rather than a fault in the request.
             Self::NoPasswordSet { .. } | Self::LastOwner => StatusCode::CONFLICT,
+            // A bad request rather than a conflict: the caller asked for a state
+            // that is not allowed to exist, and adding one field fixes it.
+            Self::OwnerlessPage { .. } => StatusCode::BAD_REQUEST,
             Self::RouteNotFound { .. } | Self::PinNotFound { .. } => StatusCode::NOT_FOUND,
             Self::TooManyPins { .. } | Self::TimeNotRunning { .. } => StatusCode::CONFLICT,
             Self::InvalidTimeId { .. }
@@ -276,6 +291,7 @@ impl AppError {
             Self::InvalidCredentials => "invalid_credentials",
             Self::NoPasswordSet { .. } => "no_password_set",
             Self::LastOwner => "last_owner",
+            Self::OwnerlessPage { .. } => "ownerless_page",
             Self::InvalidTimeId { .. } => "invalid_time_id",
             Self::TimeNotRunning { .. } => "time_not_running",
             Self::TimeRangeInverted { .. } => "time_range_inverted",
@@ -340,6 +356,10 @@ impl AppError {
                 "maximum": crate::users::password::MAX_PASSWORD_LEN,
             })),
             Self::Forbidden { action } => Some(json!({ "action": action })),
+            Self::OwnerlessPage { slug, visibility } => Some(json!({
+                "slug": slug,
+                "visibility": visibility,
+            })),
             Self::NoPasswordSet { username } => Some(json!({ "username": username })),
             // Nothing. Which of the three ways a request can be nobody is
             // exactly what an attacker would like to be told, and a caller's

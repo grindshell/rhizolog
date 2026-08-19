@@ -8,6 +8,7 @@
 //! its work in `spawn_blocking` — keeping that boilerplate in one file is most
 //! of why the SQL is confined here rather than spread across handlers.
 
+pub mod audience;
 pub mod graph;
 pub mod pins;
 pub mod schema;
@@ -20,13 +21,15 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, ToSql, params};
 use thiserror::Error;
 
 use crate::page::Page;
 use crate::slug::Slug;
+use audience::VISIBLE;
 use schema::{FTS_BODY_COLUMN, KEY_LAST_SYNC, KEY_SCHEMA_VERSION, SCHEMA_VERSION};
 
+pub use audience::Audience;
 pub use graph::{
     Graph, GraphEdge, GraphNode, GraphOptions, InboundLink, LinkTotals, LinkedPage, OutboundLink,
     PageLinks, PageRef, RouteUsage, Stats, TagCount, WantedPage,
@@ -245,6 +248,16 @@ impl Index {
         let created = to_nanos(page.created(), "created")?;
         let updated = to_nanos(page.updated, "updated")?;
         let size = page.size as i64;
+        // Resolved here rather than stored raw, so the index and the page agree
+        // on what an absent field and an unrecognised word mean. `Page` is the
+        // one place that decides; see `Visibility::parse`.
+        let visibility = page.visibility().as_str();
+        let owner = page.owner().map(|owner| owner.to_string());
+        let readers: Vec<String> = page
+            .readers()
+            .into_iter()
+            .map(|reader| reader.to_string())
+            .collect();
 
         self.with_connection(move |connection| {
             let transaction = connection.transaction()?;
@@ -255,15 +268,32 @@ impl Index {
             // rowid, while this updates in place and keeps it. A page's rowid
             // is therefore stable for as long as the page exists.
             transaction.execute(
-                "insert into pages (slug, title, created, updated, size)
-                 values (?1, ?2, ?3, ?4, ?5)
+                "insert into pages (slug, title, created, updated, size, visibility, owner)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  on conflict(slug) do update set
-                     title   = excluded.title,
-                     created = excluded.created,
-                     updated = excluded.updated,
-                     size    = excluded.size",
-                params![&slug, &title, created, updated, size],
+                     title      = excluded.title,
+                     created    = excluded.created,
+                     updated    = excluded.updated,
+                     size       = excluded.size,
+                     visibility = excluded.visibility,
+                     owner      = excluded.owner",
+                params![&slug, &title, created, updated, size, visibility, &owner],
             )?;
+
+            // Rewritten wholesale, like the tags above: a reader removed from
+            // the file has to be removed from the index, and a delete-then-
+            // insert is the only version of that with no way to leave a row
+            // behind. A row left behind here is somebody still able to read a
+            // page they were taken off.
+            transaction.execute("delete from page_readers where slug = ?1", params![&slug])?;
+            {
+                let mut insert = transaction.prepare(
+                    "insert or ignore into page_readers (slug, username) values (?1, ?2)",
+                )?;
+                for reader in &readers {
+                    insert.execute(params![&slug, reader])?;
+                }
+            }
 
             transaction.execute("delete from page_tags where slug = ?1", params![&slug])?;
             {
@@ -349,6 +379,7 @@ impl Index {
 
             transaction.execute("delete from pages where slug = ?1", params![&slug])?;
             transaction.execute("delete from page_tags where slug = ?1", params![&slug])?;
+            transaction.execute("delete from page_readers where slug = ?1", params![&slug])?;
             transaction.execute("delete from page_segments where slug = ?1", params![&slug])?;
             // Outbound links go with the page. Inbound ones do not: they belong
             // to the pages that wrote them, and they become wanted links.
@@ -395,11 +426,46 @@ impl Index {
         .await
     }
 
-    pub async fn count(&self) -> Result<usize, IndexError> {
-        self.with_connection(|connection| {
-            let count: i64 =
-                connection.query_row("select count(*) from pages", [], |row| row.get(0))?;
+    /// How many pages this audience can see.
+    pub async fn count(&self, audience: &Audience) -> Result<usize, IndexError> {
+        let audience = audience.clone();
+
+        self.with_connection(move |connection| {
+            let visible = audience.params();
+            let count: i64 = connection.query_row(
+                &format!("select count(*) from pages where {VISIBLE}"),
+                visible.as_slice(),
+                |row| row.get(0),
+            )?;
             Ok(count as usize)
+        })
+        .await
+    }
+
+    /// Whether this audience may read the page at `slug`.
+    ///
+    /// `false` covers both "not visible to you" and "no such page", and the
+    /// caller is expected to answer **404** for either. A `403` would confirm
+    /// that a page exists at a slug somebody guessed, which for a private page
+    /// is most of what was being protected — the slug is usually the title.
+    ///
+    /// It reads the index rather than the file. That is the same trade the rest
+    /// of the read path makes and it has the same failure mode: a page written
+    /// on disk in the last few milliseconds and not yet reindexed reads as
+    /// absent. API writes reindex synchronously, so the gap only exists for
+    /// files changed outside Rhizolog, where the watcher closes it.
+    pub async fn is_visible(&self, slug: &Slug, audience: &Audience) -> Result<bool, IndexError> {
+        let slug = slug.to_string();
+        let audience = audience.clone();
+
+        self.with_connection(move |connection| {
+            let visible = audience.params();
+            let found: i64 = connection.query_row(
+                &format!("select count(*) from pages where pages.slug = :slug and {VISIBLE}"),
+                bindings(&[(":slug", &slug)], &visible).as_slice(),
+                |row| row.get(0),
+            )?;
+            Ok(found > 0)
         })
         .await
     }
@@ -419,6 +485,7 @@ impl Index {
         query: &str,
         limit: usize,
         offset: usize,
+        audience: &Audience,
     ) -> Result<SearchResults, IndexError> {
         let Some(fts_query) = to_fts_query(query) else {
             return Ok(SearchResults {
@@ -426,11 +493,24 @@ impl Index {
                 total: 0,
             });
         };
+        let audience = audience.clone();
 
         self.with_connection(move |connection| {
+            let visible = audience.params();
+
+            // Counted through the same join and the same predicate as the rows
+            // below. Counting `pages_fts` alone would report how many pages
+            // *matched*, which for a caller who may read three of twenty is a
+            // paginated result that says "20" and runs out after three — and
+            // the number itself is a fact about pages they cannot see.
             let total: i64 = connection.query_row(
-                "select count(*) from pages_fts where pages_fts match ?1",
-                params![&fts_query],
+                &format!(
+                    "select count(*)
+                     from pages_fts
+                     join pages on pages.slug = pages_fts.slug
+                     where pages_fts match :query and {VISIBLE}"
+                ),
+                bindings(&[(":query", &fts_query)], &visible).as_slice(),
                 |row| row.get(0),
             )?;
 
@@ -446,21 +526,33 @@ impl Index {
                         -bm25(pages_fts)
                  from pages_fts
                  join pages on pages.slug = pages_fts.slug
-                 where pages_fts match ?1
+                 where pages_fts match :query and {VISIBLE}
                  order by bm25(pages_fts)
-                 limit ?2 offset ?3"
+                 limit :limit offset :offset"
             );
             let mut statement = connection.prepare(&sql)?;
 
-            let rows =
-                statement.query_map(params![&fts_query, limit as i64, offset as i64], |row| {
+            let limit = limit as i64;
+            let offset = offset as i64;
+            let rows = statement.query_map(
+                bindings(
+                    &[
+                        (":query", &fts_query),
+                        (":limit", &limit),
+                        (":offset", &offset),
+                    ],
+                    &visible,
+                )
+                .as_slice(),
+                |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, f64>(3)?,
                     ))
-                })?;
+                },
+            )?;
 
             let mut pending = Vec::new();
             for row in rows {
@@ -495,7 +587,11 @@ impl Index {
     }
 
     /// List pages, newest-first by default, without their bodies.
-    pub async fn list(&self, options: ListOptions) -> Result<PageList, IndexError> {
+    pub async fn list(
+        &self,
+        options: ListOptions,
+        audience: &Audience,
+    ) -> Result<PageList, IndexError> {
         let ListOptions {
             tag,
             prefix,
@@ -505,8 +601,10 @@ impl Index {
             limit,
             offset,
         } = options;
+        let audience = audience.clone();
 
         self.with_connection(move |connection| {
+            let visible = audience.params();
             // One filter expression rather than conditional joins: each clause
             // short-circuits to "everything" when its parameter binds as NULL,
             // so there is one query to read instead of eight. The filters
@@ -521,38 +619,61 @@ impl Index {
             // beside it is what keeps the page `notes/rust` itself in its own
             // listing — a page that names a directory is that directory's
             // index, and hiding it there would be a surprise.
-            const FILTERS: &str = "where (?1 is null or exists (
+            //
+            // The audience predicate is one more clause in the same `and`
+            // chain, and it is in the `count` as well as the page of rows: a
+            // total that counts pages the caller may not read is both a wrong
+            // number and a statement about what exists.
+            let filters = format!(
+                "where (:tag is null or exists (
                      select 1 from page_tags
-                     where page_tags.slug = pages.slug and page_tags.tag = ?1
+                     where page_tags.slug = pages.slug and page_tags.tag = :tag
                  ))
-                 and (?2 is null
-                      or slug = ?2
-                      or substr(slug, 1, length(?2) + 1) = ?2 || '/')
-                 and (?3 is null or exists (
+                 and (:prefix is null
+                      or slug = :prefix
+                      or substr(slug, 1, length(:prefix) + 1) = :prefix || '/')
+                 and (:segment is null or exists (
                      select 1 from page_segments
                      where page_segments.slug = pages.slug
-                       and page_segments.segment = ?3
-                 ))";
+                       and page_segments.segment = :segment
+                 ))
+                 and {VISIBLE}"
+            );
+
+            let filter_params: [(&'static str, &dyn ToSql); 3] =
+                [(":tag", &tag), (":prefix", &prefix), (":segment", &segment)];
 
             let total: i64 = connection.query_row(
-                &format!("select count(*) from pages {FILTERS}"),
-                params![&tag, &prefix, &segment],
+                &format!("select count(*) from pages {filters}"),
+                bindings(&filter_params, &visible).as_slice(),
                 |row| row.get(0),
             )?;
 
             let sql = format!(
                 "select slug, title, created, updated, size
                  from pages
-                 {FILTERS}
+                 {filters}
                  order by {} {}, slug asc
-                 limit ?4 offset ?5",
+                 limit :limit offset :offset",
                 sort.column(),
                 order.keyword(),
             );
             let mut statement = connection.prepare(&sql)?;
 
+            let limit = limit as i64;
+            let offset = offset as i64;
             let rows = statement.query_map(
-                params![&tag, &prefix, &segment, limit as i64, offset as i64],
+                bindings(
+                    &[
+                        (":tag", &tag),
+                        (":prefix", &prefix),
+                        (":segment", &segment),
+                        (":limit", &limit),
+                        (":offset", &offset),
+                    ],
+                    &visible,
+                )
+                .as_slice(),
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -608,6 +729,7 @@ impl Index {
             let transaction = connection.transaction()?;
             transaction.execute("delete from pages", [])?;
             transaction.execute("delete from page_tags", [])?;
+            transaction.execute("delete from page_readers", [])?;
             transaction.execute("delete from page_segments", [])?;
             transaction.execute("delete from links", [])?;
             transaction.execute("delete from pages_fts", [])?;
@@ -724,6 +846,20 @@ fn to_fts_query(raw: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
+/// Join a query's own named parameters to the audience's.
+///
+/// Every query that filters on [`audience::VISIBLE`] needs both sets bound in
+/// one call, and rusqlite wants them as a single slice. Building it here rather
+/// than by hand at each call site is what stops one of the two being forgotten —
+/// which SQLite reports as an unbound-parameter error rather than as a page
+/// somebody should not have seen, but only because the predicate names them.
+fn bindings<'a>(
+    own: &[(&'static str, &'a dyn ToSql)],
+    visible: &[(&'static str, &'a dyn ToSql); 2],
+) -> Vec<(&'static str, &'a dyn ToSql)> {
+    own.iter().copied().chain(visible.iter().copied()).collect()
+}
+
 fn to_nanos(at: DateTime<Utc>, label: &'static str) -> Result<i64, IndexError> {
     at.timestamp_nanos_opt()
         .ok_or(IndexError::TimestampOutOfRange { label })
@@ -738,6 +874,11 @@ mod tests {
     use super::*;
 
     use crate::page::Frontmatter;
+    /// Every test in this file runs against a wiki with no accounts, where
+    /// there is nobody to keep a page from and visibility does not apply.
+    /// What happens when it does is `tests/visibility.rs`, which is a whole
+    /// file rather than a case here for exactly that reason.
+    const EVERYONE: Audience = Audience::Everything;
 
     async fn index() -> Index {
         Index::open(None).await.expect("open in-memory index")
@@ -750,6 +891,7 @@ mod tests {
                 title: Some(title.to_owned()),
                 tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
                 created: None,
+                ..Frontmatter::default()
             },
             body: body.to_owned(),
             updated: DateTime::from_timestamp_nanos(1_700_000_000_000_000_000),
@@ -760,25 +902,32 @@ mod tests {
     #[tokio::test]
     async fn upserts_and_counts_pages() {
         let index = index().await;
-        assert_eq!(index.count().await.unwrap(), 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
 
         index
             .upsert(&page("notes/rhizome", "Rhizome", &[], "Branches off."))
             .await
             .unwrap();
-        assert_eq!(index.count().await.unwrap(), 1);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 1);
 
         // Upserting the same slug replaces rather than duplicates.
         index
             .upsert(&page("notes/rhizome", "Rhizome", &[], "Rewritten."))
             .await
             .unwrap();
-        assert_eq!(index.count().await.unwrap(), 1);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 1);
 
-        let results = index.search("rewritten", 10, 0).await.unwrap();
+        let results = index.search("rewritten", 10, 0, &EVERYONE).await.unwrap();
         assert_eq!(results.total, 1);
         // The replaced body is gone from the index, not merely shadowed.
-        assert_eq!(index.search("branches", 10, 0).await.unwrap().total, 0);
+        assert_eq!(
+            index
+                .search("branches", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
     }
 
     #[tokio::test]
@@ -789,8 +938,15 @@ mod tests {
         index.upsert(&page).await.unwrap();
         index.remove(&page.slug).await.unwrap();
 
-        assert_eq!(index.count().await.unwrap(), 0);
-        assert_eq!(index.search("branches", 10, 0).await.unwrap().total, 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
+        assert_eq!(
+            index
+                .search("branches", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
         assert!(index.stamps().await.unwrap().is_empty());
     }
 
@@ -825,7 +981,7 @@ mod tests {
         for n in [0, 1, 3, 4] {
             assert_eq!(
                 index
-                    .search(&format!("distinctive-{n}"), 10, 0)
+                    .search(&format!("distinctive-{n}"), 10, 0, &EVERYONE)
                     .await
                     .unwrap()
                     .total,
@@ -834,9 +990,23 @@ mod tests {
             );
         }
 
-        assert_eq!(index.count().await.unwrap(), 5);
-        assert_eq!(index.search("rewritten", 10, 0).await.unwrap().total, 1);
-        assert_eq!(index.search("distinctive-2", 10, 0).await.unwrap().total, 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 5);
+        assert_eq!(
+            index
+                .search("rewritten", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(
+            index
+                .search("distinctive-2", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
     }
 
     /// The same property one level up: removing a page must take its own text
@@ -861,9 +1031,30 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(index.search("distinctive-1", 10, 0).await.unwrap().total, 0);
-        assert_eq!(index.search("distinctive-0", 10, 0).await.unwrap().total, 1);
-        assert_eq!(index.search("distinctive-2", 10, 0).await.unwrap().total, 1);
+        assert_eq!(
+            index
+                .search("distinctive-1", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
+        assert_eq!(
+            index
+                .search("distinctive-0", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(
+            index
+                .search("distinctive-2", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
     }
 
     #[tokio::test]
@@ -879,7 +1070,7 @@ mod tests {
             .await
             .unwrap();
 
-        let results = index.search("chaotically", 10, 0).await.unwrap();
+        let results = index.search("chaotically", 10, 0, &EVERYONE).await.unwrap();
 
         assert_eq!(results.total, 1);
         let hit = &results.hits[0];
@@ -893,7 +1084,14 @@ mod tests {
         );
 
         // Titles are searchable too.
-        assert_eq!(index.search("rhizome", 10, 0).await.unwrap().total, 1);
+        assert_eq!(
+            index
+                .search("rhizome", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
     }
 
     #[tokio::test]
@@ -908,9 +1106,26 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(index.search("alpha", 10, 0).await.unwrap().total, 2);
-        assert_eq!(index.search("alpha beta", 10, 0).await.unwrap().total, 1);
-        assert_eq!(index.search("alpha delta", 10, 0).await.unwrap().total, 0);
+        assert_eq!(
+            index.search("alpha", 10, 0, &EVERYONE).await.unwrap().total,
+            2
+        );
+        assert_eq!(
+            index
+                .search("alpha beta", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(
+            index
+                .search("alpha delta", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
     }
 
     #[tokio::test]
@@ -921,8 +1136,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(index.search("chaot*", 10, 0).await.unwrap().total, 1);
-        assert_eq!(index.search("chaot", 10, 0).await.unwrap().total, 0);
+        assert_eq!(
+            index
+                .search("chaot*", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(
+            index.search("chaot", 10, 0, &EVERYONE).await.unwrap().total,
+            0
+        );
     }
 
     /// Punctuation a user typed must not reach FTS5 as syntax. Every one of
@@ -955,12 +1180,19 @@ mod tests {
             "",
             "   ",
         ] {
-            let result = index.search(query, 10, 0).await;
+            let result = index.search(query, 10, 0, &EVERYONE).await;
             assert!(result.is_ok(), "query {query:?} failed: {result:?}");
         }
 
         // A hyphenated term still finds the page rather than being read as NOT.
-        assert_eq!(index.search("rust-lang", 10, 0).await.unwrap().total, 1);
+        assert_eq!(
+            index
+                .search("rust-lang", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
     }
 
     #[tokio::test]
@@ -968,7 +1200,7 @@ mod tests {
         let index = index().await;
         index.upsert(&page("a", "A", &[], "alpha")).await.unwrap();
 
-        let results = index.search("   ", 10, 0).await.unwrap();
+        let results = index.search("   ", 10, 0, &EVERYONE).await.unwrap();
         assert_eq!(results.total, 0);
         assert!(results.hits.is_empty());
     }
@@ -983,11 +1215,11 @@ mod tests {
                 .unwrap();
         }
 
-        let first = index.search("alpha", 2, 0).await.unwrap();
+        let first = index.search("alpha", 2, 0, &EVERYONE).await.unwrap();
         assert_eq!(first.hits.len(), 2);
         assert_eq!(first.total, 5, "total must count all matches, not the page");
 
-        let last = index.search("alpha", 2, 4).await.unwrap();
+        let last = index.search("alpha", 2, 4, &EVERYONE).await.unwrap();
         assert_eq!(last.hits.len(), 1);
         assert_eq!(last.total, 5);
     }
@@ -1016,7 +1248,7 @@ mod tests {
             .await
             .unwrap();
 
-        let list = index.list(ListOptions::default()).await.unwrap();
+        let list = index.list(ListOptions::default(), &EVERYONE).await.unwrap();
 
         assert_eq!(list.total, 1);
         let record = &list.pages[0];
@@ -1038,29 +1270,38 @@ mod tests {
             .unwrap();
 
         let theory = index
-            .list(ListOptions {
-                tag: Some("theory".to_owned()),
-                ..ListOptions::default()
-            })
+            .list(
+                ListOptions {
+                    tag: Some("theory".to_owned()),
+                    ..ListOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
         assert_eq!(theory.total, 1);
         assert_eq!(theory.pages[0].slug.as_str(), "a");
 
         let shared = index
-            .list(ListOptions {
-                tag: Some("shared".to_owned()),
-                ..ListOptions::default()
-            })
+            .list(
+                ListOptions {
+                    tag: Some("shared".to_owned()),
+                    ..ListOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
         assert_eq!(shared.total, 2);
 
         let missing = index
-            .list(ListOptions {
-                tag: Some("nonexistent".to_owned()),
-                ..ListOptions::default()
-            })
+            .list(
+                ListOptions {
+                    tag: Some("nonexistent".to_owned()),
+                    ..ListOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
         assert_eq!(missing.total, 0);
@@ -1084,7 +1325,7 @@ mod tests {
     }
 
     async fn slugs_under(index: &Index, options: ListOptions) -> Vec<String> {
-        let list = index.list(options).await.unwrap();
+        let list = index.list(options, &EVERYONE).await.unwrap();
         assert_eq!(list.total, list.pages.len(), "nothing was paginated away");
         list.pages
             .into_iter()
@@ -1228,16 +1469,19 @@ mod tests {
             index.upsert(&page(slug, title, &[], "body")).await.unwrap();
         }
 
-        let by_slug = index.list(ListOptions::default()).await.unwrap();
+        let by_slug = index.list(ListOptions::default(), &EVERYONE).await.unwrap();
         let slugs: Vec<&str> = by_slug.pages.iter().map(|p| p.slug.as_str()).collect();
         assert_eq!(slugs, ["a", "b", "c"]);
 
         let by_title_desc = index
-            .list(ListOptions {
-                sort: SortBy::Title,
-                order: SortOrder::Descending,
-                ..ListOptions::default()
-            })
+            .list(
+                ListOptions {
+                    sort: SortBy::Title,
+                    order: SortOrder::Descending,
+                    ..ListOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
         let titles: Vec<&str> = by_title_desc
@@ -1248,11 +1492,14 @@ mod tests {
         assert_eq!(titles, ["Gamma", "Beta", "Alpha"]);
 
         let page_two = index
-            .list(ListOptions {
-                limit: 2,
-                offset: 2,
-                ..ListOptions::default()
-            })
+            .list(
+                ListOptions {
+                    limit: 2,
+                    offset: 2,
+                    ..ListOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
         assert_eq!(page_two.pages.len(), 1);
@@ -1269,8 +1516,11 @@ mod tests {
 
         index.clear().await.unwrap();
 
-        assert_eq!(index.count().await.unwrap(), 0);
-        assert_eq!(index.search("alpha", 10, 0).await.unwrap().total, 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
+        assert_eq!(
+            index.search("alpha", 10, 0, &EVERYONE).await.unwrap().total,
+            0
+        );
     }
 
     #[tokio::test]

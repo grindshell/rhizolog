@@ -10,7 +10,9 @@ Accounts exist so a Rhizolog can be served over a network. This page records
 what that costs, what it deliberately does not change, and where the boundaries
 actually are.
 
-See [API design](api-design.md) for the endpoint surface and
+This page is identity: who a request is. Which pages that identity may read is
+[Page visibility](visibility.md), the other half of the same feature. See
+[API design](api-design.md) for the endpoint surface and
 [Architecture](architecture.md) for the storage model underneath.
 
 ## Nothing changes until an account exists
@@ -328,11 +330,6 @@ mode of this design that would not announce itself.
 
 ## What is not built
 
-- **Page visibility.** `public` / `internal` / `restricted` / `private` in
-  frontmatter, and the index and query work to enforce it everywhere. This page
-  covers identity only; visibility is the half that has to reach search, listing,
-  the graph, tags, stats and pins, because an access-control model that is not
-  applied to search is not an access-control model.
 - **Rate limiting on sign-in.** Argon2 is a real natural throttle — roughly
   twenty attempts a second per core, and each one costs the attacker the same as
   it costs the server — but it is not a lockout, and a network instance wants

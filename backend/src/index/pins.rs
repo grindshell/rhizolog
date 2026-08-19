@@ -17,10 +17,18 @@
 //! and quietly forgetting a pin because a file was briefly absent would be the
 //! worse failure. Such a pin comes back with `title: None`, and the UI offers to
 //! remove it.
+//!
+//! **A pin can also outlive the caller's right to read its page**, and that has
+//! deliberately the same shape: the title join carries
+//! [`crate::index::audience::VISIBLE`], so a pin to a page you may not read is
+//! indistinguishable from a pin to one that is gone. The slug stays, because
+//! the pin *is* the slug and the list is wiki-wide — see
+//! `knowledge-base/visibility.md`.
 
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 
+use crate::index::audience::{Audience, VISIBLE};
 use crate::index::{Index, IndexError, from_nanos, to_nanos};
 use crate::slug::Slug;
 
@@ -47,16 +55,24 @@ impl Index {
     /// Oldest first rather than newest: this is a menu, and a menu whose entries
     /// reshuffle every time one is added is a menu you have to read before every
     /// click. Ties break on slug so the order is total.
-    pub async fn pins(&self) -> Result<Vec<Pin>, IndexError> {
-        self.with_connection(|connection| {
-            let mut query = connection.prepare(
+    ///
+    /// The join carries the visibility predicate, so a pin to a page the caller
+    /// may not read comes back with no title — exactly as a pin to a deleted
+    /// page does. The *slug* is not hidden and cannot be: the pin list is
+    /// wiki-wide state, and the slug is what a pin is.
+    pub async fn pins(&self, audience: &Audience) -> Result<Vec<Pin>, IndexError> {
+        let audience = audience.clone();
+
+        self.with_connection(move |connection| {
+            let visible = audience.params();
+            let mut query = connection.prepare(&format!(
                 "select pins.slug, pages.title, pins.pinned_at
                  from pins
-                 left join pages on pages.slug = pins.slug
+                 left join pages on pages.slug = pins.slug and {VISIBLE}
                  order by pins.pinned_at asc, pins.slug asc",
-            )?;
+            ))?;
 
-            let rows = query.query_map([], |row| {
+            let rows = query.query_map(&visible[..], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
@@ -168,6 +184,10 @@ mod tests {
 
     use crate::page::{Frontmatter, Page};
 
+    /// Every case here runs against a wiki with no accounts. What a pin to a
+    /// page the caller cannot read looks like is `tests/visibility.rs`.
+    const EVERYONE: Audience = Audience::Everything;
+
     async fn index() -> Index {
         Index::open(None).await.expect("open in-memory index")
     }
@@ -188,6 +208,7 @@ mod tests {
                     title: Some(title.to_owned()),
                     tags: Vec::new(),
                     created: None,
+                    ..Frontmatter::default()
                 },
                 body: "Body.\n".to_owned(),
                 updated: at(1_700_000_000_000_000_000),
@@ -203,7 +224,7 @@ mod tests {
         seed(&index, "notes/quick", "Quick Notes").await;
 
         index.pin(&slug("notes/quick"), at(1)).await.unwrap();
-        let pins = index.pins().await.unwrap();
+        let pins = index.pins(&EVERYONE).await.unwrap();
 
         assert_eq!(pins.len(), 1);
         assert_eq!(pins[0].slug.as_str(), "notes/quick");
@@ -224,7 +245,7 @@ mod tests {
         index.pin(&slug("b"), at(2)).await.unwrap();
         index.pin(&slug("a"), at(3)).await.unwrap();
 
-        let pins = index.pins().await.unwrap();
+        let pins = index.pins(&EVERYONE).await.unwrap();
         let slugs: Vec<&str> = pins.iter().map(|pin| pin.slug.as_str()).collect();
         assert_eq!(slugs, ["a", "b"]);
     }
@@ -237,7 +258,7 @@ mod tests {
 
         assert!(index.unpin(&slug("a")).await.unwrap());
         assert!(!index.unpin(&slug("a")).await.unwrap());
-        assert!(index.pins().await.unwrap().is_empty());
+        assert!(index.pins(&EVERYONE).await.unwrap().is_empty());
     }
 
     /// A pin whose page is gone is reported as missing, not dropped — the UI
@@ -249,7 +270,7 @@ mod tests {
         index.pin(&slug("notes/gone"), at(1)).await.unwrap();
 
         index.remove(&slug("notes/gone")).await.unwrap();
-        let pins = index.pins().await.unwrap();
+        let pins = index.pins(&EVERYONE).await.unwrap();
 
         assert_eq!(pins.len(), 1);
         assert_eq!(pins[0].title, None);
@@ -271,7 +292,7 @@ mod tests {
             .await
             .unwrap();
 
-        let pins = index.pins().await.unwrap();
+        let pins = index.pins(&EVERYONE).await.unwrap();
         let slugs: Vec<&str> = pins.iter().map(|pin| pin.slug.as_str()).collect();
         // Still second, not bumped to the front by a fresh timestamp.
         assert_eq!(slugs, ["first", "archive/new"]);
@@ -285,7 +306,7 @@ mod tests {
 
         index.repin(&slug("a"), &slug("b")).await.unwrap();
 
-        assert!(index.pins().await.unwrap().is_empty());
+        assert!(index.pins(&EVERYONE).await.unwrap().is_empty());
     }
 
     /// Pins are not derived from the wiki, so a rebuild has nowhere to get them
@@ -301,6 +322,6 @@ mod tests {
         assert_eq!(index.count_pins().await.unwrap(), 1);
         // The page is gone from the index until the next scan, so the title is
         // unresolved — but the pin itself survived.
-        assert_eq!(index.pins().await.unwrap()[0].title, None);
+        assert_eq!(index.pins(&EVERYONE).await.unwrap()[0].title, None);
     }
 }

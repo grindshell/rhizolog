@@ -12,9 +12,13 @@ What sets it apart:
 - **Single-user by default**: a wiki with **no accounts is open** — no sign-in,
   nothing refused, every request treated as the one user. Creating the first
   account under `.rhizolog/users/` is what turns authentication on, which is how
-  an instance gets served over a network. The UI is an admin dashboard for
+  an instance gets served over a network. Once there are accounts, a page's
+  frontmatter says who it is for — `public` / `internal` / `restricted` /
+  `private` — and that is applied by one SQL predicate every page-returning query
+  pastes in, not by a check in the page handler. The UI is an admin dashboard for
   searching and authoring pages and checking meta-stats (links between pages,
-  tags, API usage, etc.). See `knowledge-base/accounts.md`.
+  tags, API usage, etc.). See `knowledge-base/accounts.md` and
+  `knowledge-base/visibility.md`.
 
 ## Repository layout
 

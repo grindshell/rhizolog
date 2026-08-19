@@ -54,6 +54,7 @@ impl App {
                 usage: rhizolog::UsageTally::new(),
                 assets: Assets::None,
                 secure_cookies: false,
+                anonymous_read: false,
             }),
             directory,
         }

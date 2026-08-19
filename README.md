@@ -20,9 +20,10 @@ What makes it different from the wikis you already know:
   privileged one.
 - **Single user by default.** A wiki with no accounts is open: it binds to
   loopback, asks nobody to sign in, and refuses nothing. Creating an account is
-  what turns authentication on, which is how you serve one over a network. This
-  is a developer tool for managing a knowledge base, not a public wiki engine —
-  a handful of named accounts, not registration and moderation.
+  what turns authentication on, which is how you serve one over a network. From
+  then on a page can be public, internal, restricted to named readers, or
+  private. This is a developer tool for managing a knowledge base, not a public
+  wiki engine — a handful of named accounts, not registration and moderation.
 - **It tracks time, too.** Timers you can start and stop, entries you can type
   in after the fact, and a note on any of them. Attach an entry to the pages it
   was spent on and the dashboard will tell you where the hours went. Entries
@@ -181,6 +182,7 @@ All optional, all environment variables.
 | `RHIZOLOG_ASSETS` | `../frontend/dist` | The built dashboard. Missing is fine. |
 | `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter. |
 | `RHIZOLOG_SECURE_COOKIES` | off | Mark the session cookie `Secure`. Set it behind a TLS proxy. |
+| `RHIZOLOG_ANONYMOUS_READ` | off | Serve `public` pages to callers who have not signed in. |
 
 Defaults are relative to the working directory, which is assumed to be
 `backend/`.
@@ -222,9 +224,47 @@ it out of git, which the repository's `.gitignore` already does.
 
 Serving over a network in earnest wants TLS in front and
 `RHIZOLOG_SECURE_COOKIES=1` with it; without that, passwords cross the network
-in the clear. There is no rate limiting on sign-in yet, and **pages cannot yet
-be marked private** — every signed-in account can see the whole wiki. Both are
-in [`TODO.md`](TODO.md).
+in the clear. There is no rate limiting on sign-in yet — see [`TODO.md`](TODO.md).
+
+## Who can read which page
+
+Once a wiki has accounts, a page's frontmatter decides who it is for:
+
+```markdown
+---
+title: Project Roadrunner
+visibility: restricted
+owner: tim
+readers: [alice, bob]
+---
+```
+
+| | Who |
+|---|---|
+| `public` | Anyone, including callers who have not signed in |
+| `internal` | Any account on this wiki — **and what a page with no `visibility:` means** |
+| `restricted` | The `readers` list, plus the owner |
+| `private` | The owner alone |
+
+A page you own is readable by you whatever it says, so marking one private does
+not hide it from yourself. A word that is not one of the four reads as `private`:
+somebody who typed `privte` was trying to restrict a page, and the safe way to
+get that wrong is to hide too much.
+
+A page you may not read answers `404`, the same as one that is not there — and
+not just when you ask for it directly. It is absent from the listing, from search,
+from the tag counts, from the graph, from every total, and from the titles a pin
+or a time entry resolves.
+
+**`public` needs the instance to agree.** Marking a page `public` does nothing
+until it is served with `RHIZOLOG_ANONYMOUS_READ=1`, which lets callers who have
+not signed in read the `public` pages and nothing else. Publishing to the open
+internet therefore takes two deliberate acts, in two places: a line in a file and
+a variable in a deployment. Anonymous callers can never write, and never reach
+the pins or the time log.
+
+The editor offers all of this as a dropdown, and the page view marks anything
+that is not `internal`.
 
 ### Finding a running server
 
@@ -423,13 +463,11 @@ The MVP is complete: pages, search, tags, the link graph, meta-stats, live
 pickup of outside edits, and a dashboard you can write in. Since then: pinned
 pages, time tracking end to end (timers, manual entries, notes, groups, search
 over the log, and the statistics section), the drawn graph, the desktop app
-described above, and accounts.
+described above, and accounts with per-page visibility.
 
-Accounts are half a feature, and the half that is missing is the interesting
-one: signing in works, but **a page cannot yet be marked private**, so every
-signed-in account sees the whole wiki. Serving one over a network is therefore
-useful for people you would have given the whole wiki to anyway, and not yet for
-anything else.
+What is still thin about serving one over a network is the operational half:
+there is no TLS of its own, no rate limiting on sign-in, and no audit log.
+Put it behind a reverse proxy.
 
 The desktop app runs and is not yet a download — real icons, a check for a
 missing WebView2 runtime, and code signing are what stand between the two.

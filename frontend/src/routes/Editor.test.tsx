@@ -8,6 +8,15 @@ const api = vi.hoisted(() => ({
   replacePage: vi.fn(),
   createPage: vi.fn(),
   renderMarkdown: vi.fn(),
+  // The editor reads the session to decide whether to show the visibility
+  // control. Left real it would fire a `fetch` at module load, which in jsdom
+  // has no origin to resolve `/api/auth/session` against — so every test in
+  // this file would fail on a request none of them are about.
+  session: vi.fn(async () => ({
+    authentication_required: false,
+    authenticated: true,
+    user: null,
+  })),
 }))
 
 vi.mock('../api/client', async (importOriginal) => {
@@ -29,6 +38,10 @@ function page(overrides: Partial<PageView> = {}): PageView {
     updated: '2026-08-05T14:00:00Z',
     size: 312,
     content: '# Async in Rust\n\nFutures are lazy.\n',
+    // What an unmarked page means, which is what every page in this file is.
+    // The visibility control only appears on a wiki that has accounts, and
+    // these tests run against one that does not.
+    visibility: 'internal',
     ...overrides,
   }
 }

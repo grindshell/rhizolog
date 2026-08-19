@@ -14,6 +14,7 @@ pub const ENV_ADDRESS: &str = "RHIZOLOG_ADDR";
 pub const ENV_ASSETS: &str = "RHIZOLOG_ASSETS";
 pub const ENV_LOG: &str = "RHIZOLOG_LOG";
 pub const ENV_SECURE_COOKIES: &str = "RHIZOLOG_SECURE_COOKIES";
+pub const ENV_ANONYMOUS_READ: &str = "RHIZOLOG_ANONYMOUS_READ";
 
 /// Loopback, deliberately.
 ///
@@ -81,6 +82,25 @@ pub struct Config {
     /// `X-Forwarded-Proto` because inferring it means trusting a header that
     /// anybody who can reach the port can send.
     pub secure_cookies: bool,
+
+    /// Whether callers who have not signed in may read pages marked `public`.
+    ///
+    /// Off by default, and that is the important half. Publishing a wiki page to
+    /// the open internet should take **two** deliberate acts that are hard to
+    /// perform by accident: marking the page `public`, and turning this on. With
+    /// it off, `public` behaves exactly as `internal` — so a page marked public
+    /// on an instance that is not serving the public is simply a page marked for
+    /// later.
+    ///
+    /// It is a configuration switch rather than something derived, unlike
+    /// [whether the wiki has accounts at all](crate::auth). The difference is
+    /// that "does this wiki have accounts" is a fact about the directory and can
+    /// be looked up; "should strangers be able to read this instance" is a
+    /// statement of deployment intent that nothing on disk knows.
+    ///
+    /// It grants reads only, and only of `public` pages. There is no
+    /// configuration that lets an unauthenticated caller write anything.
+    pub anonymous_read: bool,
 }
 
 /// What to use for anything the environment did not say.
@@ -139,6 +159,7 @@ struct Overrides {
     address: Option<String>,
     assets: Option<PathBuf>,
     secure_cookies: Option<bool>,
+    anonymous_read: Option<bool>,
 }
 
 impl Overrides {
@@ -149,6 +170,9 @@ impl Overrides {
             address: env::var(ENV_ADDRESS).ok(),
             assets: env::var_os(ENV_ASSETS).map(PathBuf::from),
             secure_cookies: env::var(ENV_SECURE_COOKIES)
+                .ok()
+                .map(|value| truthy(&value)),
+            anonymous_read: env::var(ENV_ANONYMOUS_READ)
                 .ok()
                 .map(|value| truthy(&value)),
         }
@@ -219,6 +243,7 @@ impl Config {
             listen,
             assets,
             secure_cookies: overrides.secure_cookies.unwrap_or(false),
+            anonymous_read: overrides.anonymous_read.unwrap_or(false),
         })
     }
 }
@@ -254,6 +279,7 @@ mod tests {
             address: Some("127.0.0.1:9999".to_owned()),
             assets: Some(PathBuf::from("/env/dist")),
             secure_cookies: Some(true),
+            anonymous_read: Some(true),
         };
 
         let config = Config::layer(overrides, fallbacks()).expect("config");
@@ -266,6 +292,7 @@ mod tests {
             Listen::Exactly("127.0.0.1:9999".parse().unwrap())
         );
         assert!(config.secure_cookies);
+        assert!(config.anonymous_read);
     }
 
     /// A cookie marked `Secure` is discarded by a browser that received it over
@@ -275,6 +302,16 @@ mod tests {
     fn cookies_are_not_marked_secure_unless_asked() {
         let config = Config::layer(Overrides::default(), fallbacks()).expect("config");
         assert!(!config.secure_cookies);
+    }
+
+    /// Publishing to the open internet has to take two deliberate acts, and this
+    /// is the one that is not per-page. A default of `true` would mean a page
+    /// marked `public` on somebody's laptop became public the day they put the
+    /// instance on a network.
+    #[test]
+    fn anonymous_read_is_off_unless_asked() {
+        let config = Config::layer(Overrides::default(), fallbacks()).expect("config");
+        assert!(!config.anonymous_read);
     }
 
     /// Set in a shell, a Dockerfile or a unit file, each with its own house

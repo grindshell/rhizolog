@@ -33,6 +33,9 @@ fn listening(directory: &TempDir, listen: Listen) -> Config {
         // These are HTTP, so a `Secure` cookie would be one the client throws
         // away — which is also the default, and the reason it is.
         secure_cookies: false,
+        // And the default again: nothing here is meant to be readable by
+        // somebody who has not signed in.
+        anonymous_read: false,
     }
 }
 

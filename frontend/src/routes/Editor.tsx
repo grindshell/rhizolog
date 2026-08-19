@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createResource, createSignal, onCleanup } from 'solid-js'
 import { useBeforeLeave, useNavigate, useParams, useSearchParams } from '@solidjs/router'
+import type { Visibility } from '../api/client'
 import {
   ApiError,
   createPage,
@@ -12,8 +13,40 @@ import {
   renderMarkdown,
   replacePage,
 } from '../api/client'
+import { sessionState } from '../api/session'
 import { ErrorNotice } from '../components/Async'
 import Markdown from '../components/Markdown'
+
+/**
+ * The visibility ladder, in the order it narrows.
+ *
+ * The hints matter more than the labels. "Public" is the one somebody can pick
+ * meaning "everyone here" and get "everyone at all", so it says which it is —
+ * and says the second half too, since a public page is only reachable by a
+ * stranger on an instance that has opted into serving them.
+ */
+const VISIBILITIES: { value: Visibility; label: string; hint: string }[] = [
+  {
+    value: 'public',
+    label: 'Public — anyone, signed in or not',
+    hint: 'Readable without an account, if this instance serves anonymous readers. Otherwise the same as internal.',
+  },
+  {
+    value: 'internal',
+    label: 'Internal — any account on this wiki',
+    hint: 'The default. Every page with no visibility set means this.',
+  },
+  {
+    value: 'restricted',
+    label: 'Restricted — named accounts only',
+    hint: 'The accounts you list below, plus the owner.',
+  },
+  {
+    value: 'private',
+    label: 'Private — only me',
+    hint: 'The owner alone. Not even an owner of this instance can read it.',
+  },
+]
 
 /** How long typing has to pause before the preview is re-rendered. */
 const PREVIEW_DELAY_MS = 300
@@ -86,6 +119,17 @@ export default function Editor() {
   const [title, setTitle] = createSignal('')
   const [tags, setTags] = createSignal('')
   const [content, setContent] = createSignal('')
+  const [visibility, setVisibility] = createSignal<Visibility>('internal')
+  const [readers, setReaders] = createSignal('')
+  /**
+   * The page's owner, carried through a save rather than edited.
+   *
+   * Saving goes through `PUT`, which replaces every field — so a page loaded
+   * and saved without this would come back owned by whoever pressed the button.
+   * That is right for a page being created and wrong for one being edited by
+   * somebody the owner shared it with.
+   */
+  const [owner, setOwner] = createSignal<string | undefined>()
   /** What the server called the page when it was loaded, for the placeholder. */
   const [inheritedTitle, setInheritedTitle] = createSignal('')
   const [dirty, setDirty] = createSignal(false)
@@ -106,6 +150,9 @@ export default function Editor() {
     setInheritedTitle(page.title)
     setTags(page.tags.join(', '))
     setContent(page.content)
+    setVisibility(page.visibility)
+    setReaders((page.readers ?? []).join(', '))
+    setOwner(page.owner ?? undefined)
     setDirty(false)
     setFailure(undefined)
   })
@@ -187,6 +234,12 @@ export default function Editor() {
         title: title().trim() || null,
         tags: parseTags(tags()),
         content: content(),
+        visibility: visibility(),
+        // Sent every time because saving is a `PUT`: a field left out is a
+        // field cleared, and clearing the owner of a page somebody shared with
+        // you would take it away from them.
+        owner: owner(),
+        readers: parseList(readers()),
       }
 
       const target = editing()
@@ -422,6 +475,61 @@ export default function Editor() {
               />
             </label>
 
+            {/*
+              Only shown on a wiki that has accounts. On one that does not there
+              is nobody to keep a page from, the field does nothing, and a
+              control that does nothing is worse than no control.
+            */}
+            <Show when={sessionState()?.authentication_required}>
+              <label class="form-control">
+                <div class="label">
+                  <span class="label-text">Who can read this</span>
+                </div>
+                <select
+                  class="select select-bordered w-full"
+                  value={visibility()}
+                  onChange={(event) => {
+                    setVisibility(event.currentTarget.value as Visibility)
+                    setDirty(true)
+                  }}
+                >
+                  <For each={VISIBILITIES}>
+                    {(option) => <option value={option.value}>{option.label}</option>}
+                  </For>
+                </select>
+                <div class="label">
+                  <span class="label-text-alt opacity-60">
+                    {VISIBILITIES.find((option) => option.value === visibility())?.hint}
+                  </span>
+                </div>
+              </label>
+
+              <Show when={visibility() === 'restricted'}>
+                <label class="form-control">
+                  <div class="label">
+                    <span class="label-text">Readers</span>
+                    <span class="label-text-alt opacity-60">
+                      account names, comma separated
+                    </span>
+                  </div>
+                  <input
+                    class="input input-bordered w-full"
+                    value={readers()}
+                    placeholder="alice, bob"
+                    onInput={(event) => {
+                      setReaders(event.currentTarget.value)
+                      setDirty(true)
+                    }}
+                  />
+                  <div class="label">
+                    <span class="label-text-alt opacity-60">
+                      The owner{owner() ? ` (${owner()})` : ''} can always read it.
+                    </span>
+                  </div>
+                </label>
+              </Show>
+            </Show>
+
             <label class="form-control">
               <div class="label">
                 <span class="label-text">Body</span>
@@ -501,15 +609,18 @@ async function render(draft: Draft) {
   }
 }
 
-/** Split a comma-separated field into tags, dropping blanks and duplicates. */
-function parseTags(raw: string): string[] {
-  const tags = new Set<string>()
-  for (const tag of raw.split(',')) {
-    const trimmed = tag.trim()
-    if (trimmed) tags.add(trimmed)
+/** Split a comma-separated field, dropping blanks and duplicates. */
+function parseList(raw: string): string[] {
+  const values = new Set<string>()
+  for (const value of raw.split(',')) {
+    const trimmed = value.trim()
+    if (trimmed) values.add(trimmed)
   }
-  return [...tags]
+  return [...values]
 }
+
+/** Tags, which are the same shape as a reader list and always have been. */
+const parseTags = parseList
 
 function firstParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value

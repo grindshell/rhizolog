@@ -197,6 +197,19 @@ impl Serialize for Username {
     }
 }
 
+/// So a username can be **bound** into a query rather than interpolated.
+///
+/// The character set makes interpolation provably safe today, which is exactly
+/// the argument that stops being true the first time somebody relaxes
+/// [`Username::parse`]. Binding costs nothing and does not depend on that.
+impl rusqlite::ToSql for Username {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::Borrowed(
+            rusqlite::types::ValueRef::Text(self.0.as_bytes()),
+        ))
+    }
+}
+
 /// Validated on the way in, so a username in a request body is refused by the
 /// same rules as one in a URL. See [`crate::error::AppError::InvalidRequestBody`]
 /// for why that is a 400 either way.

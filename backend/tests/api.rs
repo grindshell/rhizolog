@@ -53,6 +53,7 @@ impl App {
                 // API-only: the SPA fallback is covered in tests/frontend.rs.
                 assets: Assets::None,
                 secure_cookies: false,
+                anonymous_read: false,
             }),
             _directory: directory,
         }
@@ -192,6 +193,7 @@ async fn usage_counts_survive_a_restart() {
                 usage: usage.clone(),
                 assets: Assets::None,
                 secure_cookies: false,
+                anonymous_read: false,
             }),
             _directory: wiki,
         };
@@ -221,6 +223,7 @@ async fn usage_counts_survive_a_restart() {
             usage: rhizolog::UsageTally::new(),
             assets: Assets::None,
             secure_cookies: false,
+            anonymous_read: false,
         }),
         _directory: wiki,
     };

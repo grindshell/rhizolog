@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::api::AppState;
+use crate::auth::Viewer;
 use crate::error::AppResult;
 use crate::index::SyncCounts;
 use crate::index::sync::rebuild;
@@ -86,12 +87,20 @@ pub struct SearchResponse {
 )]
 pub async fn search(
     State(state): State<AppState>,
+    viewer: Viewer,
     Query(query): Query<SearchQuery>,
 ) -> AppResult<Json<SearchResponse>> {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
     let offset = query.offset.unwrap_or(0);
 
-    let results = state.index.search(&query.q, limit, offset).await?;
+    // Search is the sharpest of the leaks visibility has to cover: a hit carries
+    // the slug, the title, the tags *and* an excerpt of the body with the match
+    // highlighted in it. An unfiltered search over a wiki with private pages in
+    // it is a way to read them a dozen words at a time.
+    let results = state
+        .index
+        .search(&query.q, limit, offset, &viewer.audience())
+        .await?;
 
     Ok(Json(SearchResponse {
         hits: results

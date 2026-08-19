@@ -151,6 +151,7 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
         usage: UsageTally::new(),
         assets: assets::resolve(&config.assets).await,
         secure_cookies: config.secure_cookies,
+        anonymous_read: config.anonymous_read,
     };
 
     let (halt, _) = watch::channel(false);
@@ -378,6 +379,7 @@ mod tests {
             listen: Listen::Exactly(address.parse().expect("an address")),
             assets: PathBuf::from("/wiki/dist"),
             secure_cookies,
+            anonymous_read: false,
         }
     }
 

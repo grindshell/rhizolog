@@ -27,7 +27,9 @@ registration, moderation or anonymous editing.
 
 [Accounts](accounts.md) has the reasoning, the costs, and where the boundary
 actually is — which is between network callers, never against whoever holds the
-disk.
+disk. [Page visibility](visibility.md) is the other half: which of those named
+accounts a given page is for, and the one rule that has to be applied to every
+query rather than to the page read alone.
 
 ## Interface
 

@@ -31,11 +31,14 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::api::AppState;
 use crate::api::extract::Json as JsonBody;
+use crate::auth::Viewer;
 use crate::error::{AppError, AppResult};
 use crate::index::{ListOptions, PageRecord, SortBy, SortOrder};
 use crate::markdown;
-use crate::page::{Frontmatter, Page};
+use crate::page::{Frontmatter, Page, Visibility};
 use crate::slug::Slug;
+use crate::store::StoreError;
+use crate::users::Username;
 
 /// Fields a listing can be narrowed to with `?fields=`.
 pub const SUMMARY_FIELDS: [&str; 6] = ["slug", "title", "tags", "created", "updated", "size"];
@@ -121,6 +124,26 @@ pub struct PageView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = example_html)]
     pub html: Option<String>,
+
+    /// Who may read this page. An unmarked page is `internal`.
+    pub visibility: Visibility,
+
+    /// The account this page belongs to, if any.
+    ///
+    /// Filled in automatically when a page is created on a wiki that has
+    /// accounts, and required for `restricted` and `private` to mean anything —
+    /// a private page with no owner is readable by nobody.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "tim")]
+    pub owner: Option<Username>,
+
+    /// Accounts that may read this page while it is `restricted`.
+    ///
+    /// Kept when the visibility is something else rather than dropped, so that
+    /// widening a page and narrowing it again does not lose the list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(example = json!(["alice", "bob"]))]
+    pub readers: Vec<Username>,
 }
 
 impl PageView {
@@ -130,6 +153,9 @@ impl PageView {
             title: page.title(),
             title_derived: !page.has_stored_title(),
             tags: page.tags().to_vec(),
+            visibility: page.visibility(),
+            owner: page.owner(),
+            readers: page.readers(),
             created: page.created(),
             updated: page.updated,
             size: page.size,
@@ -217,6 +243,18 @@ pub struct CreatePage {
     #[serde(default)]
     #[schema(example = example_body)]
     pub content: String,
+    /// Who may read it. Defaults to `internal` — any account on this wiki.
+    #[serde(default)]
+    pub visibility: Option<Visibility>,
+    /// Defaults to the account creating the page. Owners of `restricted` and
+    /// `private` pages can always read them whatever else the page says.
+    #[serde(default)]
+    #[schema(example = "tim")]
+    pub owner: Option<Username>,
+    /// Only consulted while the visibility is `restricted`.
+    #[serde(default)]
+    #[schema(example = json!(["alice", "bob"]))]
+    pub readers: Vec<Username>,
 }
 
 /// A whole page. Every field is replaced, including the ones left out.
@@ -235,6 +273,20 @@ pub struct ReplacePage {
     #[serde(default)]
     #[schema(example = example_body)]
     pub content: String,
+    /// Omitting this resets the page to `internal`, as `PUT` does with tags.
+    /// Use `PATCH` to leave it alone.
+    #[serde(default)]
+    pub visibility: Option<Visibility>,
+    /// Omitting this clears the owner. On a wiki with accounts the server fills
+    /// it back in with whoever sent the request, so a `PUT` cannot accidentally
+    /// orphan a page you still own.
+    #[serde(default)]
+    #[schema(example = "tim")]
+    pub owner: Option<Username>,
+    /// Omitting this clears the reader list.
+    #[serde(default)]
+    #[schema(example = json!(["alice", "bob"]))]
+    pub readers: Vec<Username>,
 }
 
 /// A partial update. Omitted fields are left alone.
@@ -253,6 +305,20 @@ pub struct PatchPage {
     #[serde(default)]
     #[schema(example = example_body)]
     pub content: Option<String>,
+    /// Replaces the visibility when present.
+    #[serde(default)]
+    pub visibility: Option<Visibility>,
+    /// Omit to leave the owner alone; send `null` to clear it.
+    ///
+    /// Clearing the owner of a `private` page leaves it readable by nobody —
+    /// which is refused rather than done, because it is never what was meant and
+    /// the only way back is to edit the file on the server.
+    #[serde(default, deserialize_with = "present_or_absent")]
+    #[schema(value_type = Option<String>)]
+    pub owner: Option<Option<Username>>,
+    /// Replaces the whole reader list when present.
+    #[serde(default)]
+    pub readers: Option<Vec<Username>>,
 }
 
 /// Distinguishes "field absent" from "field set to null".
@@ -347,6 +413,94 @@ pub struct ListQuery {
     pub offset: Option<usize>,
 }
 
+// --------------------------------------------------------------- visibility
+
+/// Whether this viewer may read a page, decided from the page's own file.
+///
+/// The same four rules as [`crate::index::audience::VISIBLE`], which is the SQL
+/// the listing and the graph use. Two spellings of one rule is exactly the kind
+/// of duplication that drifts, and the reason it is worth the risk here is that
+/// they answer different questions: this one is about a file that has just been
+/// read, and that one is about which of ten thousand rows to return. A single
+/// implementation would mean either reading every page off disk to list them, or
+/// serving a page under whatever visibility it had at the last reindex.
+///
+/// `page_visibility_matches_the_sql_predicate` in `tests/visibility.rs` is what
+/// keeps the two honest, by asserting that the same page gets the same answer
+/// through both paths.
+pub(crate) fn readable(page: &Page, viewer: &Viewer) -> bool {
+    let Some(username) = viewer.username() else {
+        // Either an open wiki, where everything is readable, or an anonymous
+        // caller, for whom only `public` is.
+        return match viewer {
+            Viewer::Open => true,
+            Viewer::Anonymous => page.visibility() == Visibility::Public,
+            // Unreachable: an account always has a username.
+            Viewer::Account(_) => false,
+        };
+    };
+
+    // Your own pages are yours, whatever else the page says.
+    if page.owner().as_ref() == Some(username) {
+        return true;
+    }
+
+    match page.visibility() {
+        Visibility::Public | Visibility::Internal => true,
+        Visibility::Restricted => page.readers().contains(username),
+        Visibility::Private => false,
+    }
+}
+
+/// What to write into the file for a visibility.
+///
+/// `internal` is the default and is stored as **absent** rather than as the
+/// word, so an ordinary page's frontmatter does not grow a line saying it is
+/// ordinary. Round-tripping a page through the API therefore leaves the file it
+/// came from alone, which matters because most of them were written by hand.
+fn stored_visibility(visibility: Visibility) -> Option<String> {
+    match visibility {
+        Visibility::Internal => None,
+        other => Some(other.as_str().to_owned()),
+    }
+}
+
+/// Who should own a page being written.
+///
+/// An explicit owner wins. Otherwise the account doing the writing, which is
+/// what stops a page created as `private` from being readable by nobody — a
+/// state that is correct, useless, and only fixable by editing the file on the
+/// server.
+///
+/// On an open wiki there is no account to name, and none is needed: with no
+/// accounts there is no visibility either.
+fn resolve_owner(
+    requested: Option<Username>,
+    visibility: Visibility,
+    viewer: &Viewer,
+) -> AppResult<Option<String>> {
+    if let Some(owner) = requested {
+        return Ok(Some(owner.to_string()));
+    }
+
+    let inferred = viewer.username().map(Username::to_string);
+
+    if inferred.is_none() && visibility.needs_owner() && viewer.authentication_required() {
+        // Only reachable for an anonymous caller, who cannot write anything —
+        // so this is a guard rather than a case, and it fails loudly rather
+        // than writing a page nobody can ever read.
+        return Err(AppError::internal(
+            "a restricted or private page needs an owner",
+        ));
+    }
+
+    Ok(inferred)
+}
+
+fn names(readers: Vec<Username>) -> Vec<String> {
+    readers.iter().map(Username::to_string).collect()
+}
+
 // ----------------------------------------------------------------- handlers
 
 /// List pages, without their bodies.
@@ -362,6 +516,7 @@ pub struct ListQuery {
 )]
 pub async fn list(
     State(state): State<AppState>,
+    viewer: Viewer,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<Value>> {
     let fields = parse_fields(query.fields.as_deref())?;
@@ -370,15 +525,18 @@ pub async fn list(
 
     let list = state
         .index
-        .list(ListOptions {
-            tag: query.tag,
-            prefix: query.prefix,
-            segment: query.segment,
-            sort: parse_sort(query.sort.as_deref())?,
-            order: parse_order(query.order.as_deref())?,
-            limit,
-            offset,
-        })
+        .list(
+            ListOptions {
+                tag: query.tag,
+                prefix: query.prefix,
+                segment: query.segment,
+                sort: parse_sort(query.sort.as_deref())?,
+                order: parse_order(query.order.as_deref())?,
+                limit,
+                offset,
+            },
+            &viewer.audience(),
+        )
         .await?;
 
     let response = PageListResponse {
@@ -414,12 +572,20 @@ pub async fn list(
 )]
 pub async fn create(
     State(state): State<AppState>,
+    viewer: Viewer,
     JsonBody(request): JsonBody<CreatePage>,
 ) -> AppResult<Response> {
+    let visibility = request.visibility.unwrap_or_default();
     let frontmatter = Frontmatter {
         title: request.title,
         tags: request.tags,
         created: Some(Utc::now()),
+        visibility: stored_visibility(visibility),
+        // The account writing the page, unless it named somebody else. Without
+        // this a page created as `private` would be readable by nobody at all,
+        // its author included — technically correct and never what was meant.
+        owner: resolve_owner(request.owner, visibility, &viewer)?,
+        readers: names(request.readers),
     };
 
     let page = state
@@ -449,11 +615,24 @@ pub async fn create(
 )]
 pub async fn read(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
     Query(query): Query<ReadQuery>,
 ) -> AppResult<Json<PageView>> {
     let slug = parse_slug(&raw)?;
     let page = state.store.read(&slug).await?;
+
+    // Checked against the file that was just read rather than against the index,
+    // so a page whose frontmatter changed a moment ago cannot be served under
+    // its old visibility. The index answers "which pages exist for you", which
+    // is a different question and one a single page read does not need.
+    //
+    // **404 rather than 403.** A 403 confirms that a page exists at a slug
+    // somebody guessed, and for a private page the slug is usually the title.
+    if !readable(&page, &viewer) {
+        return Err(AppError::Store(StoreError::NotFound { slug }));
+    }
+
     Ok(Json(PageView::new(&page, query.render)))
 }
 
@@ -472,6 +651,7 @@ pub async fn read(
 )]
 pub async fn replace(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
     JsonBody(request): JsonBody<ReplacePage>,
 ) -> AppResult<Response> {
@@ -482,10 +662,26 @@ pub async fn replace(
     let existing = state.store.read(&slug).await.ok();
     let created_at = existing.as_ref().map(Page::created);
 
+    // A page you cannot read is a page you cannot replace, and the answer is
+    // the same 404 a read gets — otherwise `PUT` is an oracle for whether a
+    // slug is taken by something private.
+    if let Some(existing) = &existing
+        && !readable(existing, &viewer)
+    {
+        return Err(AppError::Store(StoreError::NotFound { slug }));
+    }
+
+    let visibility = request.visibility.unwrap_or_default();
     let frontmatter = Frontmatter {
         title: request.title,
         tags: request.tags,
         created: Some(created_at.unwrap_or_else(Utc::now)),
+        visibility: stored_visibility(visibility),
+        // A `PUT` that omitted the owner would otherwise orphan the page, and on
+        // a private one that means losing it. The account doing the writing
+        // stands in, which is what `POST` does too.
+        owner: resolve_owner(request.owner, visibility, &viewer)?,
+        readers: names(request.readers),
     };
 
     let page = state
@@ -516,11 +712,16 @@ pub async fn replace(
 )]
 pub async fn patch(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
     JsonBody(request): JsonBody<PatchPage>,
 ) -> AppResult<Json<PageView>> {
     let slug = parse_slug(&raw)?;
     let existing = state.store.read(&slug).await?;
+
+    if !readable(&existing, &viewer) {
+        return Err(AppError::Store(StoreError::NotFound { slug }));
+    }
 
     let mut frontmatter = existing.frontmatter.clone();
     if let Some(title) = request.title {
@@ -529,6 +730,51 @@ pub async fn patch(
     if let Some(tags) = request.tags {
         frontmatter.tags = tags;
     }
+    if let Some(visibility) = request.visibility {
+        frontmatter.visibility = stored_visibility(visibility);
+    }
+    // `Some(None)` is an owner explicitly set to null; `None` is one left out.
+    // The difference decides what happens below, so it is kept rather than
+    // collapsed on the way in.
+    let owner_cleared = matches!(request.owner, Some(None));
+    if let Some(owner) = request.owner {
+        frontmatter.owner = owner.map(|owner| owner.to_string());
+    }
+    if let Some(readers) = request.readers {
+        frontmatter.readers = names(readers);
+    }
+
+    // Whatever the two fields were before and are being set to, the result has
+    // to be a page somebody can still read. Narrowing a page and orphaning it in
+    // the same request is the way to lose one, and the only way back is the
+    // server's filesystem.
+    let narrowed = frontmatter
+        .visibility
+        .as_deref()
+        .map_or(Visibility::default(), Visibility::parse);
+
+    if narrowed.needs_owner() && frontmatter.owner.is_none() {
+        // Somebody who sent `owner: null` asked for exactly this, and quietly
+        // writing their own name instead would be ignoring what they said. An
+        // *omitted* owner is a different request — it says nothing about the
+        // field, so filling it in is a default rather than an override.
+        if owner_cleared {
+            return Err(AppError::OwnerlessPage {
+                slug,
+                visibility: narrowed.as_str(),
+            });
+        }
+
+        frontmatter.owner = viewer.username().map(Username::to_string);
+
+        if frontmatter.owner.is_none() && viewer.authentication_required() {
+            return Err(AppError::OwnerlessPage {
+                slug,
+                visibility: narrowed.as_str(),
+            });
+        }
+    }
+
     let body = request.content.unwrap_or(existing.body);
 
     let page = state.store.write(&slug, frontmatter, &body).await?;
@@ -551,9 +797,19 @@ pub async fn patch(
 )]
 pub async fn delete(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
 ) -> AppResult<StatusCode> {
     let slug = parse_slug(&raw)?;
+
+    // Read first, so a page somebody cannot see is not a page they can delete.
+    // Without this, `DELETE` on a guessed slug both tells you whether it existed
+    // and removes it.
+    let existing = state.store.read(&slug).await?;
+    if !readable(&existing, &viewer) {
+        return Err(AppError::Store(StoreError::NotFound { slug }));
+    }
+
     state.store.delete(&slug).await?;
     state.index.remove(&slug).await?;
     // Deleting a page through the API is a deliberate act on that page, so its
@@ -581,8 +837,24 @@ pub async fn delete(
 )]
 pub async fn move_page(
     State(state): State<AppState>,
+    viewer: Viewer,
     JsonBody(request): JsonBody<MovePage>,
 ) -> AppResult<Json<PageView>> {
+    // Both ends. The source for the obvious reason; the destination because a
+    // move onto an occupied slug is a `409`, and a `409` for a page you cannot
+    // see would say that something private is there.
+    let source = state.store.read(&request.from).await?;
+    if !readable(&source, &viewer) {
+        return Err(AppError::Store(StoreError::NotFound { slug: request.from }));
+    }
+    if let Ok(destination) = state.store.read(&request.to).await
+        && !readable(&destination, &viewer)
+    {
+        return Err(AppError::Store(StoreError::AlreadyExists {
+            slug: request.to,
+        }));
+    }
+
     let page = state.store.move_page(&request.from, &request.to).await?;
 
     state.index.remove(&request.from).await?;

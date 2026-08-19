@@ -178,8 +178,14 @@ mod tests {
     use chrono::{DateTime, Utc};
     use tempfile::TempDir;
 
+    use crate::index::Audience;
     use crate::index::{Stamp, TimeListOptions};
     use crate::page::Frontmatter;
+    /// Every test in this file runs against a wiki with no accounts, where
+    /// there is nobody to keep a page from and visibility does not apply.
+    /// What happens when it does is `tests/visibility.rs`, which is a whole
+    /// file rather than a case here for exactly that reason.
+    const EVERYONE: Audience = Audience::Everything;
     use crate::slug::Slug;
     use crate::times::store::TimeDraft;
     use std::collections::HashMap;
@@ -224,7 +230,7 @@ mod tests {
     /// Everything the index knows, in a form two indexes can be compared by.
     async fn snapshot(index: &Index) -> (Vec<(String, String)>, HashMap<Slug, Stamp>) {
         let mut hits: Vec<(String, String)> = index
-            .search("page", 100, 0)
+            .search("page", 100, 0, &EVERYONE)
             .await
             .expect("search")
             .hits
@@ -248,8 +254,15 @@ mod tests {
         assert_eq!(report.pages.scanned, 3);
         assert_eq!(report.pages.indexed, 3);
         assert_eq!(report.pages.unchanged, 0);
-        assert_eq!(index.count().await.unwrap(), 3);
-        assert_eq!(index.search("rhizomes", 10, 0).await.unwrap().total, 3);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 3);
+        assert_eq!(
+            index
+                .search("rhizomes", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            3
+        );
     }
 
     #[tokio::test]
@@ -288,8 +301,22 @@ mod tests {
         let report = sync(&store, &times, &index).await.unwrap();
 
         assert_eq!(report.pages.indexed, 1);
-        assert_eq!(index.search("rhizomes", 10, 0).await.unwrap().total, 1);
-        assert_eq!(index.search("Original", 10, 0).await.unwrap().total, 0);
+        assert_eq!(
+            index
+                .search("rhizomes", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(
+            index
+                .search("Original", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
     }
 
     #[tokio::test]
@@ -306,7 +333,7 @@ mod tests {
         let report = sync(&store, &times, &index).await.unwrap();
 
         assert_eq!(report.pages.removed, 1);
-        assert_eq!(index.count().await.unwrap(), 1);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 1);
         assert!(!index.stamps().await.unwrap().contains_key(&slug("page-0")));
     }
 
@@ -369,8 +396,15 @@ mod tests {
         assert_eq!(report.pages.scanned, 2);
         assert_eq!(report.pages.indexed, 1);
         assert_eq!(report.pages.failed, 1);
-        assert_eq!(index.count().await.unwrap(), 1);
-        assert_eq!(index.search("rhizomes", 10, 0).await.unwrap().total, 1);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 1);
+        assert_eq!(
+            index
+                .search("rhizomes", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            1
+        );
     }
 
     #[tokio::test]
@@ -403,7 +437,7 @@ mod tests {
         let (directory, store, times, index) = fixture().await;
         write(&store, "page-0", "A page about rhizomes.\n").await;
         sync(&store, &times, &index).await.unwrap();
-        assert_eq!(index.count().await.unwrap(), 1);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 1);
 
         tokio::fs::write(
             directory.path().join("page-0.md"),
@@ -415,8 +449,15 @@ mod tests {
         let report = sync(&store, &times, &index).await.unwrap();
 
         assert_eq!(report.pages.failed, 1);
-        assert_eq!(index.count().await.unwrap(), 0);
-        assert_eq!(index.search("rhizomes", 10, 0).await.unwrap().total, 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
+        assert_eq!(
+            index
+                .search("rhizomes", 10, 0, &EVERYONE)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
     }
 
     /// The invariant the whole storage design rests on: whatever incremental
@@ -488,13 +529,16 @@ mod tests {
             .expect("remove entry");
         rebuild(&store, &times, &index).await.unwrap();
 
-        assert_eq!(index.count().await.unwrap(), 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
         assert_eq!(index.count_times().await.unwrap(), 0);
 
         // A file that is gone is walked by nothing, so only `Index::clear`
         // can take its searchable text with it. The full-text tables are the
         // easy ones to forget there — they hold their own copy of the row.
-        assert_eq!(index.search("body", 10, 0).await.unwrap().total, 0);
+        assert_eq!(
+            index.search("body", 10, 0, &EVERYONE).await.unwrap().total,
+            0
+        );
         let searched = index
             .list_times(
                 TimeListOptions {
@@ -502,6 +546,7 @@ mod tests {
                     ..TimeListOptions::default()
                 },
                 Utc::now(),
+                &EVERYONE,
             )
             .await
             .unwrap();
@@ -532,7 +577,7 @@ mod tests {
 
         assert_eq!(report.pages.scanned, 0);
         assert_eq!(report.times.scanned, 1);
-        assert_eq!(index.count().await.unwrap(), 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -542,7 +587,7 @@ mod tests {
         let report = sync(&store, &times, &index).await.unwrap();
 
         assert_eq!(report, SyncReport::default());
-        assert_eq!(index.count().await.unwrap(), 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
         assert_eq!(index.count_times().await.unwrap(), 0);
     }
 }

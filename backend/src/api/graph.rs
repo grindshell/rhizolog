@@ -10,6 +10,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::api::AppState;
 use crate::api::pages::parse_slug;
+use crate::auth::Viewer;
 use crate::error::AppResult;
 use crate::index::{self, GraphOptions, RouteUsage};
 use crate::slug::Slug;
@@ -139,11 +140,16 @@ pub struct PageLinksResponse {
 )]
 pub async fn links(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
 ) -> AppResult<Json<PageLinksResponse>> {
     let slug = parse_slug(&raw)?;
-    let links = state.index.links_for(&slug).await?;
-    let exists = state.store.exists(&slug).await?;
+    let audience = viewer.audience();
+    let links = state.index.links_for(&slug, &audience).await?;
+    // Whether a page **you can read** is there. A page you cannot read has to
+    // report `exists: false`, or this endpoint answers the one question a
+    // private page's slug was hiding: is there something here.
+    let exists = state.index.is_visible(&slug, &audience).await?;
     let times = state.index.page_times(&slug, Utc::now()).await?;
 
     Ok(Json(PageLinksResponse {
@@ -317,6 +323,7 @@ pub struct GraphResponse {
 )]
 pub async fn link_graph(
     State(state): State<AppState>,
+    viewer: Viewer,
     Query(query): Query<GraphQuery>,
 ) -> AppResult<Json<GraphResponse>> {
     // Parsed, unlike `prefix` and `tag`: those are filters, where a value
@@ -327,14 +334,17 @@ pub async fn link_graph(
 
     let graph = state
         .index
-        .graph(GraphOptions {
-            tag: query.tag,
-            prefix: query.prefix,
-            root: root.as_ref().map(Slug::to_string),
-            depth,
-            wanted: query.wanted.unwrap_or(true),
-            limit,
-        })
+        .graph(
+            GraphOptions {
+                tag: query.tag,
+                prefix: query.prefix,
+                root: root.as_ref().map(Slug::to_string),
+                depth,
+                wanted: query.wanted.unwrap_or(true),
+                limit,
+            },
+            &viewer.audience(),
+        )
         .await?;
 
     Ok(Json(GraphResponse {
@@ -395,8 +405,8 @@ pub struct TagsResponse {
     tag = "graph",
     responses((status = 200, description = "All tags, most-used first", body = TagsResponse)),
 )]
-pub async fn tags(State(state): State<AppState>) -> AppResult<Json<TagsResponse>> {
-    let tags = state.index.tags().await?;
+pub async fn tags(State(state): State<AppState>, viewer: Viewer) -> AppResult<Json<TagsResponse>> {
+    let tags = state.index.tags(&viewer.audience()).await?;
 
     Ok(Json(TagsResponse {
         tags: tags
@@ -509,9 +519,25 @@ pub struct StatsResponse {
     tag = "graph",
     responses((status = 200, description = "Meta-stats for the whole wiki", body = StatsResponse)),
 )]
-pub async fn stats(State(state): State<AppState>) -> AppResult<Json<StatsResponse>> {
-    let stats = state.index.stats().await?;
-    let persisted = state.index.usage().await?;
+pub async fn stats(
+    State(state): State<AppState>,
+    viewer: Viewer,
+) -> AppResult<Json<StatsResponse>> {
+    let stats = state.index.stats(&viewer.audience()).await?;
+
+    // Route hit counts are telemetry about the server rather than anything in
+    // the wiki, and an anonymous reader of a few public pages has no business
+    // with how often an agent has been calling `/api/reindex`. Empty rather than
+    // absent, so the field's shape does not depend on who is asking.
+    //
+    // Both halves have to be withheld. `merge_usage` adds the in-memory tally to
+    // the persisted counts, and skipping only the persisted half would still
+    // hand out every route called since the last flush — which on a server that
+    // has been up for under a minute is all of them.
+    let usage = match viewer.is_permitted() {
+        true => merge_usage(state.index.usage().await?, &state),
+        false => Vec::new(),
+    };
 
     Ok(Json(StatsResponse {
         pages: stats.pages,
@@ -558,7 +584,7 @@ pub async fn stats(State(state): State<AppState>) -> AppResult<Json<StatsRespons
             })
             .collect(),
         last_indexed: stats.last_indexed,
-        api_usage: merge_usage(persisted, &state),
+        api_usage: usage,
     }))
 }
 

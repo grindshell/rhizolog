@@ -267,6 +267,7 @@ Codes in use so far:
 | `forbidden` | 403 | The request said who it was, and that is not enough |
 | `no_password_set` | 409 | The account exists and nobody gave it a password |
 | `last_owner` | 409 | Deleting or demoting the only account that can administer |
+| `ownerless_page` | 400 | `owner: null` sent with a visibility that nobody could then read |
 | `user_not_found` / `user_already_exists` | 404 / 409 | As for a page, for an account |
 | `username_*` | 400 | Which username rule was broken (one code per rule) |
 | `password_too_short` / `password_too_long` | 400 | The only two password rules |
@@ -363,13 +364,32 @@ knowing about: it stays reachable because the desktop app's discovery handshake
 predates any sign-in, and it stops reporting the wiki's page and time counts to
 callers who have not made one.
 
+Setting `RHIZOLOG_ANONYMOUS_READ` widens that: the read-only page, search, tag,
+graph and stats endpoints start answering callers who have not signed in, and
+answer them with the `public` pages only. Nothing anonymous can write, and the
+pins and times endpoints stay closed — they are the operator's working state,
+and no page being public says anything about wanting that published.
+
+### Every page-shaped response is filtered, not just the page read
+
+A page carries `visibility`, `owner` and `readers`, and a caller who may not read
+it sees a `404` — the same status, code, message and shape as a page that is not
+there, because a `403` would confirm that something exists at a slug somebody
+guessed. That applies to the writes too: `PUT`, `PATCH`, `DELETE` and
+`POST /api/move` all check before doing anything.
+
+It also applies to everything a page can leak *through*: the listing, a search
+snippet, a backlink's title, the tag histogram, `most_linked`, the graph, every
+`total`, and the titles a pin or a time entry resolves. See
+[Page visibility](visibility.md) — the interesting part is that it is one SQL
+predicate pasted into every query rather than a check in one handler.
+
 ## Deliberately out of scope for the MVP
 
 No rate limiting, no webhooks, no batch/transaction endpoints, no revision or
 diff endpoints. All are plausible later; none are needed to make the wiki usable.
 
 Authentication *was* on this list — "single-user, loopback-bound" — and is now
-built, because serving a wiki over a network is what it was waiting for. See
-[Accounts](accounts.md). Page visibility, which is the other half of that
-feature, is in [`TODO.md`](../TODO.md) rather than here: it is planned work
-rather than a decision against.
+built, because serving a wiki over a network is what it was waiting for, along
+with the page visibility that makes it worth having. See
+[Accounts](accounts.md) and [Page visibility](visibility.md).

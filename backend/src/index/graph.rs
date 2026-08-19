@@ -13,10 +13,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, ToSql, params};
 
+use crate::index::audience::{self, Audience, VISIBLE};
 use crate::index::schema::{KEY_LAST_SYNC, TOP_N};
-use crate::index::{Index, IndexError, from_nanos};
+use crate::index::{Index, IndexError, bindings, from_nanos};
 use crate::markdown::LinkKind;
 use crate::slug::Slug;
 
@@ -191,27 +192,79 @@ pub struct Graph {
 /// Only wiki and internal links are part of the page graph.
 const IS_PAGE_LINK: &str = "links.kind != 'external'";
 
+/// A link both of whose ends this audience is allowed to know about.
+///
+/// Two conditions, and the second is the one that is easy to get wrong:
+///
+/// 1. **The source is a page they can read.** A backlink carries the linking
+///    page's slug and title, so a link out of a private page is that page.
+/// 2. **The target is not a page they cannot read.** Note the shape: it is not
+///    "the target is visible", because a target that is not a page at all is a
+///    [wanted page](crate::index::graph) and those are the whole point of the
+///    graph. It is specifically that no *invisible* page sits there.
+///
+/// Getting the second one backwards is worse than leaving it out. If a link to a
+/// private page merely lost its title, the page would appear in the graph as a
+/// **wanted** page — drawn, named by its slug, and advertised as something worth
+/// writing. A private page's slug is usually its title.
+///
+/// External links are unaffected: their target is a URL, which matches no slug,
+/// so the subquery finds nothing and the link survives.
+/// It takes no audience because it needs none: the predicate binds `:viewer` and
+/// `:everything` by name, so the SQL is the same whoever is asking and only the
+/// bindings differ.
+fn visible_link() -> String {
+    format!(
+        "{IS_PAGE_LINK}
+         and exists (
+             select 1 from pages
+             where pages.slug = links.src_slug and {VISIBLE}
+         )
+         and not exists (
+             select 1 from pages as target
+             where target.slug = links.target and not ({target})
+         )",
+        target = audience::visible_as("target"),
+    )
+}
+
 impl Index {
     /// Every link into and out of a page.
     ///
     /// The page itself need not exist: asking about a wanted page returns the
     /// links pointing at it, which is exactly what you want to see before
     /// deciding to write it.
-    pub async fn links_for(&self, slug: &Slug) -> Result<PageLinks, IndexError> {
+    pub async fn links_for(
+        &self,
+        slug: &Slug,
+        audience: &Audience,
+    ) -> Result<PageLinks, IndexError> {
         let slug = slug.to_string();
+        let audience = audience.clone();
 
         self.with_connection(move |connection| {
+            let visible = audience.params();
+            let visible_target = audience::visible_as("target");
+
+            // The join carries the audience predicate as well as the slug match,
+            // so a target this caller cannot read contributes no title — and the
+            // `not exists` below then removes the row entirely rather than
+            // leaving it looking like a page nobody has written yet.
             let mut outbound_query = connection.prepare(&format!(
                 "select links.target, links.display, links.kind, pages.title
                  from links
                  left join pages
-                   on pages.slug = links.target and {IS_PAGE_LINK}
-                 where links.src_slug = ?1
+                   on pages.slug = links.target and {IS_PAGE_LINK} and {VISIBLE}
+                 where links.src_slug = :slug
+                   and not exists (
+                       select 1 from pages as target
+                       where target.slug = links.target and not ({visible_target})
+                   )
                  order by links.kind, links.target"
             ))?;
 
             let outbound = outbound_query
-                .query_map(params![&slug], |row| {
+                .query_map(bindings(&[(":slug", &slug)], &visible).as_slice(), |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, Option<String>>(1)?,
@@ -231,16 +284,19 @@ impl Index {
                 })
                 .collect();
 
+            // A backlink names the page that wrote it and shows its title, so an
+            // unfiltered inbound list is a directory of every private page that
+            // happens to link here.
             let mut inbound_query = connection.prepare(&format!(
                 "select links.src_slug, pages.title, links.display, links.kind
                  from links
                  join pages on pages.slug = links.src_slug
-                 where links.target = ?1 and {IS_PAGE_LINK}
+                 where links.target = :slug and {IS_PAGE_LINK} and {VISIBLE}
                  order by links.src_slug"
             ))?;
 
             let inbound = inbound_query
-                .query_map(params![&slug], |row| {
+                .query_map(bindings(&[(":slug", &slug)], &visible).as_slice(), |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
@@ -282,7 +338,13 @@ impl Index {
     /// The one thing a wanted page is still subject to is the walk: with a
     /// `root`, everything drawn is within `depth` hops of it, or the promise the
     /// parameter makes would be false at the edges.
-    pub async fn graph(&self, options: GraphOptions) -> Result<Graph, IndexError> {
+    pub async fn graph(
+        &self,
+        options: GraphOptions,
+        audience: &Audience,
+    ) -> Result<Graph, IndexError> {
+        let audience = audience.clone();
+
         self.with_connection(move |connection| {
             let GraphOptions {
                 tag,
@@ -292,19 +354,27 @@ impl Index {
                 wanted,
                 limit,
             } = options;
+            let visible = audience.params();
+            let visible_link = visible_link();
 
-            // Every page link in the wiki, collapsed to one entry per ordered
-            // pair. Loaded whole rather than filtered in SQL because the
-            // degrees below count the whole wiki, so a filtered query would
-            // only have to be run a second time unfiltered.
+            // Every page link **this audience may see**, collapsed to one entry
+            // per ordered pair. Loaded whole rather than filtered further in SQL
+            // because the degrees below count the whole wiki, so a filtered
+            // query would only have to be run a second time.
+            //
+            // "The whole wiki" now means the whole wiki as this caller sees it.
+            // That is the only coherent answer — a degree that counted links
+            // from pages they cannot read would be a number about pages they
+            // cannot read — and it means two accounts can legitimately see
+            // different degrees for the same page.
             let mut collapsed: BTreeMap<(String, String), Vec<LinkKind>> = BTreeMap::new();
             {
                 let mut query = connection.prepare(&format!(
                     "select src_slug, target, kind from links
-                     where {IS_PAGE_LINK}
+                     where {visible_link}
                      order by src_slug, target, kind"
                 ))?;
-                let rows = query.query_map([], |row| {
+                let rows = query.query_map(visible.as_slice(), |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
@@ -330,10 +400,16 @@ impl Index {
 
             // Doubles as the set of slugs that name a page that exists, which
             // is what separates "excluded by a filter" from "never written".
+            // Only the visible ones, which keeps its second job honest too: a
+            // page that is here is one that exists *as far as this caller is
+            // concerned*, and one that is not is either unwritten or none of
+            // their business. The two are indistinguishable from outside, and
+            // that is the point.
             let mut titles: HashMap<String, String> = HashMap::new();
             {
-                let mut query = connection.prepare("select slug, title from pages")?;
-                let rows = query.query_map([], |row| {
+                let mut query = connection
+                    .prepare(&format!("select slug, title from pages where {VISIBLE}"))?;
+                let rows = query.query_map(visible.as_slice(), |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })?;
                 for row in rows {
@@ -343,7 +419,7 @@ impl Index {
             }
 
             let distances = match &root {
-                Some(root) => Some(walk_from(connection, root, depth)?),
+                Some(root) => Some(walk_from(connection, root, depth, &visible_link, &visible)?),
                 None => None,
             };
 
@@ -351,19 +427,23 @@ impl Index {
             // reasons — `substr` rather than `like` because slugs are
             // case-sensitive and a prefix has to stop at the separator.
             let mut matched: Vec<String> = {
-                let mut query = connection.prepare(
+                let mut query = connection.prepare(&format!(
                     "select slug from pages
-                     where (?1 is null or exists (
+                     where (:tag is null or exists (
                               select 1 from page_tags
-                              where page_tags.slug = pages.slug and page_tags.tag = ?1
+                              where page_tags.slug = pages.slug and page_tags.tag = :tag
                           ))
-                       and (?2 is null
-                            or slug = ?2
-                            or substr(slug, 1, length(?2) + 1) = ?2 || '/')
-                     order by slug",
-                )?;
+                       and (:prefix is null
+                            or slug = :prefix
+                            or substr(slug, 1, length(:prefix) + 1) = :prefix || '/')
+                       and {VISIBLE}
+                     order by slug"
+                ))?;
                 query
-                    .query_map(params![&tag, &prefix], |row| row.get::<_, String>(0))?
+                    .query_map(
+                        bindings(&[(":tag", &tag), (":prefix", &prefix)], &visible).as_slice(),
+                        |row| row.get::<_, String>(0),
+                    )?
                     .collect::<Result<Vec<_>, _>>()?
             };
 
@@ -419,9 +499,14 @@ impl Index {
 
             let mut tags_of: HashMap<String, Vec<String>> = HashMap::new();
             {
-                let mut query =
-                    connection.prepare("select slug, tag from page_tags order by slug, tag")?;
-                let rows = query.query_map([], |row| {
+                let mut query = connection.prepare(&format!(
+                    "select page_tags.slug, page_tags.tag
+                     from page_tags
+                     join pages on pages.slug = page_tags.slug
+                     where {VISIBLE}
+                     order by page_tags.slug, page_tags.tag"
+                ))?;
+                let rows = query.query_map(visible.as_slice(), |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })?;
                 for row in rows {
@@ -466,17 +551,27 @@ impl Index {
     }
 
     /// Every tag in the wiki, most-used first.
-    pub async fn tags(&self) -> Result<Vec<TagCount>, IndexError> {
-        self.with_connection(|connection| {
-            let mut query = connection.prepare(
-                "select tag, count(*) as pages
+    ///
+    /// Counted over the pages this audience can read, so a tag used only by
+    /// pages they cannot see does not appear at all. A count is a small leak and
+    /// a tag nobody else uses is a large one — `tags: [acquisition]` on three
+    /// private pages would otherwise show up as a tag with three pages behind it.
+    pub async fn tags(&self, audience: &Audience) -> Result<Vec<TagCount>, IndexError> {
+        let audience = audience.clone();
+
+        self.with_connection(move |connection| {
+            let visible = audience.params();
+            let mut query = connection.prepare(&format!(
+                "select page_tags.tag, count(*) as pages
                  from page_tags
-                 group by tag
-                 order by pages desc, tag asc",
-            )?;
+                 join pages on pages.slug = page_tags.slug
+                 where {VISIBLE}
+                 group by page_tags.tag
+                 order by pages desc, page_tags.tag asc"
+            ))?;
 
             let tags = query
-                .query_map([], |row| {
+                .query_map(visible.as_slice(), |row| {
                     Ok(TagCount {
                         tag: row.get(0)?,
                         pages: row.get::<_, i64>(1)? as usize,
@@ -490,86 +585,137 @@ impl Index {
     }
 
     /// Everything the dashboard shows.
-    pub async fn stats(&self) -> Result<Stats, IndexError> {
-        self.with_connection(|connection| {
-            let pages: i64 =
-                connection.query_row("select count(*) from pages", [], |row| row.get(0))?;
+    ///
+    /// **Every figure here is computed over the subgraph this audience can see.**
+    /// That is not a caveat, it is the definition: each of these six numbers is a
+    /// different way to describe pages, and a total that counted private ones
+    /// would be a statement about them.
+    ///
+    /// One consequence is worth stating because it looks like a bug. A page that
+    /// is linked only from a page you cannot read is an **orphan to you** and not
+    /// to its owner. Both answers are correct; they are answers to different
+    /// questions, and the alternative — reporting a page as linked without being
+    /// able to say from where — is how you learn that something you cannot see
+    /// points at it.
+    pub async fn stats(&self, audience: &Audience) -> Result<Stats, IndexError> {
+        let audience = audience.clone();
 
+        self.with_connection(move |connection| {
+            let visible = audience.params();
+            let visible_link = visible_link();
+            // The link half of the audience filter, for the subqueries that ask
+            // about a link's target from inside a query over `pages`.
+            let is_visible_page = VISIBLE;
+
+            let pages: i64 = connection.query_row(
+                &format!("select count(*) from pages where {is_visible_page}"),
+                visible.as_slice(),
+                |row| row.get(0),
+            )?;
+
+            // External links are counted only from pages the caller can read.
+            // The URL itself gives nothing away; which page cites it does.
             let (internal, external): (i64, i64) = connection.query_row(
                 &format!(
                     "select
-                       coalesce(sum(case when {IS_PAGE_LINK} then 1 else 0 end), 0),
+                       coalesce(sum(case when links.kind != 'external' then 1 else 0 end), 0),
                        coalesce(sum(case when links.kind = 'external' then 1 else 0 end), 0)
-                     from links"
+                     from links
+                     where exists (
+                         select 1 from pages
+                         where pages.slug = links.src_slug and {is_visible_page}
+                     )
+                     and not exists (
+                         select 1 from pages as target
+                         where target.slug = links.target
+                           and links.kind != 'external'
+                           and not ({visible_target})
+                     )",
+                    visible_target = audience::visible_as("target"),
                 ),
-                [],
+                visible.as_slice(),
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
 
             let resolved: i64 = connection.query_row(
                 &format!(
                     "select count(*) from links
-                     where {IS_PAGE_LINK}
-                       and exists (select 1 from pages where pages.slug = links.target)"
+                     where {visible_link}
+                       and exists (
+                           select 1 from pages
+                           where pages.slug = links.target and {is_visible_page}
+                       )"
                 ),
-                [],
+                visible.as_slice(),
                 |row| row.get(0),
             )?;
 
+            // A link to a page this caller cannot read is already gone from
+            // `visible_link`, so it is not counted here — which is the whole
+            // point. Counting it would report a private page as one that wants
+            // writing, and name it.
             let wanted_count: i64 = connection.query_row(
                 &format!(
                     "select count(distinct links.target) from links
-                     where {IS_PAGE_LINK}
+                     where {visible_link}
                        and not exists (select 1 from pages where pages.slug = links.target)"
                 ),
-                [],
+                visible.as_slice(),
                 |row| row.get(0),
             )?;
 
             let orphan_count: i64 = connection.query_row(
                 &format!(
                     "select count(*) from pages
-                     where not exists (
-                       select 1 from links
-                       where links.target = pages.slug and {IS_PAGE_LINK}
-                     )"
+                     where {is_visible_page}
+                       and not exists (
+                         select 1 from links
+                         where links.target = pages.slug and {visible_link}
+                       )"
                 ),
-                [],
+                visible.as_slice(),
                 |row| row.get(0),
             )?;
+
+            let top_n = TOP_N as i64;
 
             let mut wanted_query = connection.prepare(&format!(
                 "select links.target, count(distinct links.src_slug) as referrers
                  from links
-                 where {IS_PAGE_LINK}
+                 where {visible_link}
                    and not exists (select 1 from pages where pages.slug = links.target)
                  group by links.target
                  order by referrers desc, links.target asc
-                 limit ?1"
+                 limit :top_n"
             ))?;
             let wanted = wanted_query
-                .query_map(params![TOP_N as i64], |row| {
-                    Ok(WantedPage {
-                        slug: row.get(0)?,
-                        referrers: row.get::<_, i64>(1)? as usize,
-                    })
-                })?
+                .query_map(
+                    bindings(&[(":top_n", &top_n)], &visible).as_slice(),
+                    |row| {
+                        Ok(WantedPage {
+                            slug: row.get(0)?,
+                            referrers: row.get::<_, i64>(1)? as usize,
+                        })
+                    },
+                )?
                 .collect::<Result<Vec<_>, _>>()?;
 
             let mut orphan_query = connection.prepare(&format!(
                 "select pages.slug, pages.title
                  from pages
-                 where not exists (
-                   select 1 from links
-                   where links.target = pages.slug and {IS_PAGE_LINK}
-                 )
+                 where {is_visible_page}
+                   and not exists (
+                     select 1 from links
+                     where links.target = pages.slug and {visible_link}
+                   )
                  order by pages.slug
-                 limit ?1"
+                 limit :top_n"
             ))?;
             let orphans = orphan_query
-                .query_map(params![TOP_N as i64], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
+                .query_map(
+                    bindings(&[(":top_n", &top_n)], &visible).as_slice(),
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )?
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .filter_map(|(slug, title)| {
@@ -584,19 +730,22 @@ impl Index {
                 "select links.target, pages.title, count(distinct links.src_slug) as referrers
                  from links
                  join pages on pages.slug = links.target
-                 where {IS_PAGE_LINK}
+                 where {visible_link} and {is_visible_page}
                  group by links.target, pages.title
                  order by referrers desc, links.target asc
-                 limit ?1"
+                 limit :top_n"
             ))?;
             let most_linked = linked_query
-                .query_map(params![TOP_N as i64], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                })?
+                .query_map(
+                    bindings(&[(":top_n", &top_n)], &visible).as_slice(),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )?
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .filter_map(|(slug, title, referrers)| {
@@ -608,14 +757,16 @@ impl Index {
                 })
                 .collect();
 
-            let mut tag_query = connection.prepare(
-                "select tag, count(*) as pages
+            let mut tag_query = connection.prepare(&format!(
+                "select page_tags.tag, count(*) as pages
                  from page_tags
-                 group by tag
-                 order by pages desc, tag asc",
-            )?;
+                 join pages on pages.slug = page_tags.slug
+                 where {is_visible_page}
+                 group by page_tags.tag
+                 order by pages desc, page_tags.tag asc"
+            ))?;
             let tag_counts = tag_query
-                .query_map([], |row| {
+                .query_map(visible.as_slice(), |row| {
                     Ok(TagCount {
                         tag: row.get(0)?,
                         pages: row.get::<_, i64>(1)? as usize,
@@ -715,17 +866,23 @@ impl Index {
 ///
 /// The root need not name a page that exists: a wanted page has a
 /// neighbourhood, and it is exactly the set of pages waiting on it.
+/// The walk crosses only links the audience may see, which is what stops a
+/// neighbourhood being routed *through* a page they cannot read: without it, two
+/// pages joined only by a private one would look adjacent, and the private page's
+/// existence would be legible from the shape of the graph.
 fn walk_from(
     connection: &Connection,
     root: &str,
     depth: usize,
+    visible_link: &str,
+    visible: &[(&'static str, &dyn ToSql); 2],
 ) -> Result<HashMap<String, usize>, IndexError> {
     // `union` rather than `union all` is what stops a cycle looping forever:
     // it drops rows already produced. A node can still be reached at two
     // different distances, which is why the outer query takes the smaller.
     let mut query = connection.prepare(&format!(
         "with recursive walk(slug, distance) as (
-             select ?1, 0
+             select :root, 0
              union
              select case when links.src_slug = walk.slug
                          then links.target
@@ -734,14 +891,16 @@ fn walk_from(
                     walk.distance + 1
              from links
              join walk on links.src_slug = walk.slug or links.target = walk.slug
-             where {IS_PAGE_LINK} and walk.distance < ?2
+             where {visible_link} and walk.distance < :depth
          )
          select slug, min(distance) from walk group by slug"
     ))?;
 
-    let rows = query.query_map(params![root, depth as i64], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-    })?;
+    let depth = depth as i64;
+    let rows = query.query_map(
+        bindings(&[(":root", &root), (":depth", &depth)], visible).as_slice(),
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+    )?;
 
     let mut reached = HashMap::new();
     for row in rows {
@@ -756,6 +915,11 @@ mod tests {
     use super::*;
 
     use crate::page::{Frontmatter, Page};
+    /// Every test in this file runs against a wiki with no accounts, where
+    /// there is nobody to keep a page from and visibility does not apply.
+    /// What happens when it does is `tests/visibility.rs`, which is a whole
+    /// file rather than a case here for exactly that reason.
+    const EVERYONE: Audience = Audience::Everything;
 
     async fn index() -> Index {
         Index::open(None).await.expect("open in-memory index")
@@ -768,6 +932,7 @@ mod tests {
                 title: Some(slug.to_uppercase()),
                 tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
                 created: None,
+                ..Frontmatter::default()
             },
             body: body.to_owned(),
             updated: DateTime::from_timestamp_nanos(1_700_000_000_000_000_000),
@@ -791,7 +956,7 @@ mod tests {
         seed(&index, "notes/a", "A page.\n").await;
 
         let links = index
-            .links_for(&Slug::parse("index").unwrap())
+            .links_for(&Slug::parse("index").unwrap(), &EVERYONE)
             .await
             .unwrap();
 
@@ -813,7 +978,7 @@ mod tests {
         seed(&index, "b", "Also [[notes/target|see this]].\n").await;
 
         let links = index
-            .links_for(&Slug::parse("notes/target").unwrap())
+            .links_for(&Slug::parse("notes/target").unwrap(), &EVERYONE)
             .await
             .unwrap();
 
@@ -833,7 +998,7 @@ mod tests {
         let index = index().await;
         seed(&index, "a", "Link to [[notes/later]].\n").await;
 
-        let before = index.stats().await.unwrap();
+        let before = index.stats(&EVERYONE).await.unwrap();
         assert_eq!(before.links.wanted, 1);
         assert_eq!(before.links.resolved, 0);
         assert_eq!(before.wanted[0].slug, "notes/later");
@@ -841,7 +1006,7 @@ mod tests {
         // Only the new page is written. Nothing touches `a`.
         seed(&index, "notes/later", "Now it exists.\n").await;
 
-        let after = index.stats().await.unwrap();
+        let after = index.stats(&EVERYONE).await.unwrap();
         assert_eq!(after.links.wanted, 0);
         assert_eq!(after.links.resolved, 1);
         assert!(after.wanted.is_empty());
@@ -853,18 +1018,21 @@ mod tests {
         let index = index().await;
         seed(&index, "a", "Link to [[notes/target]].\n").await;
         seed(&index, "notes/target", "The target.\n").await;
-        assert_eq!(index.stats().await.unwrap().links.resolved, 1);
+        assert_eq!(index.stats(&EVERYONE).await.unwrap().links.resolved, 1);
 
         index
             .remove(&Slug::parse("notes/target").unwrap())
             .await
             .unwrap();
 
-        let stats = index.stats().await.unwrap();
+        let stats = index.stats(&EVERYONE).await.unwrap();
         assert_eq!(stats.links.wanted, 1);
         assert_eq!(stats.wanted[0].slug, "notes/target");
         // `a` still has its outbound link; it just points at nothing now.
-        let links = index.links_for(&Slug::parse("a").unwrap()).await.unwrap();
+        let links = index
+            .links_for(&Slug::parse("a").unwrap(), &EVERYONE)
+            .await
+            .unwrap();
         assert_eq!(links.outbound.len(), 1);
         assert!(!links.outbound[0].is_resolved());
     }
@@ -878,7 +1046,7 @@ mod tests {
         index.remove(&Slug::parse("source").unwrap()).await.unwrap();
 
         let links = index
-            .links_for(&Slug::parse("target").unwrap())
+            .links_for(&Slug::parse("target").unwrap(), &EVERYONE)
             .await
             .unwrap();
         assert!(links.inbound.is_empty(), "a deleted page still links");
@@ -891,7 +1059,7 @@ mod tests {
         seed(&index, "spoke", "Linked to.\n").await;
         seed(&index, "lonely", "Nothing links here.\n").await;
 
-        let stats = index.stats().await.unwrap();
+        let stats = index.stats(&EVERYONE).await.unwrap();
 
         assert_eq!(stats.pages, 3);
         // `hub` and `lonely` have no inbound links.
@@ -913,7 +1081,7 @@ mod tests {
         }
         seed(&index, "d", "See [[quiet]].\n").await;
 
-        let stats = index.stats().await.unwrap();
+        let stats = index.stats(&EVERYONE).await.unwrap();
 
         assert_eq!(stats.most_linked[0].slug.as_str(), "popular");
         assert_eq!(stats.most_linked[0].referrers, 3);
@@ -930,7 +1098,7 @@ mod tests {
             .unwrap();
         index.upsert(&page("b", &["shared"], "body")).await.unwrap();
 
-        let tags = index.tags().await.unwrap();
+        let tags = index.tags(&EVERYONE).await.unwrap();
 
         assert_eq!(tags.len(), 2);
         assert_eq!(
@@ -947,7 +1115,7 @@ mod tests {
                 pages: 1
             }
         );
-        assert_eq!(index.stats().await.unwrap().tags, 2);
+        assert_eq!(index.stats(&EVERYONE).await.unwrap().tags, 2);
     }
 
     #[tokio::test]
@@ -960,7 +1128,7 @@ mod tests {
         )
         .await;
 
-        let stats = index.stats().await.unwrap();
+        let stats = index.stats(&EVERYONE).await.unwrap();
 
         assert_eq!(stats.links.internal, 1);
         assert_eq!(stats.links.external, 2);
@@ -968,7 +1136,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_empty_wiki_has_empty_stats() {
-        let stats = index().await.stats().await.unwrap();
+        let stats = index().await.stats(&EVERYONE).await.unwrap();
 
         assert_eq!(stats.pages, 0);
         assert_eq!(stats.links, LinkTotals::default());
@@ -1019,7 +1187,7 @@ mod tests {
     async fn the_whole_graph_carries_orphans_and_wants_alike() {
         let graph = graph_index()
             .await
-            .graph(GraphOptions::default())
+            .graph(GraphOptions::default(), &EVERYONE)
             .await
             .unwrap();
 
@@ -1060,7 +1228,10 @@ mod tests {
         seed(&index, "b", "Target.\n").await;
         seed(&index, "a", "Both [[b]] and [b](b.md).\n").await;
 
-        let graph = index.graph(GraphOptions::default()).await.unwrap();
+        let graph = index
+            .graph(GraphOptions::default(), &EVERYONE)
+            .await
+            .unwrap();
 
         assert_eq!(graph.edges.len(), 1, "one line to draw");
         assert_eq!(graph.edges[0].kinds, [LinkKind::Internal, LinkKind::Wiki]);
@@ -1073,10 +1244,13 @@ mod tests {
     async fn a_filter_selects_pages_and_edges_need_both_ends() {
         let graph = graph_index()
             .await
-            .graph(GraphOptions {
-                prefix: Some("notes/rust".to_owned()),
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    prefix: Some("notes/rust".to_owned()),
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
 
@@ -1120,10 +1294,13 @@ mod tests {
             .unwrap();
 
         let graph = index
-            .graph(GraphOptions {
-                tag: Some("rust".to_owned()),
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    tag: Some("rust".to_owned()),
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
 
@@ -1137,10 +1314,13 @@ mod tests {
     async fn wants_can_be_left_out() {
         let graph = graph_index()
             .await
-            .graph(GraphOptions {
-                wanted: false,
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    wanted: false,
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
 
@@ -1156,11 +1336,14 @@ mod tests {
         let index = graph_index().await;
 
         let one = index
-            .graph(GraphOptions {
-                root: Some("notes/rust/async".to_owned()),
-                depth: 1,
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    root: Some("notes/rust/async".to_owned()),
+                    depth: 1,
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
         assert_eq!(slugs(&one), ["notes/rust", "notes/rust/async"]);
@@ -1169,11 +1352,14 @@ mod tests {
         // which links to it. A walk that only followed arrows forward would
         // never find it, and a page's neighbourhood is both directions.
         let two = index
-            .graph(GraphOptions {
-                root: Some("notes/rust/async".to_owned()),
-                depth: 2,
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    root: Some("notes/rust/async".to_owned()),
+                    depth: 2,
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1201,11 +1387,14 @@ mod tests {
         let index = graph_index().await;
 
         let one = index
-            .graph(GraphOptions {
-                root: Some("index".to_owned()),
-                depth: 1,
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    root: Some("index".to_owned()),
+                    depth: 1,
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
 
@@ -1220,11 +1409,14 @@ mod tests {
     async fn a_wanted_page_has_a_neighbourhood_of_its_own() {
         let graph = graph_index()
             .await
-            .graph(GraphOptions {
-                root: Some("notes/rust/streams".to_owned()),
-                depth: 1,
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    root: Some("notes/rust/streams".to_owned()),
+                    depth: 1,
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
 
@@ -1236,10 +1428,13 @@ mod tests {
     async fn truncation_keeps_the_hubs() {
         let graph = graph_index()
             .await
-            .graph(GraphOptions {
-                limit: 2,
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    limit: 2,
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
 
@@ -1253,7 +1448,11 @@ mod tests {
 
     #[tokio::test]
     async fn an_empty_wiki_draws_nothing() {
-        let graph = index().await.graph(GraphOptions::default()).await.unwrap();
+        let graph = index()
+            .await
+            .graph(GraphOptions::default(), &EVERYONE)
+            .await
+            .unwrap();
 
         assert!(graph.nodes.is_empty());
         assert!(graph.edges.is_empty());
@@ -1264,10 +1463,13 @@ mod tests {
     async fn a_root_nothing_knows_about_is_a_graph_of_one() {
         let graph = graph_index()
             .await
-            .graph(GraphOptions {
-                root: Some("nowhere".to_owned()),
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    root: Some("nowhere".to_owned()),
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
 
@@ -1283,11 +1485,14 @@ mod tests {
         seed(&index, "a", "See [[a]].\n").await;
 
         let graph = index
-            .graph(GraphOptions {
-                root: Some("a".to_owned()),
-                depth: 4,
-                ..GraphOptions::default()
-            })
+            .graph(
+                GraphOptions {
+                    root: Some("a".to_owned()),
+                    depth: 4,
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
             .await
             .unwrap();
 
@@ -1332,7 +1537,7 @@ mod tests {
 
         index.clear().await.unwrap();
 
-        assert_eq!(index.count().await.unwrap(), 0);
+        assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
         assert_eq!(index.usage().await.unwrap()[0].count, 7);
     }
 }

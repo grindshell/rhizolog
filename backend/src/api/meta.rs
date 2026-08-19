@@ -106,7 +106,7 @@ pub async fn health(State(state): State<AppState>, viewer: Viewer) -> AppResult<
     if viewer.is_permitted() {
         let totals = state.index.time_totals(Utc::now()).await?;
 
-        health.pages = Some(state.index.count().await?);
+        health.pages = Some(state.index.count(&viewer.audience()).await?);
         health.times = Some(totals.entries);
         health.running_timers = Some(totals.running);
         health.last_indexed = Some(state.index.last_sync().await?);

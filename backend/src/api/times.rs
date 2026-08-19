@@ -43,6 +43,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::api::AppState;
 use crate::api::extract::Json as JsonBody;
 use crate::api::pages::present_or_absent;
+use crate::auth::Viewer;
 use crate::error::{AppError, AppResult};
 use crate::index::{SortOrder, TimeGroup, TimeListOptions, TimeRecord, TimeSortBy, TimeTotals};
 use crate::markdown;
@@ -447,6 +448,7 @@ pub struct TimeStatsQuery {
 )]
 pub async fn list_times(
     State(state): State<AppState>,
+    viewer: Viewer,
     Query(query): Query<TimeListQuery>,
 ) -> AppResult<Json<TimeListResponse>> {
     let now = Utc::now();
@@ -469,6 +471,7 @@ pub async fn list_times(
                 offset,
             },
             now,
+            &viewer.audience(),
         )
         .await?;
 
@@ -497,6 +500,7 @@ pub async fn list_times(
 )]
 pub async fn create_time(
     State(state): State<AppState>,
+    viewer: Viewer,
     JsonBody(request): JsonBody<CreateTime>,
 ) -> AppResult<Response> {
     let now = Utc::now();
@@ -518,7 +522,7 @@ pub async fn create_time(
     let location = format!("/api/times/{}", entry.id);
     let mut response = (
         StatusCode::CREATED,
-        Json(view(&entry, &state, now, false).await?),
+        Json(view(&entry, &state, &viewer, now, false).await?),
     )
         .into_response();
     if let Ok(value) = HeaderValue::from_str(&location) {
@@ -545,12 +549,15 @@ pub async fn create_time(
 )]
 pub async fn read_time(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
     Query(query): Query<ReadTimeQuery>,
 ) -> AppResult<Json<TimeView>> {
     let id = parse_id(&raw)?;
     let entry = state.times.read(&id).await?;
-    Ok(Json(view(&entry, &state, Utc::now(), query.render).await?))
+    Ok(Json(
+        view(&entry, &state, &viewer, Utc::now(), query.render).await?,
+    ))
 }
 
 /// Update part of an entry, leaving the rest alone.
@@ -568,6 +575,7 @@ pub async fn read_time(
 )]
 pub async fn patch_time(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
     JsonBody(request): JsonBody<PatchTime>,
 ) -> AppResult<Json<TimeView>> {
@@ -597,7 +605,9 @@ pub async fn patch_time(
     let entry = state.times.write(&id, draft).await?;
     state.index.upsert_time(&entry).await?;
 
-    Ok(Json(view(&entry, &state, Utc::now(), false).await?))
+    Ok(Json(
+        view(&entry, &state, &viewer, Utc::now(), false).await?,
+    ))
 }
 
 /// Stop a running timer, now.
@@ -619,6 +629,7 @@ pub async fn patch_time(
 )]
 pub async fn stop_time(
     State(state): State<AppState>,
+    viewer: Viewer,
     Path(raw): Path<String>,
 ) -> AppResult<Json<TimeView>> {
     let id = parse_id(&raw)?;
@@ -646,7 +657,7 @@ pub async fn stop_time(
         .await?;
     state.index.upsert_time(&entry).await?;
 
-    Ok(Json(view(&entry, &state, now, false).await?))
+    Ok(Json(view(&entry, &state, &viewer, now, false).await?))
 }
 
 /// Delete a time entry.
@@ -712,6 +723,7 @@ pub async fn list_time_groups(
 )]
 pub async fn time_statistics(
     State(state): State<AppState>,
+    viewer: Viewer,
     Query(query): Query<TimeStatsQuery>,
 ) -> AppResult<Json<TimeStatsResponse>> {
     let at = query.at.unwrap_or_else(Utc::now);
@@ -723,7 +735,10 @@ pub async fn time_statistics(
     // Loaded once for the widest window any period needs — which is not simply
     // the year, because the week containing New Year's Day starts in December.
     let (from, to) = stats::covering_window(at, offset);
-    let samples = state.index.time_samples(from, to).await?;
+    let samples = state
+        .index
+        .time_samples(from, to, &viewer.audience())
+        .await?;
     let computed = stats::build(&samples, at, offset);
 
     let heatmap = {
@@ -782,10 +797,14 @@ fn summary(record: TimeRecord, now: DateTime<Utc>) -> TimeSummary {
 async fn view(
     entry: &TimeEntry,
     state: &AppState,
+    viewer: &Viewer,
     now: DateTime<Utc>,
     render: bool,
 ) -> AppResult<TimeView> {
-    let indexed = state.index.time_record(&entry.id).await?;
+    let indexed = state
+        .index
+        .time_record(&entry.id, &viewer.audience())
+        .await?;
     let titles: Vec<TimePageView> = match indexed {
         Some(record) => record
             .pages

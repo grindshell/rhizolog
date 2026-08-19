@@ -561,6 +561,15 @@ export interface components {
              *     Futures are lazy. See [[notes/rust/pinning]].
              */
             content?: string;
+            owner?: null | components["schemas"]["Username"];
+            /**
+             * @description Only consulted while the visibility is `restricted`.
+             * @example [
+             *       "alice",
+             *       "bob"
+             *     ]
+             */
+            readers?: components["schemas"]["Username"][];
             /** @description Where the page will live. `409` if something is already there. */
             slug: components["schemas"]["Slug"];
             /**
@@ -578,6 +587,7 @@ export interface components {
              * @example Async in Rust
              */
             title?: string | null;
+            visibility?: null | components["schemas"]["Visibility"];
         };
         /** @description A new entry. With no `start` it begins now; with no `end` it keeps running. */
         CreateTime: {
@@ -1095,6 +1105,18 @@ export interface components {
              *     <p>Futures are lazy. See <a href="/pages/notes/rust/pinning" data-wikilink="true">notes/rust/pinning</a>.</p>
              */
             html?: string | null;
+            owner?: null | components["schemas"]["Username"];
+            /**
+             * @description Accounts that may read this page while it is `restricted`.
+             *
+             *     Kept when the visibility is something else rather than dropped, so that
+             *     widening a page and narrowing it again does not lose the list.
+             * @example [
+             *       "alice",
+             *       "bob"
+             *     ]
+             */
+            readers?: components["schemas"]["Username"][];
             /**
              * Format: int64
              * @description Size of the page's file on disk, in bytes.
@@ -1132,6 +1154,8 @@ export interface components {
              * @description The file's modification time.
              */
             updated: string;
+            /** @description Who may read this page. An unmarked page is `internal`. */
+            visibility: components["schemas"]["Visibility"];
         };
         /** @description A partial update. Omitted fields are left alone. */
         PatchPage: {
@@ -1142,6 +1166,16 @@ export interface components {
              *     Futures are lazy. See [[notes/rust/pinning]].
              */
             content?: string | null;
+            /**
+             * @description Omit to leave the owner alone; send `null` to clear it.
+             *
+             *     Clearing the owner of a `private` page leaves it readable by nobody —
+             *     which is refused rather than done, because it is never what was meant and
+             *     the only way back is to edit the file on the server.
+             */
+            owner?: string | null;
+            /** @description Replaces the whole reader list when present. */
+            readers?: components["schemas"]["Username"][] | null;
             /**
              * @description Replaces the whole tag list when present.
              * @example [
@@ -1156,6 +1190,7 @@ export interface components {
              * @example Async in Rust
              */
             title?: string | null;
+            visibility?: null | components["schemas"]["Visibility"];
         };
         /** @description A partial update. Omitted fields are left alone. */
         PatchTime: {
@@ -1312,6 +1347,15 @@ export interface components {
              *     Futures are lazy. See [[notes/rust/pinning]].
              */
             content?: string;
+            owner?: null | components["schemas"]["Username"];
+            /**
+             * @description Omitting this clears the reader list.
+             * @example [
+             *       "alice",
+             *       "bob"
+             *     ]
+             */
+            readers?: components["schemas"]["Username"][];
             /**
              * @description Omitting this clears the page's tags. Use `PATCH` to leave them alone.
              * @example [
@@ -1326,6 +1370,7 @@ export interface components {
              * @example Async in Rust
              */
             title?: string | null;
+            visibility?: null | components["schemas"]["Visibility"];
         };
         /**
          * @description What an account is allowed to do to *the instance*.
@@ -1787,6 +1832,21 @@ export interface components {
             /** @description Every account, by name. */
             users: components["schemas"]["UserView"][];
         };
+        /**
+         * @description Who may read a page.
+         *
+         *     - `public` — anyone, including callers who have not signed in. Only reaches them when the instance sets `RHIZOLOG_ANONYMOUS_READ`; without that it behaves as `internal`.
+         *     - `internal` — any account on this wiki. **This is what an unmarked page means.**
+         *     - `restricted` — the accounts in `readers`, plus the owner.
+         *     - `private` — the owner alone.
+         *
+         *     An unrecognised word reads as `private` rather than as the default: a typo in this field must never be the thing that publishes a page.
+         *
+         *     On a wiki with no accounts this is inert — there is nobody to keep a page from. It is also not a boundary against anyone who can read the wiki directory itself.
+         * @example internal
+         * @enum {string}
+         */
+        Visibility: "public" | "internal" | "restricted" | "private";
         WantedPageView: {
             /**
              * @description How many pages link to it — how badly it is wanted.

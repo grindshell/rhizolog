@@ -49,6 +49,16 @@ a pin because a file was briefly absent is the worse failure. Such a pin comes
 back badged `missing` in the menu, which is also the only thing there is to
 click to get rid of it.
 
+A fourth case joined them with [page visibility](visibility.md), and it is
+deliberately the same one: a pin whose page the *caller* may not read. The title
+join carries the visibility predicate, so that pin reports no title and is badged
+`missing` too — a pin list is wiki-wide state, and the alternative is a menu
+entry naming a page you are not allowed to know exists. The slug stays, because
+a pin is a slug and everyone signed in shares the list. `PUT /api/pins/{slug}`
+checks before pinning for the same reason: it already answered `404` for a page
+that is not there, so answering `200` for one that is there and unreadable would
+be the existence oracle in a single request.
+
 **A pin follows a move; an inbound link does not.** That looks inconsistent and
 is not. A link is something another page *said*, and rewriting it would be
 editing that page's content on its behalf — so a move turns inbound links into

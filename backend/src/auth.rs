@@ -47,6 +47,7 @@ use sha2::{Digest, Sha256};
 
 use crate::api::AppState;
 use crate::error::{AppError, AppResult};
+use crate::index::Audience;
 use crate::users::{Role, User, Username};
 
 /// The cookie a browser session travels in.
@@ -185,6 +186,23 @@ impl Viewer {
         match self {
             Self::Open | Self::Account(_) => Ok(()),
             Self::Anonymous => Err(AppError::Unauthorized),
+        }
+    }
+
+    /// What this viewer is allowed to see, for the index to filter on.
+    ///
+    /// The mapping is total and has no configuration in it, which is the point:
+    /// whether an anonymous request is allowed to *reach* a handler is decided
+    /// once, in [`gate`]. By the time anything asks this, that question has been
+    /// answered, and there is no second place for the two to disagree.
+    pub fn audience(&self) -> Audience {
+        match self {
+            // No accounts, so no visibility either: there is nobody to keep a
+            // page from, and a `visibility:` line in a wiki that has never had
+            // an account is a note to a future self.
+            Self::Open => Audience::Everything,
+            Self::Account(user) => Audience::Account(user.username.clone()),
+            Self::Anonymous => Audience::Public,
         }
     }
 
@@ -359,6 +377,40 @@ fn is_public(method: &axum::http::Method, path: &str) -> bool {
     )
 }
 
+/// Whether a route is one an anonymous caller may reach **when the instance has
+/// opted into serving them**, via `RHIZOLOG_ANONYMOUS_READ`.
+///
+/// Reaching a handler is not the same as being answered. Everything here goes on
+/// to filter by [`Viewer::audience`], which for an anonymous caller is
+/// [`Audience::Public`] — so the reward for getting through this door is the set
+/// of pages somebody deliberately marked `public`, and an empty listing on a
+/// wiki where nobody has.
+///
+/// Three things are deliberately absent:
+///
+/// - **Every write.** There is no configuration in Rhizolog that lets an
+///   unauthenticated caller change anything. This function only ever answers
+///   `true` for `GET`.
+/// - **Times and pins.** They are the operator's own working state rather than
+///   page content — what they were doing and when — and no page being public
+///   says anything about wanting that published.
+/// - **`POST /api/render`.** It reads and writes nothing, so it looks harmless,
+///   and it is a markdown parser that will run on any input a stranger sends.
+///   Anonymous read is about reading what is there.
+fn is_anonymously_readable(method: &axum::http::Method, path: &str) -> bool {
+    use axum::http::Method;
+
+    if method != Method::GET {
+        return false;
+    }
+
+    matches!(
+        path,
+        "/api/pages" | "/api/search" | "/api/tags" | "/api/graph" | "/api/stats"
+    ) || path.starts_with("/api/pages/")
+        || path.starts_with("/api/links/")
+}
+
 /// Decide who a request is, and turn away the ones that are nobody.
 ///
 /// Runs once per request, and the answer is put in the request's extensions so
@@ -380,7 +432,14 @@ pub async fn gate(State(state): State<AppState>, mut request: Request, next: Nex
         Err(error) => return error.into_response(),
     };
 
-    if !viewer.is_permitted() && !is_public(request.method(), &path) {
+    // Three ways past the gate, and they are worth reading as three rather than
+    // as one condition: this request is somebody, or the route is one anybody
+    // may reach, or the instance has opted into serving readers who are nobody.
+    let admitted = viewer.is_permitted()
+        || is_public(request.method(), &path)
+        || (state.anonymous_read && is_anonymously_readable(request.method(), &path));
+
+    if !admitted {
         return AppError::Unauthorized.into_response();
     }
 
