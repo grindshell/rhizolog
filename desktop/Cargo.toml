@@ -2,6 +2,7 @@
 name = "rhizolog-desktop"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 # NOT `Rhizolog`, however much nicer that would look on a portable download.
 # Windows filenames are case-insensitive, so `Rhizolog.exe` and the server's

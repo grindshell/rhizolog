@@ -15,10 +15,18 @@ These apply to a release of any kind, including one that is only "clone it and
 project — which is why they were not written down until somebody asked what a
 beta needs.
 
-- **There is no licence.** No `LICENSE` file, so the default is
-  all-rights-reserved: anybody who is handed a copy has no permission to run,
-  modify or pass it on. The cheapest item in this file and the only one that
-  stops a release outright.
+- **Dependency licences are unreviewed.** The AGPL is strong copyleft, so a
+  dependency under terms it cannot be combined with is a real problem rather
+  than a paperwork one. The Rust and npm trees here are almost entirely
+  MIT/Apache-2.0, which is fine in this direction, but nothing has actually
+  checked — `cargo-license` or `cargo-deny` over the workspace, and
+  `pnpm licenses list`, would say so in a minute. Worth doing once before
+  anybody is handed a copy, and worth having in CI after that.
+- **No per-file licence notices.** `LICENSE` and the `license` fields in the
+  manifests are what a tool reads; the AGPL's own appendix also asks for a
+  short notice at the top of each source file, which is what a human reads when
+  a file has been copied somewhere on its own. Not done, because it touches
+  every file in the repository and is worth doing in one deliberate pass.
 - **There is no release process, and no single definition of "the version".**
   `backend/Cargo.toml`, `desktop/Cargo.toml` and `desktop/tauri.conf.json` all
   say `0.1.0` and are bumped by hand in step; `frontend/package.json` says

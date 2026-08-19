@@ -387,3 +387,15 @@ each entry with the reason it is not done.
 
 Not implemented, on purpose: page history and diffs, authentication, anything
 multi-user, link rewriting on move, file attachments, and transclusion.
+
+## Licence
+
+Copyright (C) 2026 Tim Yuen. Rhizolog is free software under the
+[GNU Affero General Public License](LICENSE), version 3 or later.
+
+The Affero clause is why that one rather than the ordinary GPL. Rhizolog is a
+server, so the usual way to use somebody else's copy is over a network — which
+the GPL says nothing about, because it is not distribution. Section 13 does: a
+modified Rhizolog that other people are allowed to talk to over a network has to
+offer them its source as well. Running your own copy, changing it, and never
+letting anyone else near it triggers none of that.
