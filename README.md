@@ -305,6 +305,10 @@ says so instead of leaving a box that does nothing.
 Only the port, deliberately. Rhizolog binds loopback and there is no
 authentication, so the host is not something the app offers to change.
 
+The same window names the **log folder** and opens it. A window has no console
+to print to, so that file is the app's only account of itself and the first
+thing worth attaching to a bug report.
+
 **One window per wiki.** Opening the app again on a wiki it is already serving
 tells you where that window is and offers to open a different wiki instead —
 two of them on one wiki would mean two writers on one index and a published

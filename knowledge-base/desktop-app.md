@@ -137,6 +137,10 @@ behave the way anyone would expect.
 before there is a window has to leave something behind, or the only symptom is
 an icon that bounced once.
 
+Which is worth nothing if nobody can find the file, and a path under
+`%LOCALAPPDATA%` is not a thing anybody guesses. The settings window names the
+folder and opens it — see below.
+
 ## Configuration stops being environment-only
 
 [`Config::from_env`](../backend/src/config.rs) is the only constructor, and
@@ -287,6 +291,27 @@ one of them, is the shape that needs a script to keep the two in step.
 dashboard's included, and the dashboard renders whatever the wiki says. So the
 handler answers only requests whose webview label is the settings window's —
 otherwise a note in a wiki could change which port the app serves on.
+
+#### The log folder lives here too, and that is why it is a window
+
+A windowed binary has no stdout, so
+[the log file](#a-windowed-binary-has-no-stdout) is its whole account of itself
+— and until now nothing in the app said where it was. A File menu item was the
+planned answer and is the worse one: a menu can open the folder and cannot
+*name* it, which is the half somebody needs when they are reading a bug report
+over somebody else's shoulder. So the window shows the path and has a button
+beside it, and when there is no log directory to be had it says that instead of
+offering a button that opens nothing.
+
+It is the second submit button on the same form rather than a form of its own,
+via `formaction` — so the port box is submitted with it and a port typed but not
+yet saved survives a click on an unrelated control. `formnovalidate` goes with
+it, because a half-typed port is no reason to refuse to open a folder, and
+neither is `RHIZOLOG_ADDR` having switched the port control off. Both are plain
+HTML attributes, which keeps the promise above: two actions, still no script.
+
+`tauri-plugin-opener` was already a dependency, for
+[links out of the dashboard](#a-webview-has-no-tabs-so-target_blank-is-the-shells-problem).
 
 Changing the port restarts, the way changing wikis does, and for less reason:
 `Store`, `TimeStore`, `Index` and the watcher are all bound to a root that is

@@ -1,11 +1,11 @@
 //! The window that changes what the app remembers.
 //!
 //! Configuration that belongs to *this copy of the app* rather than to the wiki
-//! — which port to serve on, so far — has to be changeable without a text
-//! editor. There is nowhere in the dashboard it could live: that page is the
-//! one a browser loads from a remote instance, and a control that only worked
-//! when it happened to be inside Tauri would make the two different
-//! applications. See `knowledge-base/desktop-app.md`.
+//! — which port to serve on, and where it keeps the log nobody can see — has to
+//! be reachable without a text editor. There is nowhere in the dashboard it
+//! could live: that page is the one a browser loads from a remote instance, and
+//! a control that only worked when it happened to be inside Tauri would make
+//! the two different applications. See `knowledge-base/desktop-app.md`.
 //!
 //! So it is a second window, owned by the shell, which never loads the
 //! dashboard and never talks to the API.
@@ -28,10 +28,12 @@
 
 use std::borrow::Cow;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use rhizolog::Server;
 use tauri::http::{Request, Response, StatusCode, header};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::settings;
 
@@ -108,6 +110,7 @@ pub fn respond(
             html(StatusCode::OK, view(handle, None, None))
         }
         ("POST", "/save") => save(handle, request.body()),
+        ("POST", "/logs") => logs(handle, request.body()),
         (method, path) => {
             tracing::warn!(method, path, "no such settings page");
             plain(StatusCode::NOT_FOUND, "No such page.")
@@ -160,6 +163,46 @@ fn save(handle: &AppHandle, body: &[u8]) -> Response<Cow<'static, [u8]>> {
         StatusCode::OK,
         done("Saved", "Rhizolog is restarting on the new port."),
     )
+}
+
+/// Show the log folder in whatever the machine browses folders with.
+///
+/// The body is the settings form, submitted by this button along with
+/// everything else on it, so a port typed but not yet saved comes back on the
+/// page rather than being quietly reverted by a click on an unrelated control.
+fn logs(handle: &AppHandle, body: &[u8]) -> Response<Cow<'static, [u8]>> {
+    let chosen = read_form(body).ok();
+
+    let Some(folder) = log_folder(handle) else {
+        return html(
+            StatusCode::OK,
+            view(
+                handle,
+                chosen,
+                Some("Rhizolog does not know where its log folder belongs on this machine."),
+            ),
+        );
+    };
+
+    tracing::info!(path = %folder.display(), "opening the log folder");
+
+    // `open_path` ends at `ShellExecute` on Windows, which fails on a directory
+    // that is not there — and the directory is only created when the app
+    // manages to open a log file at all, so this is the ordinary way to find
+    // out that it never did.
+    if let Err(error) = handle
+        .opener()
+        .open_path(folder.to_string_lossy(), None::<&str>)
+    {
+        tracing::error!(%error, path = %folder.display(), "could not open the log folder");
+        let complaint = format!("Rhizolog could not open {}. {error}", folder.display());
+        return html(StatusCode::OK, view(handle, chosen, Some(&complaint)));
+    }
+
+    // No message on the way back. The folder opening in front of the window is
+    // the confirmation, and a page that said so as well would be telling
+    // somebody something they are already looking at.
+    html(StatusCode::OK, view(handle, chosen, None))
 }
 
 /// What the form asked for.
@@ -245,6 +288,8 @@ struct View<'a> {
     address: Option<SocketAddr>,
     /// `RHIZOLOG_ADDR`'s value, when it is set and therefore deciding.
     forced: Option<String>,
+    /// Where the log folder is, when the app knows.
+    logs: Option<PathBuf>,
     /// Why the last attempt did not take.
     complaint: Option<&'a str>,
 }
@@ -261,8 +306,18 @@ fn view(handle: &AppHandle, chosen: Option<Choice>, complaint: Option<&str>) -> 
         choice,
         address: serving(handle),
         forced: std::env::var(rhizolog::config::ENV_ADDRESS).ok(),
+        logs: log_folder(handle),
         complaint,
     })
+}
+
+/// Where the app writes its log.
+///
+/// The same answer `init_tracing` used, asked again rather than remembered:
+/// there is one source for it and two readers, and a copy would be a second
+/// thing that could be right about a directory nothing is writing to.
+fn log_folder(handle: &AppHandle) -> Option<PathBuf> {
+    handle.path().app_log_dir().ok()
 }
 
 /// The address the server actually bound.
@@ -313,6 +368,23 @@ fn document(view: &View) -> Vec<u8> {
         Choice::Fixed(port) => port.to_string(),
     };
 
+    // `formaction` rather than a second form, so the port box is submitted with
+    // this button too and whatever was typed into it survives the round trip.
+    // `formnovalidate` because a half-typed port is no reason to refuse to open
+    // a folder, and the two controls are unrelated — including when
+    // `RHIZOLOG_ADDR` has switched the other one off.
+    let logs = match &view.logs {
+        Some(path) => format!(
+            "<p><code class=\"path\">{}</code></p>\n\
+             <p class=\"actions\"><button type=\"submit\" formaction=\"/logs\" formnovalidate \
+             class=\"secondary\">Open log folder</button></p>",
+            escape(&path.display().to_string())
+        ),
+        None => "<p class=\"note\">Rhizolog could not work out where its log folder belongs on \
+                 this machine, so it is not writing one.</p>"
+            .to_owned(),
+    };
+
     let document = format!(
         "<!doctype html>\n\
          <html lang=\"en\">\n\
@@ -337,6 +409,12 @@ fn document(view: &View) -> Vec<u8> {
          <p class=\"actions\"><button type=\"submit\"{disabled}>Save and restart</button></p>\n\
          <p class=\"note\">The server is bound at startup, so changing the port restarts \
          Rhizolog. It reopens the same wiki.</p>\n\
+         <hr>\n\
+         <h2>Logs</h2>\n\
+         <p class=\"note\">A window has no console to print to, so the log file is the only \
+         account Rhizolog gives of itself — and the first thing worth having when it does \
+         something surprising.</p>\n\
+         {logs}\n\
          </form>\n\
          </main>\n\
          </body>\n\
@@ -403,12 +481,19 @@ input[type=number] {
   font: inherit; color: inherit;
   background: var(--field); border: 1px solid var(--line); border-radius: 4px;
 }
+.path {
+  display: inline-block; padding: 0.35rem 0.55rem;
+  background: var(--field); border: 1px solid var(--line); border-radius: 4px;
+  word-break: break-all;
+}
+hr { border: 0; border-top: 1px solid var(--line); margin: 1.8rem 0 0; }
 .actions { margin-top: 1.4rem; }
 button {
   padding: 0.45rem 1rem; font: inherit;
   color: var(--paper); background: var(--ink);
   border: 1px solid var(--ink); border-radius: 4px; cursor: pointer;
 }
+button.secondary { color: var(--ink); background: transparent; border-color: var(--line); }
 button:disabled, input:disabled { opacity: 0.5; cursor: default; }
 ";
 
@@ -530,6 +615,7 @@ mod tests {
             choice: Choice::Fixed(8080),
             address: None,
             forced: Some("<script>alert(1)</script>".to_owned()),
+            logs: Some(PathBuf::from("C:\\logs\\<b>")),
             complaint: Some("\"quoted\" & <angled>"),
         }))
         .expect("the page is utf-8");
@@ -537,6 +623,10 @@ mod tests {
         assert!(!page.contains("<script>"), "{page}");
         assert!(page.contains("&lt;script&gt;"));
         assert!(page.contains("&quot;quoted&quot; &amp; &lt;angled&gt;"));
+        assert!(
+            page.contains("&lt;b&gt;"),
+            "the path is somebody else's too"
+        );
     }
 
     /// The value has to survive into the box, or opening the window would look
@@ -547,6 +637,7 @@ mod tests {
             choice: Choice::Fixed(8080),
             address: "127.0.0.1:8080".parse().ok(),
             forced: None,
+            logs: Some(PathBuf::from("C:\\logs")),
             complaint: None,
         }))
         .expect("the page is utf-8");
@@ -562,6 +653,39 @@ mod tests {
         );
     }
 
+    /// A windowed binary's log folder is the one thing nothing else in the app
+    /// says out loud, so the path is on the page whether or not it is clicked.
+    #[test]
+    fn the_page_names_the_log_folder() {
+        let page = String::from_utf8(document(&View {
+            choice: Choice::Automatic,
+            address: None,
+            forced: None,
+            logs: Some(PathBuf::from("C:\\Users\\someone\\logs")),
+            complaint: None,
+        }))
+        .expect("the page is utf-8");
+
+        assert!(page.contains("C:\\Users\\someone\\logs"), "{page}");
+        assert!(page.contains("formaction=\"/logs\""));
+    }
+
+    /// Better than a button that opens nothing.
+    #[test]
+    fn no_log_folder_means_no_button() {
+        let page = String::from_utf8(document(&View {
+            choice: Choice::Automatic,
+            address: None,
+            forced: None,
+            logs: None,
+            complaint: None,
+        }))
+        .expect("the page is utf-8");
+
+        assert!(!page.contains("formaction"), "{page}");
+        assert!(page.contains("could not work out where its log folder"));
+    }
+
     /// A control that cannot be honoured is worse than one that is not offered,
     /// so the environment switches the form off rather than letting somebody
     /// save a setting that will be ignored.
@@ -571,6 +695,7 @@ mod tests {
             choice: Choice::Automatic,
             address: None,
             forced: Some("127.0.0.1:9999".to_owned()),
+            logs: Some(PathBuf::from("C:\\logs")),
             complaint: None,
         }))
         .expect("the page is utf-8");
@@ -580,6 +705,12 @@ mod tests {
         assert!(
             page.contains("value=\"\""),
             "automatic leaves the box empty"
+        );
+        // The logs have nothing to do with the address, and share a form with
+        // it only so that a typed port survives the click.
+        assert!(
+            page.contains("formnovalidate class=\"secondary\">"),
+            "the log folder is still reachable"
         );
     }
 }
