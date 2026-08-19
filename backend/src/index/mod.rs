@@ -11,6 +11,7 @@
 pub mod graph;
 pub mod pins;
 pub mod schema;
+pub mod sessions;
 pub mod sync;
 pub mod times;
 
@@ -31,6 +32,7 @@ pub use graph::{
     PageLinks, PageRef, RouteUsage, Stats, TagCount, WantedPage,
 };
 pub use pins::Pin;
+pub use sessions::StoredSession;
 pub use sync::{SyncCounts, SyncReport, sync};
 pub use times::{
     PageTimes, TimeGroup, TimeList, TimeListOptions, TimePageRef, TimeRecord, TimeRef, TimeSortBy,

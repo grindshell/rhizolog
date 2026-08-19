@@ -61,6 +61,41 @@ the machine that built it" and "is a download".
 
 See [The desktop app](knowledge-base/desktop-app.md), "Portable, on Windows".
 
+## Accounts
+
+Identity is built: accounts on disk, sessions, and a gate in front of `/api`.
+See [Accounts](knowledge-base/accounts.md) for the reasoning. These are the
+pieces that are known to be missing.
+
+- **Page visibility is not built.** `public` / `internal` / `restricted` /
+  `private` in frontmatter, and the index and query work to apply it. Identity
+  had to come first — there is no way to scope a page to an account before
+  accounts exist — but until this lands, every signed-in account sees every page,
+  which is the *whole* wiki and not a subset of it. This is the larger half:
+  it has to reach listing, search, the graph, links, tags, stats and pins,
+  because an access-control model that is not applied to search is not an
+  access-control model.
+- **No rate limiting on sign-in.** Argon2 is a real natural throttle — roughly
+  twenty attempts a second per core, and each costs the attacker what it costs
+  the server — but it is not a lockout, and a network instance wants one. Also
+  the first thing on this list that needs shared mutable state keyed by
+  something other than a session, so it is not a five-line change.
+- **`/api/health` discloses `wiki_root` to anonymous callers.** The counts are
+  already withheld; the path stays because `endpoint::live` compares it to
+  confirm a published `server.json`, and that handshake happens before anybody
+  could sign in. Restricting the field to loopback callers would need
+  `ConnectInfo`, which means `into_make_service_with_connect_info` in
+  `server.rs`. A filesystem path is the least interesting thing behind that
+  door, which is why this is a note rather than work in progress.
+- **No named API tokens.** A session token works for a script today. What it
+  does not do is survive a password change or carry a label saying what it is
+  for, and revoking one script means signing that account out everywhere.
+- **No password reset.** No email and no second factor, so recovery is an owner
+  setting a new password — or editing the file on the server, which a remote
+  administrator cannot do. Worth a plan before anybody but its author runs one.
+- **Sessions are not listable.** `count_sessions` exists and nothing exposes it.
+  "Where am I signed in, and sign that one out" is the natural next endpoint.
+
 ## Rough edges
 
 - **A splash window while a large wiki reconciles.** `server::start` returns
@@ -144,15 +179,12 @@ worth keeping so the question does not get reopened from scratch.
   choice, stops the server properly and relaunches, which is correct and cheap.
   Live switching needs `Server::start`/`shutdown` to be genuinely re-entrant and
   the endpoint file to move with the root.
-- **Authentication.** Loopback is the entire security boundary, and that is
-  written into `config.rs`. A remote instance would need a token, and the
-  configuration should have somewhere to put one before that day arrives —
-  shipping a desktop app does not make it arrive.
 - **CORS.** Everything is same-origin today, including the webview, so nothing
   needs it. `tower-http`'s `cors` feature was enabled and unused; it is now off,
   because a feature switched on in advance of a decision is how the decision
   gets made by accident. An agent reaching a remote instance from a browser
-  context is what would change this.
+  context is what would change this — and accounts make that more likely than it
+  was, so this is closer than the rest of this list.
 - **Auto-update.** A portable executable that rewrites itself is a different
   product decision. For now, replacing the file is the update.
 - **macOS and Linux bundles.** The architecture is portable; the packaging work

@@ -10,7 +10,24 @@ chaotically, and Rhizolog is built to track that.
   not for hosting public community wikis.
 - **Rich, agent-friendly API.** The HTTP API is a primary interface, designed
   for access by AI agents as well as humans, with OpenAPI definitions.
-- **Single-user.** No accounts, permissions, or multi-tenancy.
+- **Single-user by default.** A wiki with no accounts is open: no sign-in,
+  nothing refused, every request treated as the one user. See below.
+
+## Single-user is the default, not the only shape
+
+This used to read "no accounts, permissions, or multi-tenancy", and loopback was
+the entire security boundary. Serving a wiki over a network is what changed it.
+
+What has *not* changed is the default. A wiki with no accounts behaves exactly
+as it always did, and creating the first account is what turns authentication
+on — so the local case pays nothing, and putting a Rhizolog on a network stays a
+deliberate act. It is still not a public community wiki engine: the model is a
+handful of named accounts who can be given access to particular pages, not
+registration, moderation or anonymous editing.
+
+[Accounts](accounts.md) has the reasoning, the costs, and where the boundary
+actually is — which is between network callers, never against whoever holds the
+disk.
 
 ## Interface
 

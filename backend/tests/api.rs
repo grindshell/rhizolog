@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use rhizolog::{AppState, Assets, Index, Store, TimeStore};
+use rhizolog::{AppState, Assets, Index, Store, TimeStore, UserStore};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -39,14 +39,20 @@ impl App {
         // In-memory index: these tests are about the HTTP surface, not
         // persistence, which `index::sync` covers.
         let index = Index::open(None).await.expect("open index");
+        // No accounts, so the wiki is open and every request below is the single
+        // user — which is what keeps this file testing the API rather than the
+        // authentication in front of it. `signed_in` is the other case.
+        let users = UserStore::open(directory.path()).await.expect("open users");
         Self {
             router: rhizolog::router(AppState {
                 store,
                 times,
+                users,
                 index,
                 usage: rhizolog::UsageTally::new(),
                 // API-only: the SPA fallback is covered in tests/frontend.rs.
                 assets: Assets::None,
+                secure_cookies: false,
             }),
             _directory: directory,
         }
@@ -174,15 +180,18 @@ async fn usage_counts_survive_a_restart() {
     {
         let store = Store::open(wiki.path()).await.expect("open store");
         let times = TimeStore::open(wiki.path()).await.expect("open time log");
+        let users = UserStore::open(wiki.path()).await.expect("open users");
         let index = Index::open(Some(&database)).await.expect("open index");
         let usage = rhizolog::UsageTally::new();
         let app = App {
             router: rhizolog::router(AppState {
                 store,
                 times,
+                users,
                 index: index.clone(),
                 usage: usage.clone(),
                 assets: Assets::None,
+                secure_cookies: false,
             }),
             _directory: wiki,
         };
@@ -201,14 +210,17 @@ async fn usage_counts_survive_a_restart() {
     let wiki = TempDir::new().expect("wiki dir");
     let store = Store::open(wiki.path()).await.expect("open store");
     let times = TimeStore::open(wiki.path()).await.expect("open time log");
+    let users = UserStore::open(wiki.path()).await.expect("open users");
     let index = Index::open(Some(&database)).await.expect("reopen index");
     let app = App {
         router: rhizolog::router(AppState {
             store,
             times,
+            users,
             index,
             usage: rhizolog::UsageTally::new(),
             assets: Assets::None,
+            secure_cookies: false,
         }),
         _directory: wiki,
     };

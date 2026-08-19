@@ -62,6 +62,28 @@ create table if not exists pins (
     slug      text    primary key,
     pinned_at integer not null
 ) strict;
+
+-- Sessions: proof that a request has already said who it is.
+--
+-- Durable, and the reason is not that they are precious. Losing them signs
+-- everybody out, which is survivable and is exactly what deleting the database
+-- should do. But a version bump is an ordinary consequence of changing how
+-- *pages* are indexed, and that has nothing to do with who is signed in.
+--
+-- The key is the SHA-256 of the token, never the token: this file sits on a
+-- disk, and a row that could be lifted out and replayed as a credential is a
+-- row worth not writing. No `references` to an account either — accounts are
+-- files, not rows, and nothing in SQLite can point at one.
+create table if not exists sessions (
+    token_hash text    primary key,
+    username   text    not null,
+    created    integer not null,
+    expires    integer not null
+) strict;
+
+-- Signing an account out everywhere is a `delete ... where username = ?`, which
+-- happens on every password change and every account deletion.
+create index if not exists sessions_by_username on sessions(username);
 ";
 
 /// Everything rebuildable from the markdown on disk.

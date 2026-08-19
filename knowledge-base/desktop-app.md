@@ -685,10 +685,15 @@ These, and the packaging work still outstanding, are tracked in
 [`TODO.md`](../TODO.md) at the repository root. The reasoning stays here; what
 is left to do is listed there.
 
-- **Authentication.** Loopback is the whole security boundary today and that is
-  written into `config.rs`. A remote instance needs a token, and the config
-  should have somewhere to put one before that day, but shipping a desktop app
-  does not make that day arrive.
+- **Authentication in the shell.** [Accounts](accounts.md) are built, and the
+  app needs nothing for them — which is the design working. A wiki with no
+  accounts is open, so the ordinary local case never sees a login page; a wiki
+  that *has* accounts shows the dashboard's own login page in the window, because
+  the dashboard is the same page a browser loads from a remote instance and the
+  app is not allowed a privileged way in. The one thing that would have broken is
+  the single-instance check, which confirms a published `server.json` against
+  `GET /api/health` before anybody could sign in — so that endpoint stays
+  reachable and reports less instead.
 - **CORS.** Everything is same-origin, including the webview, so nothing needs
   it. `tower-http`'s `cors` feature was enabled in `Cargo.toml` and used by
   nothing; it is now off, because a feature switched on in advance of a decision

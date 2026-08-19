@@ -5,6 +5,7 @@
 //! generated OpenAPI document. For a tool-using agent the spec *is* the manual,
 //! and a spec that drifts from the routes is worse than no spec at all.
 
+pub mod auth;
 pub mod extract;
 pub mod graph;
 pub mod meta;
@@ -13,6 +14,7 @@ pub mod pins;
 pub mod search;
 pub mod times;
 pub mod usage;
+pub mod users;
 
 use axum::Router;
 use axum::extract::Request;
@@ -33,6 +35,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::index::Index;
 use crate::store::Store;
 use crate::times::TimeStore;
+use crate::users::UserStore;
 
 pub const OPENAPI_PATH: &str = "/api-docs/openapi.json";
 pub const SWAGGER_UI_PATH: &str = "/swagger-ui";
@@ -43,13 +46,25 @@ pub struct AppState {
     pub store: Store,
     /// The time log under `.rhizolog/times/`. Also files, also authoritative.
     pub times: TimeStore,
+    /// Accounts under `.rhizolog/users/`. Files again, and authored again —
+    /// and how many there are is what decides whether this wiki asks anybody to
+    /// sign in. See [`crate::auth`].
+    pub users: UserStore,
     /// The derived index. Everything in it can be rebuilt from `store` and
-    /// `times`.
+    /// `times` — except the sessions, which are durable and cost a sign-in each
+    /// if lost.
     pub index: Index,
     /// API calls since the last flush to the index.
     pub usage: usage::UsageTally,
     /// The built frontend, wherever it turned out to be.
     pub assets: Assets,
+    /// Whether the session cookie is marked `Secure`.
+    ///
+    /// Off by default because the server speaks HTTP, and a `Secure` cookie on
+    /// an HTTP origin is one the browser throws away — which would present as
+    /// a sign-in that succeeds and then immediately has not happened. On behind
+    /// TLS, where it must be on; see [`crate::config`].
+    pub secure_cookies: bool,
 }
 
 #[derive(OpenApi)]
@@ -73,6 +88,8 @@ pub struct AppState {
         (name = "graph", description = "Links between pages, tags, and meta-stats"),
         (name = "pins", description = "Pages kept within reach"),
         (name = "times", description = "Time tracking: timers, entries, groups, and statistics"),
+        (name = "accounts", description = "Accounts, sessions, and signing in. A wiki with no \
+                                          accounts is open and asks for none of this."),
         (name = "meta", description = "Server and index status"),
     ),
 )]
@@ -111,6 +128,18 @@ pub fn router(state: AppState) -> Router {
 
     router
         .merge(SwaggerUi::new(SWAGGER_UI_PATH).url(OPENAPI_PATH, api))
+        // Innermost of the three, so it is the last thing between a request and
+        // a handler. Two consequences, both wanted: every handler can rely on
+        // the viewer being in the request's extensions, and a request refused
+        // for having no account is still counted below as the API traffic it
+        // was.
+        //
+        // It gates `/api` only. The login page is part of the dashboard, and a
+        // login page behind a login is not a way in.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::gate,
+        ))
         // Counting sits inside the trace layer so it sees the matched route,
         // and applies before `with_state` so it can take the state it needs.
         .layer(axum::middleware::from_fn_with_state(
@@ -155,6 +184,18 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         .routes(routes!(times::stop_time))
         .routes(routes!(times::list_time_groups))
         .routes(routes!(times::time_statistics))
+        .routes(routes!(auth::login))
+        .routes(routes!(auth::logout))
+        .routes(routes!(auth::read_session))
+        .routes(routes!(users::list_users, users::create_user))
+        // An ordinary parameter rather than a catch-all: a username has no `/`
+        // in it, so the restriction that sends a page's `move` to `/api/move`
+        // never applies here.
+        .routes(routes!(
+            users::read_user,
+            users::patch_user,
+            users::delete_user
+        ))
         .split_for_parts();
 
     normalize_wildcard_paths(&mut api);
@@ -201,7 +242,7 @@ async fn missing_route(request: Request) -> Response {
     (StatusCode::NOT_FOUND, NO_FRONTEND).into_response()
 }
 
-fn is_api_path(path: &str) -> bool {
+pub(crate) fn is_api_path(path: &str) -> bool {
     path == "/api" || path.starts_with("/api/")
 }
 

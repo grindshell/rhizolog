@@ -9,9 +9,12 @@ What sets it apart:
 - **A developer tool for managing knowledge bases**, not a public wiki engine.
 - **API-first**: a rich HTTP API (with OpenAPI definitions) designed to be
   friendly to AI agents as well as humans.
-- **Single-user**: no accounts, roles, or multi-tenancy. The UI is an admin
-  dashboard for searching and authoring pages and checking meta-stats
-  (links between pages, tags, API usage, etc.).
+- **Single-user by default**: a wiki with **no accounts is open** — no sign-in,
+  nothing refused, every request treated as the one user. Creating the first
+  account under `.rhizolog/users/` is what turns authentication on, which is how
+  an instance gets served over a network. The UI is an admin dashboard for
+  searching and authoring pages and checking meta-stats (links between pages,
+  tags, API usage, etc.). See `knowledge-base/accounts.md`.
 
 ## Repository layout
 
@@ -50,8 +53,11 @@ and breaks those numbers. Check `git status example-wiki` afterwards.
 
 **`.rhizolog/` is not all disposable.** `index.db` is derived and rebuilds on
 startup; `.rhizolog/times/` beside it is the time log, which is authored data
-with no other copy. That is why the gitignore names the database rather than
-the directory. See `knowledge-base/time-tracking.md`.
+with no other copy, and `.rhizolog/users/` is the accounts — authored data
+*and* secret, since each file carries a password hash. That is why the gitignore
+names the database rather than the directory, and why `users/` is the one
+authored thing in there that is ignored too. See
+`knowledge-base/time-tracking.md` and `knowledge-base/accounts.md`.
 
 ## Tech stack
 

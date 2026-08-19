@@ -306,9 +306,11 @@ impl Index {
             // Read the rowid before the row holding it goes; absent is ordinary,
             // as it is for a page.
             let rowid: Option<i64> = transaction
-                .query_row("select rowid from times where id = ?1", params![&id], |row| {
-                    row.get(0)
-                })
+                .query_row(
+                    "select rowid from times where id = ?1",
+                    params![&id],
+                    |row| row.get(0),
+                )
                 .optional()?;
 
             transaction.execute("delete from time_pages where time_id = ?1", params![&id])?;

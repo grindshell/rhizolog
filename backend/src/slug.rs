@@ -32,7 +32,10 @@ pub const MAX_SEGMENT_LEN: usize = 250; // 255 less room for the `.md` suffix
 
 /// Names that name a device rather than a file on Windows, regardless of
 /// extension or containing directory. `CON.md` is still the console.
-const RESERVED_STEMS: [&str; 24] = [
+///
+/// Shared with [`crate::users::Username`], which becomes a filename by the same
+/// route a slug does and so has to refuse the same names.
+pub(crate) const RESERVED_STEMS: [&str; 24] = [
     "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
     "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];

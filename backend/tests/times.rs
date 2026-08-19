@@ -36,15 +36,20 @@ impl App {
         let times = TimeStore::open(directory.path())
             .await
             .expect("open time log");
+        let users = rhizolog::UserStore::open(directory.path())
+            .await
+            .expect("open users");
         let index = Index::open(None).await.expect("open index");
 
         Self {
             router: rhizolog::router(AppState {
                 store,
                 times,
+                users,
                 index,
                 usage: rhizolog::UsageTally::new(),
                 assets: Assets::None,
+                secure_cookies: false,
             }),
             directory,
         }

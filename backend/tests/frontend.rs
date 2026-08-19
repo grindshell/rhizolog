@@ -37,14 +37,19 @@ async fn app_with_assets() -> (TempDir, TempDir, Router) {
 async fn app_serving(wiki: &TempDir, assets: Assets) -> Router {
     let store = Store::open(wiki.path()).await.expect("open store");
     let times = TimeStore::open(wiki.path()).await.expect("open time log");
+    let users = rhizolog::UserStore::open(wiki.path())
+        .await
+        .expect("open users");
     let index = Index::open(None).await.expect("open index");
 
     rhizolog::router(AppState {
         store,
         times,
+        users,
         index,
         usage: rhizolog::UsageTally::new(),
         assets,
+        secure_cookies: false,
     })
 }
 

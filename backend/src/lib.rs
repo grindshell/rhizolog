@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod assets;
+pub mod auth;
 pub mod config;
 pub mod endpoint;
 pub mod error;
@@ -17,11 +18,13 @@ pub mod server;
 pub mod slug;
 pub mod store;
 pub mod times;
+pub mod users;
 pub mod watcher;
 
 pub use api::usage::UsageTally;
 pub use api::{AppState, router};
 pub use assets::Assets;
+pub use auth::Viewer;
 pub use config::{Config, Fallbacks, Listen};
 pub use endpoint::Endpoint;
 pub use error::{AppError, AppResult};
@@ -31,3 +34,4 @@ pub use server::Server;
 pub use slug::{Slug, SlugError};
 pub use store::{Store, StoreError};
 pub use times::{TimeEntry, TimeId, TimeStore, TimeStoreError};
+pub use users::{Role, User, UserStore, UserStoreError, Username};

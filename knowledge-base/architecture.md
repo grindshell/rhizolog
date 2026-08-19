@@ -39,6 +39,8 @@ harmless and needs no suppression logic.
     times/
       2026-08/
         20260806T142530-123456789.md      # NOT derived; the only copy
+    users/
+      tim.md                              # NOT derived, and secret
 ```
 
 The walker skips any directory beginning with `.`, which keeps `.rhizolog/`
@@ -50,13 +52,18 @@ other copy. See [Time tracking](time-tracking.md) for why it sits under a
 dot-directory rather than in plain sight, and ignore the derived files by
 name rather than the whole directory in a wiki kept in git.
 
-Three kinds of thing live there, and they want different treatment:
+Four kinds of thing live there, and they want different treatment:
 
 | | |
 |---|---|
 | `index.db` | **derived** — rebuilt from the wiki; deleting it costs one scan |
-| `times/` | **authored** — the only copy; back it up |
+| `times/` | **authored** — the only copy; back it up, commit it |
+| `users/` | **authored, and secret** — the only copy; back it up, do *not* commit it |
 | `server.json` | **volatile** — where a running server is; meaningless once it stops |
+
+`users/` is the odd one: authored data, so it belongs with `times/`, and every
+file in it carries an Argon2 hash of a real password, so it is the one authored
+thing here that is gitignored. See [Accounts](accounts.md).
 
 The last one is the [published endpoint](desktop-app.md). A server that may not
 get the port it asked for has to say where it ended up, and beside the wiki is
@@ -260,7 +267,15 @@ Not derived from anything, and therefore kept:
 meta(key, value)               -- schema_version, last_sync
 api_usage(route, method, count)
 pins(slug PK, pinned_at)       -- pages kept within reach
+sessions(token_hash PK, username, created, expires)
 ```
+
+`sessions` is durable for a different reason from the other three. Losing them
+is survivable — it signs everybody out, which is exactly what deleting the
+database should do — but a version bump is an ordinary consequence of changing
+how *pages* are indexed, and that has nothing to do with who is signed in. The
+key is the SHA-256 of the token rather than the token, and there is no foreign
+key to an account because accounts are files. See [Accounts](accounts.md).
 
 `pins` deliberately has no `references pages(slug)`: a foreign key from a
 durable table into a derived one would either block the rebuild or cascade the
@@ -369,10 +384,24 @@ name**, not a query alias. `snippet(f, ...)` after `from pages_fts f` fails with
 
 ## Concurrency
 
-Single-user, so this stays deliberately boring: one writer at a time behind a
-`tokio::sync::Mutex`, and one `rusqlite::Connection` behind a mutex accessed
-through `spawn_blocking`. All SQL lives in the `index` module, so the blocking
-boilerplate is contained to one file rather than spread across handlers.
+Deliberately boring: one writer at a time behind a `tokio::sync::Mutex`, and one
+`rusqlite::Connection` behind a mutex accessed through `spawn_blocking`. All SQL
+lives in the `index` module, so the blocking boilerplate is contained to one file
+rather than spread across handlers.
+
+[Accounts](accounts.md) put more than one person on the other end of that, which
+does not change the design but does change how much of it is load-bearing.
+The store's own comment — "the only way to lose that race is to race yourself" —
+is no longer strictly true of a networked instance. What protects it is that a
+page write is a rename of a fully-written temporary file, so two writers produce
+one of the two pages rather than half of each; last write wins, and there is no
+optimistic concurrency to say so. Worth revisiting if a networked instance ever
+gets busy.
+
+Password hashing is the one genuinely CPU-bound thing in the process. Argon2 is
+slow on purpose — tens of milliseconds — so every hash and verify goes through
+`spawn_blocking`; one on an executor thread would stall every other request in
+the process for as long as it ran.
 
 `rusqlite` over `sqlx` because the `bundled` feature vendors SQLite (no system
 library to install on Windows) and there is no async story worth paying for
@@ -402,17 +431,20 @@ src/
   markdown.rs    comrak render, link extraction, wikilink rewriting
   store.rs       filesystem read/write/list/delete/move
   times/         TimeId, TimeEntry, the time log on disk, statistics
-  index/         SQLite: schema, upsert, search, links, tags, pins, times, stats
+  users/         Username, User, the accounts on disk, password hashing
+  auth.rs        who a request is: sessions, the Viewer, the gate in front of /api
+  index/         SQLite: schema, upsert, search, links, tags, pins, times, sessions, stats
   watcher.rs     notify -> reindex queue
   assets.rs      the built dashboard: Dir | Embedded | None
   endpoint.rs    .rhizolog/server.json: publish, withdraw, confirm
   api/           route handlers + OpenApi assembly
 ```
 
-`frontmatter.rs` exists because a page and a time entry are both "a small YAML
-header, then prose". The answers to what counts as a fence, what a BOM does,
-and how the two halves go back together belong in one place — the second copy
-is where they quietly diverge.
+`frontmatter.rs` exists because a page, a time entry and an account are all "a
+small YAML header, then prose". The answers to what counts as a fence, what a
+BOM does, and how the two halves go back together belong in one place — the
+second copy is where they quietly diverge, and the third would be the one
+holding password hashes.
 
 `server.rs` holds everything between "here is a config" and "it is serving":
 opening the three stores, reconciling the index, binding, starting the watcher
@@ -433,11 +465,21 @@ begun, which is what lets a caller hand out the address it bound. See
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Listen address |
 | `RHIZOLOG_ASSETS` | `../frontend/dist` | Built dashboard; missing is fine |
 | `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter |
+| `RHIZOLOG_SECURE_COOKIES` | off | Mark the session cookie `Secure`; on behind TLS |
 
-Binding to loopback by default is intentional: single-user, no auth, and the
-API can write files anywhere under the wiki root. The fallback keeps the same
-host for that reason — a loopback default cannot become a public bind by
-giving way.
+Binding to loopback by default is intentional, and [accounts](accounts.md) did
+not change it: a wiki with no accounts is open, and its API can write files
+anywhere under the wiki root, so a public default would be exactly as wrong as
+it ever was. The fallback keeps the same host for that reason — a loopback
+default cannot become a public bind by giving way. What is new is that binding
+wider is now a supported thing to *choose*, and `server::start` warns at startup
+when an instance is bound off loopback with no accounts to sign in to.
+
+`RHIZOLOG_SECURE_COOKIES` has to default off, because the server speaks HTTP and
+a browser discards a `Secure` cookie that arrives over one — which presents as a
+sign-in that returns `200` and leaves you signed out. It is a switch rather than
+something read from `X-Forwarded-Proto`, since inferring it means trusting a
+header anybody who can reach the port can send.
 
 ### A default is a preference; a variable is a requirement
 

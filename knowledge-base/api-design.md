@@ -33,6 +33,14 @@ storage model it sits on.
 | `GET` | `/api/time-groups` | Activity names with their totals |
 | `GET` | `/api/time-stats` | Day, week, month, year, and an hours heat map |
 | `POST` | `/api/reindex` | Force a full rebuild of the index |
+| `POST` | `/api/auth/login` | Sign in; returns a session as a cookie **and** a bearer token |
+| `POST` | `/api/auth/logout` | End this session; `204` even if there was none |
+| `GET` | `/api/auth/session` | Whether this wiki wants a sign-in, and who this request is |
+| `GET` | `/api/users` | Every account. Any signed-in account may ask |
+| `POST` | `/api/users` | Create an account; unauthenticated **only** for the first one |
+| `GET` | `/api/users/{username}` | One account |
+| `PATCH` | `/api/users/{username}` | Partial update; a password change ends every session |
+| `DELETE` | `/api/users/{username}` | Delete an account and its sessions; refused for the last owner |
 | `GET` | `/api/health` | Liveness + index freshness |
 | `GET` | `/api-docs/openapi.json` | Generated OpenAPI document |
 | `GET` | `/swagger-ui` | Swagger UI |
@@ -254,6 +262,14 @@ Codes in use so far:
 | `invalid_parameter` | 400 | `sort`/`order` outside its allowed set |
 | `pin_not_found` | 404 | Unpinning a page that was not pinned |
 | `too_many_pins` | 409 | The pin limit is already reached |
+| `unauthorized` | 401 | This wiki has accounts and the request named none |
+| `invalid_credentials` | 401 | A sign-in that did not work |
+| `forbidden` | 403 | The request said who it was, and that is not enough |
+| `no_password_set` | 409 | The account exists and nobody gave it a password |
+| `last_owner` | 409 | Deleting or demoting the only account that can administer |
+| `user_not_found` / `user_already_exists` | 404 / 409 | As for a page, for an account |
+| `username_*` | 400 | Which username rule was broken (one code per rule) |
+| `password_too_short` / `password_too_long` | 400 | The only two password rules |
 | `index_error` / `io_error` / `internal_error` | 500 | The server's problem |
 
 **Extraction failures use the envelope too.** `axum::Json` rejects a bad body in
@@ -329,8 +345,31 @@ Note that `ApiDoc::openapi()` is *not* the document — it is only the `info` an
 server go through `api::openapi()`, and neither can describe something the
 other does not serve.
 
+### Authentication does not change the API's shape
+
+An agent reaches an instance that requires a sign-in the same way a browser
+does: `POST /api/auth/login`, then `Authorization: Bearer <token>`. It is the
+same session the browser's cookie names, so there is one lifetime and one way to
+revoke — which is the point. A cookie-only design would make authentication the
+exact place where "the API is the only interface" stopped being true.
+
+`GET /api/auth/session` never refuses. A client has to be able to ask *whether*
+it needs to sign in, and a `401` is an answer it cannot tell apart from a session
+that has just expired.
+
+Everything else under `/api` needs an account once one exists, with four
+exceptions listed in [Accounts](accounts.md). `GET /api/health` is the one worth
+knowing about: it stays reachable because the desktop app's discovery handshake
+predates any sign-in, and it stops reporting the wiki's page and time counts to
+callers who have not made one.
+
 ## Deliberately out of scope for the MVP
 
-No auth (single-user, loopback-bound), no rate limiting, no webhooks, no
-batch/transaction endpoints, no revision or diff endpoints. All are plausible
-later; none are needed to make the wiki usable.
+No rate limiting, no webhooks, no batch/transaction endpoints, no revision or
+diff endpoints. All are plausible later; none are needed to make the wiki usable.
+
+Authentication *was* on this list — "single-user, loopback-bound" — and is now
+built, because serving a wiki over a network is what it was waiting for. See
+[Accounts](accounts.md). Page visibility, which is the other half of that
+feature, is in [`TODO.md`](../TODO.md) rather than here: it is planned work
+rather than a decision against.

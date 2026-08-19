@@ -28,6 +28,7 @@ use crate::config::Listen;
 use crate::endpoint::{self, Endpoint};
 use crate::index::sync::sync;
 use crate::store::display_path;
+use crate::users::UserStore;
 use crate::{AppState, Config, Index, Store, TimeStore, UsageTally, watcher};
 
 /// How often API usage counts are moved from memory into the index.
@@ -117,6 +118,9 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
     let times = TimeStore::open(&config.root)
         .await
         .context("opening the time log")?;
+    let users = UserStore::open(&config.root)
+        .await
+        .context("opening the accounts directory")?;
     let index = Index::open(Some(&config.database))
         .await
         .with_context(|| format!("opening the index at {}", config.database.display()))?;
@@ -125,6 +129,7 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
     tracing::info!(time_log = %times.root_display(), "opened time log");
 
     reconcile(&store, &times, &index).await?;
+    announce_access(&users, config).await?;
 
     let listener = bind(config.listen).await?;
     let address = listener.local_addr().context("reading the bound address")?;
@@ -141,9 +146,11 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
     let state = AppState {
         store,
         times,
+        users,
         index,
         usage: UsageTally::new(),
         assets: assets::resolve(&config.assets).await,
+        secure_cookies: config.secure_cookies,
     };
 
     let (halt, _) = watch::channel(false);
@@ -247,6 +254,52 @@ async fn reconcile(store: &Store, times: &TimeStore, index: &Index) -> anyhow::R
         tracing::warn!(
             failed,
             "some files could not be indexed; they will not appear in search or in the time log"
+        );
+    }
+
+    Ok(())
+}
+
+/// Say, once, who this server will answer to.
+///
+/// Worth a line in the log on every start, because the answer is a property of
+/// the *wiki directory* rather than of anything in the configuration — there is
+/// no flag to read back, and "does this instance require a sign-in" is otherwise
+/// only discoverable by trying it.
+///
+/// The warning is the point. An address that is not loopback puts the API on a
+/// network, and with no accounts that API reads and writes files for anybody who
+/// can reach the port. It is a warning rather than a refusal because a
+/// deliberately open instance behind a firewall is a legitimate thing to run —
+/// but nobody should arrive at one by accident, and the two ways to get there
+/// (setting an address, and never creating an account) are far enough apart in
+/// time that this is the only place they meet.
+async fn announce_access(users: &UserStore, config: &Config) -> anyhow::Result<()> {
+    let accounts = users
+        .count()
+        .await
+        .context("counting the accounts in the wiki")?;
+
+    if accounts > 0 {
+        tracing::info!(accounts, "this wiki requires authentication");
+
+        if !config.secure_cookies && !config.listen.preferred().ip().is_loopback() {
+            tracing::warn!(
+                "serving off loopback over plain HTTP: passwords and session tokens cross the \
+                 network in the clear. Put a TLS proxy in front and set RHIZOLOG_SECURE_COOKIES=1."
+            );
+        }
+
+        return Ok(());
+    }
+
+    tracing::info!("this wiki has no accounts; every request is the single user");
+
+    if !config.listen.preferred().ip().is_loopback() {
+        tracing::warn!(
+            address = %config.listen.preferred(),
+            "this wiki has no accounts and is not bound to loopback: anybody who can reach this \
+             address can read and write every page. Create an account to require a sign-in."
         );
     }
 

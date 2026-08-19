@@ -14,11 +14,24 @@ embed-assets = ["dep:rust-embed"]
 
 [dependencies]
 anyhow = "1"
+# Password hashing. Argon2id is the default and what `PasswordHasher` produces
+# here; the PHC string it returns carries its own parameters, so a stored hash
+# stays verifiable after the cost settings are raised.
+argon2 = "0.5"
 axum = "0.8"
+# Cookies, for the browser half of a session. The other half is a bearer token,
+# and both name the same session — see `knowledge-base/accounts.md`.
+axum-extra = { version = "0.10", features = ["cookie"] }
 chrono = { version = "0.4", features = ["serde"] }
 comrak = { version = "0.54", default-features = false }
 notify = "8"
 notify-debouncer-full = "0.7.0"
+# The OS random source, for session tokens and password salts. Declared rather
+# than reached through `argon2::password_hash::rand_core`, because `OsRng` only
+# exists there when the `getrandom` feature is on — and a dependency whose
+# feature flags decide whether the crate can generate a salt is one worth naming
+# out loud. Same version `password-hash` uses, so the two unify.
+rand_core = { version = "0.6", features = ["getrandom"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 # `debug-embed` deliberately: without it a debug build reads the files from the
 # absolute path baked in at compile time, which is exactly the trap
@@ -29,7 +42,17 @@ rust-embed = { version = "8", features = ["mime-guess", "debug-embed"], optional
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
+# Session tokens are stored as their SHA-256, never verbatim: the index is a
+# file on disk, and a row that could be replayed as a credential is a row worth
+# not writing. Argon2 would be the wrong tool — a 256-bit random token has no
+# guessable preimage to slow an attacker down over.
+sha2 = "0.10"
 thiserror = "2"
+# Not a new dependency — `axum-extra`'s cookie support is the `cookie` crate,
+# whose durations and timestamps are `time`'s. Named here so a `Max-Age` can be
+# spelled at all; without it the session cookie would last only as long as the
+# browser window.
+time = "0.3"
 tokio = { version = "1", features = ["full"] }
 # No `cors`: everything is same-origin, including the desktop app's webview.
 # Turning it on is a decision about who may reach a remote instance from a

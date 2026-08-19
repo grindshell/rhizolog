@@ -28,6 +28,12 @@ backend/wiki/
 **/.rhizolog/index.db-*
 **/.rhizolog/server.json
 
+# Accounts. Authored data with no other copy, like the time log — and unlike the
+# time log, secret: each file carries an Argon2 hash of a real password. Not
+# reversible, and still not a thing to commit. Back the directory up; do not
+# push it. See knowledge-base/accounts.md.
+**/.rhizolog/users/
+
 # Editor / OS noise
 .DS_Store
 *.log

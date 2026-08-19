@@ -27,6 +27,8 @@ use crate::page::PageError;
 use crate::slug::{Slug, SlugError};
 use crate::store::StoreError;
 use crate::times::{TimeId, TimeIdError, TimeStoreError};
+use crate::users::password::PasswordError;
+use crate::users::{UserStoreError, Username, UsernameError};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -113,6 +115,64 @@ pub enum AppError {
         end: DateTime<Utc>,
     },
 
+    /// This wiki has accounts and the request did not name one.
+    ///
+    /// Deliberately says nothing about *which* accounts exist. The response is
+    /// identical for a missing token, an expired one, and one belonging to an
+    /// account that has since been deleted — a caller's next move is the same in
+    /// all three, and the differences are exactly what an attacker would like to
+    /// be told.
+    #[error("this wiki requires authentication")]
+    Unauthorized,
+
+    /// The request said who it was, and that is not enough.
+    ///
+    /// Distinct from [`AppError::Unauthorized`] because the remedies are
+    /// opposites: signing in again fixes one and cannot fix the other.
+    #[error("not permitted to {action}")]
+    Forbidden { action: &'static str },
+
+    /// A sign-in that did not work.
+    ///
+    /// One code for a username nobody has and a password that is wrong,
+    /// because telling them apart is a list of the accounts on the instance,
+    /// one guess at a time. [`crate::users::password::verify_absent`] makes the
+    /// two cost the same, so the timing does not say what the message will not.
+    #[error("incorrect username or password")]
+    InvalidCredentials,
+
+    /// The account exists, and nobody has given it a password.
+    ///
+    /// Not folded into [`AppError::InvalidCredentials`]: this one is only
+    /// reachable for an account file somebody wrote by hand and did not finish,
+    /// and there is nothing an operator can do about it if the server insists on
+    /// calling it a bad password. It reveals that the account exists, which is
+    /// acceptable precisely because no password can ever be right for it.
+    #[error("the account {username} has no password set")]
+    NoPasswordSet { username: Username },
+
+    #[error("invalid username {raw:?}: {source}")]
+    InvalidUsername {
+        raw: String,
+        #[source]
+        source: UsernameError,
+    },
+
+    #[error(transparent)]
+    Users(#[from] UserStoreError),
+
+    #[error(transparent)]
+    Password(#[from] PasswordError),
+
+    /// Deleting or demoting the last account that can administer accounts.
+    ///
+    /// Refused rather than allowed, because the result is a wiki that requires
+    /// authentication and has nobody able to add an account to it — recoverable
+    /// only by editing files on the server's disk, which is the one thing
+    /// somebody administering a remote instance cannot do.
+    #[error("this is the only owner; promote another account first")]
+    LastOwner,
+
     #[error("{message}")]
     Internal { message: String },
 }
@@ -146,11 +206,29 @@ impl AppError {
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
             },
+            Self::Users(error) => match error {
+                UserStoreError::NotFound { .. } => StatusCode::NOT_FOUND,
+                UserStoreError::AlreadyExists { .. } => StatusCode::CONFLICT,
+                UserStoreError::EscapesRoot { .. } => StatusCode::BAD_REQUEST,
+                UserStoreError::NotUtf8 { .. } | UserStoreError::Malformed { .. } => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                UserStoreError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+            // A sign-in that failed is a 401, not a 400: the request was
+            // perfectly well formed and the credentials were not accepted.
+            Self::Unauthorized | Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
+            Self::Forbidden { .. } => StatusCode::FORBIDDEN,
+            // The account is real and unusable, which is a state of the server
+            // rather than a fault in the request.
+            Self::NoPasswordSet { .. } | Self::LastOwner => StatusCode::CONFLICT,
             Self::RouteNotFound { .. } | Self::PinNotFound { .. } => StatusCode::NOT_FOUND,
             Self::TooManyPins { .. } | Self::TimeNotRunning { .. } => StatusCode::CONFLICT,
             Self::InvalidTimeId { .. }
             | Self::TimeRangeInverted { .. }
             | Self::InvalidRequestBody { .. }
+            | Self::InvalidUsername { .. }
+            | Self::Password(_)
             | Self::UnknownFields { .. }
             | Self::InvalidParameter { .. } => StatusCode::BAD_REQUEST,
             // The index is derived and rebuildable, so a failure here is the
@@ -181,6 +259,23 @@ impl AppError {
                 TimeStoreError::NoFreeId { .. } => "time_id_exhausted",
                 TimeStoreError::Io(_) => "io_error",
             },
+            Self::Users(error) => match error {
+                UserStoreError::NotFound { .. } => "user_not_found",
+                UserStoreError::AlreadyExists { .. } => "user_already_exists",
+                UserStoreError::EscapesRoot { .. } => "username_escapes_root",
+                UserStoreError::NotUtf8 { .. } => "user_not_utf8",
+                UserStoreError::Malformed { .. } => "user_malformed",
+                UserStoreError::Io(_) => "io_error",
+            },
+            // The specific rule, as for a slug, so a caller that built a bad
+            // name can correct it from the response.
+            Self::InvalidUsername { source, .. } => source.code(),
+            Self::Password(error) => error.code(),
+            Self::Unauthorized => "unauthorized",
+            Self::Forbidden { .. } => "forbidden",
+            Self::InvalidCredentials => "invalid_credentials",
+            Self::NoPasswordSet { .. } => "no_password_set",
+            Self::LastOwner => "last_owner",
             Self::InvalidTimeId { .. } => "invalid_time_id",
             Self::TimeNotRunning { .. } => "time_not_running",
             Self::TimeRangeInverted { .. } => "time_range_inverted",
@@ -223,6 +318,33 @@ impl AppError {
                 TimeStoreError::NoFreeId { start } => Some(json!({ "start": start })),
                 TimeStoreError::Io(_) => None,
             },
+            Self::Users(error) => match error {
+                UserStoreError::NotFound { username }
+                | UserStoreError::AlreadyExists { username }
+                | UserStoreError::EscapesRoot { username }
+                | UserStoreError::NotUtf8 { username } => Some(json!({ "username": username })),
+                UserStoreError::Malformed { username, source } => Some(json!({
+                    "username": username,
+                    "reason": source.to_string(),
+                })),
+                UserStoreError::Io(_) => None,
+            },
+            Self::InvalidUsername { raw, source } => Some(json!({
+                "username": raw,
+                "rule": source.code(),
+                "reason": source.to_string(),
+            })),
+            Self::Password(error) => Some(json!({
+                "rule": error.code(),
+                "minimum": crate::users::password::MIN_PASSWORD_LEN,
+                "maximum": crate::users::password::MAX_PASSWORD_LEN,
+            })),
+            Self::Forbidden { action } => Some(json!({ "action": action })),
+            Self::NoPasswordSet { username } => Some(json!({ "username": username })),
+            // Nothing. Which of the three ways a request can be nobody is
+            // exactly what an attacker would like to be told, and a caller's
+            // next move — sign in — is the same for all of them.
+            Self::Unauthorized | Self::InvalidCredentials | Self::LastOwner => None,
             Self::InvalidTimeId { raw, source } => Some(json!({
                 "id": raw,
                 "reason": source.to_string(),
@@ -265,6 +387,7 @@ impl AppError {
         match self {
             Self::Store(StoreError::Io(_))
             | Self::Times(TimeStoreError::Io(_))
+            | Self::Users(UserStoreError::Io(_))
             | Self::Index(_)
             | Self::Internal { .. } => "the server failed to handle the request".to_owned(),
             other => other.to_string(),
@@ -315,13 +438,35 @@ impl IntoResponse for AppError {
             },
         };
 
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+
+        // What RFC 9110 requires of a 401, and what tells a caller which of the
+        // two transports to reach for. `Bearer` rather than `Basic` matters to a
+        // browser as well as to an agent: `Basic` would make it pop its own
+        // credentials dialog over the dashboard's login page.
+        if status == StatusCode::UNAUTHORIZED {
+            response.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                axum::http::HeaderValue::from_static("Bearer"),
+            );
+        }
+
+        response
     }
 }
 
 impl From<SlugError> for AppError {
     fn from(source: SlugError) -> Self {
         Self::InvalidSlug {
+            raw: String::new(),
+            source,
+        }
+    }
+}
+
+impl From<UsernameError> for AppError {
+    fn from(source: UsernameError) -> Self {
+        Self::InvalidUsername {
             raw: String::new(),
             source,
         }

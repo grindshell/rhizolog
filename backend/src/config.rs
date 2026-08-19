@@ -13,9 +13,17 @@ pub const ENV_DATABASE: &str = "RHIZOLOG_DB";
 pub const ENV_ADDRESS: &str = "RHIZOLOG_ADDR";
 pub const ENV_ASSETS: &str = "RHIZOLOG_ASSETS";
 pub const ENV_LOG: &str = "RHIZOLOG_LOG";
+pub const ENV_SECURE_COOKIES: &str = "RHIZOLOG_SECURE_COOKIES";
 
-/// Loopback, deliberately: Rhizolog is single-user, has no authentication, and
-/// its API writes files.
+/// Loopback, deliberately.
+///
+/// It used to be the *whole* security boundary, on the grounds that Rhizolog was
+/// single-user and had no authentication. Accounts change what that sentence
+/// means without changing the default: a wiki with no accounts is still open and
+/// still writes files from any request, so putting one on a network by default
+/// would be exactly as wrong as it ever was. Binding wider is now a supported
+/// thing to *choose*, once there is an account to sign in to — see
+/// `knowledge-base/accounts.md`.
 pub const DEFAULT_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_PORT);
 
@@ -61,6 +69,18 @@ pub struct Config {
     /// `pnpm dev` serves the UI itself and proxies the API here, so nothing has
     /// been built yet.
     pub assets: PathBuf,
+    /// Whether to mark the session cookie `Secure`.
+    ///
+    /// Off by default, and it has to be: the server speaks HTTP, and a browser
+    /// discards a `Secure` cookie that arrives over one. The symptom is a
+    /// sign-in that returns 200 and leaves you signed out, which is a horrible
+    /// thing to debug.
+    ///
+    /// Set `RHIZOLOG_SECURE_COOKIES=1` when a TLS-terminating proxy sits in
+    /// front. It is a separate switch rather than something inferred from
+    /// `X-Forwarded-Proto` because inferring it means trusting a header that
+    /// anybody who can reach the port can send.
+    pub secure_cookies: bool,
 }
 
 /// What to use for anything the environment did not say.
@@ -118,6 +138,7 @@ struct Overrides {
     database: Option<PathBuf>,
     address: Option<String>,
     assets: Option<PathBuf>,
+    secure_cookies: Option<bool>,
 }
 
 impl Overrides {
@@ -127,8 +148,25 @@ impl Overrides {
             database: env::var_os(ENV_DATABASE).map(PathBuf::from),
             address: env::var(ENV_ADDRESS).ok(),
             assets: env::var_os(ENV_ASSETS).map(PathBuf::from),
+            secure_cookies: env::var(ENV_SECURE_COOKIES)
+                .ok()
+                .map(|value| truthy(&value)),
         }
     }
+}
+
+/// What counts as "on" for a boolean environment variable.
+///
+/// Generous on purpose: somebody setting this is doing it in a shell, a
+/// Dockerfile or a systemd unit, and each of those has its own house style for
+/// yes. Anything else — including the empty string, which is what an unset
+/// variable often expands to — is off, so a typo fails safe by leaving the
+/// cookie usable over the HTTP the server actually speaks.
+fn truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 impl Config {
@@ -180,6 +218,7 @@ impl Config {
             database,
             listen,
             assets,
+            secure_cookies: overrides.secure_cookies.unwrap_or(false),
         })
     }
 }
@@ -214,6 +253,7 @@ mod tests {
             database: Some(PathBuf::from("/env/index.db")),
             address: Some("127.0.0.1:9999".to_owned()),
             assets: Some(PathBuf::from("/env/dist")),
+            secure_cookies: Some(true),
         };
 
         let config = Config::layer(overrides, fallbacks()).expect("config");
@@ -225,6 +265,28 @@ mod tests {
             config.listen,
             Listen::Exactly("127.0.0.1:9999".parse().unwrap())
         );
+        assert!(config.secure_cookies);
+    }
+
+    /// A cookie marked `Secure` is discarded by a browser that received it over
+    /// HTTP, which is what the server speaks. Defaulting this on would make
+    /// every sign-in return 200 and leave the user signed out.
+    #[test]
+    fn cookies_are_not_marked_secure_unless_asked() {
+        let config = Config::layer(Overrides::default(), fallbacks()).expect("config");
+        assert!(!config.secure_cookies);
+    }
+
+    /// Set in a shell, a Dockerfile or a unit file, each with its own house
+    /// style for yes — and anything unrecognised has to fail safe.
+    #[test]
+    fn a_boolean_variable_accepts_the_usual_spellings() {
+        for value in ["1", "true", "TRUE", "yes", "on", " true "] {
+            assert!(truthy(value), "{value:?} should be on");
+        }
+        for value in ["", "0", "false", "no", "off", "maybe"] {
+            assert!(!truthy(value), "{value:?} should be off");
+        }
     }
 
     /// An address someone wrote down is `Exactly`; a fallback is a preference.

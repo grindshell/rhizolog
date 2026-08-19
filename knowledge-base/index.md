@@ -14,6 +14,8 @@ Every page should be reachable from this index.
 - [Drawing the link graph](link-graph.md) — the graph endpoint, and the
   deterministic layout that draws it
 - [Pins](pins.md) — pages kept within reach, and why they are server state
+- [Accounts](accounts.md) — signing in, and why a wiki with no accounts is still
+  the open single-user one it always was
 - [Time tracking](time-tracking.md) — timers, the time log on disk, and why a
   time link is not a link
 - [The desktop app](desktop-app.md) — packaging as a portable Tauri app, and

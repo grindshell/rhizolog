@@ -4,6 +4,75 @@
  */
 
 export interface paths {
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in.
+         * @description Returns a session as a cookie and as a token; see the module docs for why
+         *     both. A wrong password and an account that does not exist are the same
+         *     answer and take the same time.
+         */
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out.
+         * @description Ends the session the request arrived with, and clears the cookie. Signing out
+         *     when not signed in is a `204` rather than an error: the state being asked for
+         *     is the state you are in.
+         *
+         *     Only this session ends. Signing out everywhere is what changing the password
+         *     does — see [`crate::api::users::patch_user`].
+         */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether this instance wants a sign-in, and whether this request has one.
+         * @description The first call a client makes. It never refuses: a 401 here would be an
+         *     answer a client cannot tell apart from a session that has just expired,
+         *     which is the one thing it is asking about.
+         */
+        get: operations["read_session"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/graph": {
         parameters: {
             query?: never;
@@ -401,6 +470,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every account on this wiki.
+         * @description Open to any signed-in account: naming somebody in a page's `readers:` list
+         *     means knowing they exist. An empty list means the wiki is open and asks
+         *     nobody to sign in.
+         */
+        get: operations["list_users"];
+        put?: never;
+        /**
+         * Create an account.
+         * @description The first one on a wiki may be created by anybody and is always an owner;
+         *     see the module docs for why both halves of that are deliberate. Every one
+         *     after it needs an owner.
+         */
+        post: operations["create_user"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{username}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One account. */
+        get: operations["read_user"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an account, and every session it had.
+         * @description Refused for the last owner: the result would be a wiki that requires
+         *     authentication with nobody able to add an account to it.
+         *
+         *     The account's pages are **not** touched. A page owned by a deleted account
+         *     keeps saying so, which is recoverable — recreate the account, or change the
+         *     page — where deleting somebody's pages along with their account is not.
+         */
+        delete: operations["delete_user"];
+        options?: never;
+        head?: never;
+        /**
+         * Change an account.
+         * @description Merges only the fields present, as every `PATCH` here does.
+         *
+         *     **A password change signs that account out everywhere**, including the
+         *     request that made the change — the response says how many sessions ended.
+         *     Anything less is not a password change: a token handed out before it would
+         *     go on working for its full thirty days, which is the difference between
+         *     changing a password and revoking access. Signing back in is the cost, and it
+         *     is the right way round for the case this exists for, which is a password
+         *     somebody thinks has leaked.
+         */
+        patch: operations["patch_user"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -475,6 +610,18 @@ export interface components {
              * @description Defaults to now, which is what starting a timer means.
              */
             start?: string | null;
+        };
+        CreateUser: {
+            /** @example Tim Yuen */
+            display_name?: string | null;
+            /**
+             * @description At least 8 characters. There are no composition rules.
+             * @example correct horse battery staple
+             */
+            password: string;
+            profile?: string | null;
+            role?: null | components["schemas"]["Role"];
+            username: components["schemas"]["Username"];
         };
         ErrorDetail: {
             /**
@@ -582,31 +729,46 @@ export interface components {
         };
         Health: {
             /**
+             * @description Whether this wiki has accounts, and so wants callers to sign in.
+             *
+             *     False is the state of a fresh wiki: no login page, nothing refused, every
+             *     request treated as the single user. Reported to anonymous callers on
+             *     purpose — a client cannot decide whether to show a sign-in prompt without
+             *     being told, and the answer is one bit that is obvious from the response
+             *     to any other request anyway.
+             */
+            authentication_required: boolean;
+            /**
              * Format: date-time
-             * @description When the index was last reconciled with the files on disk. Null if it
-             *     has not been scanned yet.
+             * @description When the index was last reconciled with the files on disk.
+             *
+             *     **Null** if it has not been scanned yet; **absent** for an anonymous
+             *     caller, as `pages` is. The two are different answers, which is why this
+             *     is nested rather than a plain optional timestamp that would collapse
+             *     "never scanned" into "not telling you".
              */
             last_indexed?: string | null;
             /**
-             * @description Number of pages currently indexed.
+             * @description Number of pages currently indexed. Omitted for an anonymous caller on a
+             *     wiki that requires authentication.
              * @example 42
              */
-            pages: number;
+            pages?: number | null;
             /**
-             * @description Timers running right now. Several may run at once.
+             * @description Timers running right now. Several may run at once. Omitted as `pages` is.
              * @example 1
              */
-            running_timers: number;
+            running_timers?: number | null;
             /**
              * @description Always `"ok"` — a response at all is the liveness signal.
              * @example ok
              */
             status: string;
             /**
-             * @description Number of time entries currently indexed.
+             * @description Number of time entries currently indexed. Omitted as `pages` is.
              * @example 312
              */
-            times: number;
+            times?: number | null;
             /**
              * @description The running Rhizolog version.
              * @example 0.1.0
@@ -704,6 +866,32 @@ export interface components {
              * @example Async in Rust
              */
             title: string;
+        };
+        LoginRequest: {
+            /** @example correct horse battery staple */
+            password: string;
+            username: components["schemas"]["Username"];
+        };
+        LoginResponse: {
+            /**
+             * Format: date-time
+             * @description When the session expires if it is not used.
+             *
+             *     Using it pushes this out, so an account in daily use is never signed out.
+             */
+            expires: string;
+            /**
+             * @description The session token.
+             *
+             *     The same session as the `rhizolog_session` cookie set alongside it, not a
+             *     second one. Send it as `Authorization: Bearer <token>` from anything that
+             *     is not a browser; a browser should ignore this field and let the cookie
+             *     do the work, since the cookie is `HttpOnly` and this is not.
+             * @example 3f2a…
+             */
+            token: string;
+            /** @description The account that was signed in. */
+            user: components["schemas"]["UserView"];
         };
         MovePage: {
             /** @description The page to move. `404` if there is nothing there. */
@@ -991,6 +1179,34 @@ export interface components {
             /** Format: date-time */
             start?: string | null;
         };
+        PatchUser: {
+            /**
+             * @description Omit to leave unchanged; send `null` to clear it and fall back to the
+             *     username.
+             * @example Tim Yuen
+             */
+            display_name?: string | null;
+            /**
+             * @description A new password, at least 8 characters.
+             *
+             *     Setting it ends **every** session this account has, including the one
+             *     that sent the request — so the caller has to sign in again.
+             *     `sessions_ended` in the response says how many were ended.
+             * @example correct horse battery staple
+             */
+            password?: string | null;
+            profile?: string | null;
+            role?: null | components["schemas"]["Role"];
+        };
+        /** @description What a password change did. */
+        PatchUserResponse: components["schemas"]["UserView"] & {
+            /**
+             * @description How many sessions this request ended. Non-zero only when the password
+             *     changed, and it includes the session that made the request.
+             * @example 2
+             */
+            sessions_ended: number;
+        };
         PeriodStatsView: {
             /** @description Hours for a day, days for a week or a month, months for a year. */
             buckets: components["schemas"]["BucketView"][];
@@ -1111,6 +1327,15 @@ export interface components {
              */
             title?: string | null;
         };
+        /**
+         * @description What an account is allowed to do to *the instance*.
+         *
+         *     Deliberately two values. This is not a permission system: who may read a
+         *     given page is decided by that page, and the only instance-wide question is
+         *     whether somebody may administer accounts.
+         * @enum {string}
+         */
+        Role: "owner" | "member";
         RouteUsageView: {
             /**
              * Format: int64
@@ -1181,6 +1406,21 @@ export interface components {
              * @example 3
              */
             total: number;
+        };
+        SessionStatus: {
+            /**
+             * @description Whether this request is signed in. Always true on an open wiki, where
+             *     every request is the single user.
+             */
+            authenticated: boolean;
+            /**
+             * @description Whether this wiki has any accounts at all.
+             *
+             *     False means it is open: no sign-in is asked for, nothing is refused, and
+             *     the dashboard shows no login page. That is the state a fresh wiki is in.
+             */
+            authentication_required: boolean;
+            user?: null | components["schemas"]["UserView"];
         };
         /**
          * @description A page's identifier: its path under the wiki root, `/`-separated, without the `.md` extension. `notes/rust/async.md` is `notes/rust/async`.
@@ -1494,6 +1734,59 @@ export interface components {
             /** Format: date-time */
             updated: string;
         };
+        /**
+         * @description An account, as the API reports it.
+         *
+         *     There is no field for the password and there is no `?include=` that adds
+         *     one. A hash is not something a client ever needs, and the surest way to keep
+         *     it off the wire is for the type that goes on the wire not to have a place to
+         *     put it.
+         */
+        UserView: {
+            /** Format: date-time */
+            created: string;
+            /**
+             * @description The name to show. Falls back to the username.
+             * @example Tim Yuen
+             */
+            display_name: string;
+            /**
+             * @description Whether this account can be signed in to at all.
+             *
+             *     False for a file somebody wrote by hand and has not finished. Such an
+             *     account still counts towards "this wiki has accounts", so it is worth
+             *     being able to see one.
+             */
+            has_password: boolean;
+            /** @description Free markdown the account holder wrote about itself. */
+            profile: string;
+            role: components["schemas"]["Role"];
+            /**
+             * Format: date-time
+             * @description The account file's mtime.
+             */
+            updated: string;
+            username: components["schemas"]["Username"];
+        };
+        /**
+         * @description An account name, which is also the name of the file the account lives in.
+         *
+         *     Lowercase ASCII letters, digits, `-` and `_`, starting with a letter or a digit, at most 39 characters. Uppercase is refused rather than folded: Windows filenames are case-insensitive, so `Tim` and `tim` would be one account on one machine and two on another.
+         *
+         *     A rejected name comes back as a `400` whose `details.rule` names which rule was broken.
+         * @example tim
+         */
+        Username: string;
+        UsersResponse: {
+            /**
+             * @description How many there are. Zero means this wiki is open: no sign-in is asked
+             *     for and nothing is refused.
+             * @example 2
+             */
+            total: number;
+            /** @description Every account, by name. */
+            users: components["schemas"]["UserView"][];
+        };
         WantedPageView: {
             /**
              * @description How many pages link to it — how badly it is wanted.
@@ -1515,6 +1808,86 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Signed in */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
+                };
+            };
+            /** @description Wrong username or password */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account has no password set */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out, or was not signed in */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    read_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What this request is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStatus"];
+                };
+            };
+        };
+    };
     link_graph: {
         parameters: {
             query?: {
@@ -2625,6 +2998,274 @@ export interface operations {
                 };
             };
             /** @description That entry was not running */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_users: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsersResponse"];
+                };
+            };
+            /** @description This wiki requires authentication */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUser"];
+            };
+        };
+        responses: {
+            /** @description The account was created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"];
+                };
+            };
+            /** @description The username or password was refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This wiki requires authentication */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Only an owner may create accounts */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description That account already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Account name
+                 * @example tim
+                 */
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"];
+                };
+            };
+            /** @description This wiki requires authentication */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Account name
+                 * @example tim
+                 */
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account is gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description This wiki requires authentication */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Only an owner may delete accounts */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This is the only owner */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    patch_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Account name
+                 * @example tim
+                 */
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchUser"];
+            };
+        };
+        responses: {
+            /** @description The account as it now stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatchUserResponse"];
+                };
+            };
+            /** @description The password was refused */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This wiki requires authentication */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not yours to change */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This is the only owner */
             409: {
                 headers: {
                     [name: string]: unknown;

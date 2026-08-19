@@ -30,6 +30,9 @@ fn listening(directory: &TempDir, listen: Listen) -> Config {
         // Nothing is built in a temp directory, which is a normal state rather
         // than an error.
         assets: directory.path().join("dist"),
+        // These are HTTP, so a `Secure` cookie would be one the client throws
+        // away — which is also the default, and the reason it is.
+        secure_cookies: false,
     }
 }
 
