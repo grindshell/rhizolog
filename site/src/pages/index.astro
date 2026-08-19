@@ -3,7 +3,7 @@ import Base from '../layouts/Base.astro';
 import LinkGraph from '../components/LinkGraph.astro';
 import HeatMap from '../components/HeatMap.astro';
 
-const source = 'https://github.com/rhizolog/rhizolog';
+import { SOURCE, README } from '../links';
 
 const stats = [
   { value: '18 s', label: 'TO INDEX 20,000 PAGES' },
@@ -119,13 +119,13 @@ const pages = [
 
       <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:gap-3">
         <a
-          href={source}
+          href={SOURCE}
           class="rounded-[3px] bg-mint px-[22px] py-[15px] text-center font-mono text-sm font-semibold text-ground hover:bg-mint-bright sm:py-[13px]"
         >
           Source on GitHub
         </a>
         <a
-          href="/docs"
+          href={README}
           class="rounded-[3px] border border-line-strong px-[22px] py-[14px] text-center font-mono text-sm text-ink hover:border-mint-dim sm:py-3"
         >
           Read the docs
@@ -239,19 +239,16 @@ const pages = [
       </div>
     </div>
 
-    <a
-      href="/demo/graph"
-      class="figure-link block grow rounded border border-line-strong bg-surface px-6 py-[22px] text-ink"
-    >
+    <figure class="m-0 grow rounded border border-line bg-surface px-6 py-[22px]">
       <div class="mb-3.5 flex items-baseline justify-between">
         <span class="font-mono text-xs text-ink-fainter">example-wiki</span>
-        <span class="font-mono text-xs text-mint">Open in the demo &rarr;</span>
+        <span class="font-mono text-xs text-ink-ghost">Browsable demo coming soon</span>
       </div>
       <LinkGraph />
-      <p class="mt-3.5 text-center font-mono text-label text-ink-fainter">
+      <figcaption class="mt-3.5 text-center font-mono text-label text-ink-fainter">
         Nine pages, one nobody has written, one nothing links to
-      </p>
-    </a>
+      </figcaption>
+    </figure>
   </section>
 
   <!-- Agents -->
@@ -328,25 +325,22 @@ const pages = [
       </blockquote>
     </div>
 
-    <a
-      href="/demo/time"
-      class="figure-link block rounded border border-line-strong bg-surface px-5 py-6 text-ink sm:px-7 sm:py-[26px]"
-    >
+    <figure class="m-0 rounded border border-line bg-surface px-5 py-6 sm:px-7 sm:py-[26px]">
       <div class="mb-5 flex items-baseline justify-between">
         <span class="font-mono text-[13px] text-[#b9c6d1]">Hours of the week</span>
-        <span class="font-mono text-xs text-mint">Open in the demo &rarr;</span>
+        <span class="font-mono text-xs text-ink-ghost">Browsable demo coming soon</span>
       </div>
       <div class="overflow-x-auto">
         <div class="min-w-[520px]">
           <HeatMap />
         </div>
       </div>
-      <p class="mt-[18px] font-mono text-label leading-relaxed text-ink-fainter">
+      <figcaption class="mt-[18px] font-mono text-label leading-relaxed text-ink-fainter">
         18 entries, 5 groups, 25 h 05 m. The Wednesday session runs to 00:45 and lights Thursday
         too. A session past midnight is split across both days rather than filed under the day it
         started in.
-      </p>
-    </a>
+      </figcaption>
+    </figure>
   </section>
 
   <!-- Accounts -->

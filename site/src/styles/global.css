@@ -77,13 +77,8 @@ a:hover {
 }
 
 /*
- * The two figures are links into the demo. The whole card is the hit area, so
- * the hover has to read on the card rather than on a word inside it.
+ * `.figure-link` lived here while the graph and the heat map were links into
+ * the demo. They are plain figures again until that demo exists, and the rule
+ * came out with them rather than being left behind for a reader to wonder
+ * about.
  */
-.figure-link {
-  transition: border-color 120ms ease-out;
-}
-
-.figure-link:hover {
-  border-color: var(--color-mint-dim);
-}
