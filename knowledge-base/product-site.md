@@ -122,13 +122,43 @@ all. The docs section wants markdown, and the demo wants Solid components
 prerendered to static HTML, and Astro is the one option where both are a
 documented path rather than something to invent.
 
+## Deployment
+
+The site is a directory of static files, deployed to the same box as
+grindshell.com and its siblings, behind Caddy, with the scripts in
+`server-configs/static`. `./deploy.sh ../../../rhizolog/dist rhizolog` unpacks
+a build into a timestamped release and swaps a symlink, so a release is atomic
+and a rollback is repointing it.
+
+The Caddy block for `rhizolog.com` predates this site: it was written for an
+earlier version of Rhizolog that served a single-page app, and it had to change
+in three ways for a statically generated one.
+
+- **`try_files {path} /index.html` had to go.** That is the SPA fallback, and on
+  a prerendered tree it answers every unknown path with the landing page and a
+  `200`. The site would never 404, and a crawler would find the same page at
+  every address nobody wrote. The replacement is
+  `try_files {path} {path}/index.html {path}.html`, which is what the
+  grindshell.com block already does.
+- **The cache rule matched nothing.** It hard-cached `/assets/*`, which is
+  Vite's output directory. Astro's content-hashed assets live in `/_astro/`, so
+  in practice the stylesheet carried no `Cache-Control` at all, and the
+  `no-cache` on `/index.html` never fired because browsers ask for `/`.
+- **Errors had nowhere to go.** `src/pages/404.astro` builds to `/404.html` and
+  nothing serves it without a `handle_errors` block rewriting to it. The SPA
+  fallback had made a 404 page unreachable by construction, which is why there
+  was not one.
+
+The 404 page is the wanted-page idea, spent where it costs nothing: a dashed
+amber ring, and the observation that inside a wiki this would not be an error at
+all, because a link to a page nobody has written is a wanted page rather than a
+failure. On a website it is just a 404, and the page says so.
+
 ## Deliberately not decided yet
 
 - **Where Docs and API point.** Both are linked from the nav and neither exists.
   They are written as real links so the day they land is a routing change rather
   than a redesign.
-- **Where it deploys.** The output is plain files with no adapter, so this stays
-  a late decision on purpose.
 - **Publishing this knowledge base.** It is the best writing in the project and
   it would make the site considerably more interesting than a landing page
   alone. It is also written for its author, and a couple of pages argue with

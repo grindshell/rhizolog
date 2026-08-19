@@ -1,0 +1,62 @@
+---
+import Base from '../layouts/Base.astro';
+import { SOURCE } from '../links';
+
+/*
+ * Astro writes this to `dist/404.html`. Nothing serves it automatically: the
+ * Caddy block for rhizolog.com has to rewrite errors to it, or the site returns
+ * Caddy's own bare 404 instead. See `knowledge-base/product-site.md`.
+ */
+---
+
+<Base
+  title="Not found"
+  description="Nothing has been written at this address."
+  noindex
+>
+  <section class="flex flex-col items-center px-5 py-20 text-center sm:py-32">
+    <svg width="88" height="88" viewBox="0 0 88 88" aria-hidden="true" class="mb-10">
+      <circle
+        cx="44"
+        cy="44"
+        r="32"
+        fill="none"
+        stroke="var(--color-amber)"
+        stroke-width="2"
+        stroke-dasharray="6 7"></circle>
+    </svg>
+
+    <p class="mb-5 font-mono text-label tracking-[0.16em] text-mint-dim">404</p>
+
+    <h1
+      class="mb-6 max-w-[620px] font-mono text-[27px] leading-tight font-medium tracking-[-0.02em] text-ink-bright sm:text-h2"
+    >
+      Nothing has been written here yet.
+    </h1>
+
+    <p class="mb-4 max-w-[560px] text-small text-ink-dim sm:text-body">
+      Inside a Rhizolog wiki this would not be an error. A link to a page that does not exist is a
+      <em class="text-amber not-italic">wanted page</em>: it is drawn on the graph as a dashed ring,
+      it shows on the dashboard, and it starts working the moment somebody writes it.
+    </p>
+
+    <p class="mb-10 max-w-[560px] text-small text-ink-dim sm:text-body">
+      On a website it is just a 404.
+    </p>
+
+    <div class="flex flex-col gap-2.5 sm:flex-row sm:gap-3">
+      <a
+        href="/"
+        class="rounded-[3px] bg-mint px-[22px] py-[15px] font-mono text-sm font-semibold text-ground hover:bg-mint-bright sm:py-[13px]"
+      >
+        Back to the front page
+      </a>
+      <a
+        href={SOURCE}
+        class="rounded-[3px] border border-line-strong px-[22px] py-[14px] font-mono text-sm text-ink hover:border-mint-dim sm:py-3"
+      >
+        Source on GitHub
+      </a>
+    </div>
+  </section>
+</Base>
