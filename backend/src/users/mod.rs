@@ -293,20 +293,10 @@ pub struct UserFrontmatter {
 
 #[derive(Debug, Error)]
 pub enum UserError {
-    #[error("frontmatter opens with `---` but is never closed")]
-    UnterminatedFrontmatter,
-
-    #[error("frontmatter is not valid YAML: {0}")]
-    InvalidFrontmatter(#[from] serde_yaml_ng::Error),
-}
-
-impl From<FrontmatterError> for UserError {
-    fn from(error: FrontmatterError) -> Self {
-        match error {
-            FrontmatterError::Unterminated => Self::UnterminatedFrontmatter,
-            FrontmatterError::InvalidYaml(source) => Self::InvalidFrontmatter(source),
-        }
-    }
+    /// Wrapped rather than restated, for the reason [`crate::page::PageError`]'s
+    /// is: one message, defined once, wherever a frontmatter block is read.
+    #[error(transparent)]
+    Frontmatter(#[from] FrontmatterError),
 }
 
 /// An account, as parsed from its file.

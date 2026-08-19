@@ -200,20 +200,13 @@ pub struct Page {
 
 #[derive(Debug, Error)]
 pub enum PageError {
-    #[error("frontmatter opens with `---` but is never closed")]
-    UnterminatedFrontmatter,
-
-    #[error("frontmatter is not valid YAML: {0}")]
-    InvalidFrontmatter(#[from] serde_yaml_ng::Error),
-}
-
-impl From<FrontmatterError> for PageError {
-    fn from(error: FrontmatterError) -> Self {
-        match error {
-            FrontmatterError::Unterminated => Self::UnterminatedFrontmatter,
-            FrontmatterError::InvalidYaml(source) => Self::InvalidFrontmatter(source),
-        }
-    }
+    /// Wrapped rather than restated. These used to be a copy of
+    /// [`FrontmatterError`]'s variants with a `From` between them, which is two
+    /// places to add a case and two messages to keep in step — the exact thing
+    /// [`crate::frontmatter`] exists to avoid. [`crate::times::TimeError`] was
+    /// already doing it this way.
+    #[error(transparent)]
+    Frontmatter(#[from] FrontmatterError),
 }
 
 impl Page {
@@ -674,7 +667,48 @@ mod tests {
             at("2026-08-05T12:00:00Z"),
         );
 
-        assert!(matches!(result, Err(PageError::UnterminatedFrontmatter)));
+        assert!(matches!(
+            result,
+            Err(PageError::Frontmatter(FrontmatterError::Unterminated))
+        ));
+    }
+
+    /// The two ways a frontmatter block can be refused are told apart, because
+    /// they send a reader to different places: one to their punctuation, the
+    /// other to a value that is the wrong kind of thing.
+    #[test]
+    fn a_syntax_error_and_an_unreadable_value_are_different_errors() {
+        let broken_yaml = Page::from_markdown(
+            Slug::parse("notes/rhizome").unwrap(),
+            "---\ntitle: [a, b\n---\n\nBody.\n",
+            at("2026-08-05T12:00:00Z"),
+        );
+        assert!(
+            matches!(
+                broken_yaml,
+                Err(PageError::Frontmatter(FrontmatterError::InvalidYaml(_)))
+            ),
+            "{broken_yaml:?}"
+        );
+
+        let bad_value = Page::from_markdown(
+            Slug::parse("notes/rhizome").unwrap(),
+            "---\ncreated: tomorrow\n---\n\nBody.\n",
+            at("2026-08-05T12:00:00Z"),
+        );
+        assert!(
+            matches!(
+                bad_value,
+                Err(PageError::Frontmatter(FrontmatterError::UnreadableValue(_)))
+            ),
+            "{bad_value:?}"
+        );
+
+        let message = bad_value.unwrap_err().to_string();
+        assert!(
+            !message.contains("not valid YAML"),
+            "a page whose YAML parsed was told its YAML is invalid: {message}"
+        );
     }
 
     /// A horizontal rule in the body must not be mistaken for a fence.

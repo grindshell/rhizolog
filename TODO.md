@@ -105,15 +105,6 @@ pieces that are known to be missing.
 
 ## Rough edges
 
-- **"Frontmatter is not valid YAML" is still said about valid YAML.**
-  `FrontmatterError::InvalidYaml` wraps every `serde_yaml_ng::Error`, and that
-  type covers deserialisation as well as parsing — so `created: yes` reports
-  *"frontmatter is not valid YAML"* about YAML that parses perfectly well and
-  merely holds the wrong kind of value. The case that made this matter is fixed:
-  a bare `created: 2026-08-19` is now read as midnight UTC rather than making the
-  whole page malformed. What is left is the wording, on values that really are
-  wrong. Splitting the two means telling a syntax error from a type error through
-  `serde_yaml_ng::Error`, which does not distinguish them in its API.
 - **A time entry's `start` and `end` do not take a bare date.** `created` does,
   on both a page and an account, and these were deliberately left out rather than
   forgotten: a bare date on `created` fills in a time that was never there, while

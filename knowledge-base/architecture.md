@@ -180,6 +180,39 @@ Rewriting normalises a bare date to the full timestamp. This module otherwise
 keeps frontmatter as written, but `created` was never kept as written — it is a
 parsed value, so an offset was already being normalised away.
 
+### Two ways to be refused, and they are not the same
+
+A block that will not parse and a block that parses into the wrong shape used to
+be one error, reported as *"frontmatter is not valid YAML"* whichever it was.
+That is a bad thing to be told about YAML that is fine and merely holds a word
+where a date belongs: it sends a reader to their quoting rather than to their
+value.
+
+They are separate now, and the split has to happen at the call site, because
+`serde_yaml_ng::Error` covers deserialisation as well as parsing and does not say
+which it was — the enum behind it is private and `location()` is all it exposes.
+So `frontmatter::parse` reads the block **twice**: once into a
+`serde_yaml_ng::Value`, which answers "is this YAML at all", and then again into
+the target type. The second read goes back to the string rather than through the
+`Value`, at the cost of one more parse of a few hundred bytes, because a `Value`
+carries no spans and the category is only worth having if the line number comes
+with it:
+
+```
+frontmatter is not valid YAML: did not find expected ',' or ']' at line 2 column 1
+frontmatter has a value that could not be read: title: invalid type: sequence, expected a string at line 2 column 3
+frontmatter has a value that could not be read: created: invalid value: string "tomorrow", expected a timestamp like 2026-08-19T10:00:00Z or a date like 2026-08-19 at line 3 column 10
+```
+
+That last one is also why `frontmatter::timestamp` raises its refusal from inside
+a serde `Visitor` rather than after deserialising a `String` and checking it:
+`serde_yaml_ng` attaches the position of the node it is standing on, and once a
+value has been read out it is no longer standing on one.
+
+`PageError` and `UserError` wrap `FrontmatterError` rather than restating its
+variants, which is what `TimeError` already did. Restating meant three copies of
+each message — and the message was the thing being got wrong.
+
 ### A UTF-8 BOM is stripped before parsing
 
 `read_to_string` keeps a byte order mark — U+FEFF is a valid character — so a

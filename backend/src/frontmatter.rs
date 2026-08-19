@@ -7,20 +7,33 @@
 //! Those answers live here rather than being written twice, because the second
 //! copy is where they quietly diverge.
 
+use std::fmt;
+
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use serde::de::{DeserializeOwned, Error as _};
-use serde::{Deserialize, Deserializer};
+use serde::Deserializer;
+use serde::de::{self, DeserializeOwned};
 use thiserror::Error;
 
 pub const DELIMITER: &str = "---";
 
+/// Why a frontmatter block could not be turned into fields.
+///
+/// The last two are one error as far as `serde_yaml_ng` is concerned — its
+/// `Error` covers deserialisation as well as parsing and does not say which
+/// happened — and they are two here because they are two different things to
+/// have done wrong. Telling somebody their YAML is invalid when it parsed
+/// perfectly well and merely holds a word where a date belongs sends them
+/// looking at their quoting.
 #[derive(Debug, Error)]
 pub enum FrontmatterError {
     #[error("frontmatter opens with `---` but is never closed")]
     Unterminated,
 
     #[error("frontmatter is not valid YAML: {0}")]
-    InvalidYaml(#[from] serde_yaml_ng::Error),
+    InvalidYaml(serde_yaml_ng::Error),
+
+    #[error("frontmatter has a value that could not be read: {0}")]
+    UnreadableValue(serde_yaml_ng::Error),
 }
 
 /// Drop a leading UTF-8 byte order mark.
@@ -69,11 +82,26 @@ pub fn split(text: &str) -> Result<Option<(&str, &str)>, FrontmatterError> {
 ///
 /// An empty block is legal and means "no fields", but YAML parses the empty
 /// document as null rather than as an empty mapping, so it is handled here.
+///
+/// Read twice, and the first read is thrown away. `serde_yaml_ng::Error` does
+/// not say whether it failed to *parse* or failed to *deserialise* — the enum
+/// behind it is private and `location()` is all that is public — so the question
+/// is answered by asking it separately: anything that is YAML at all reaches a
+/// [`serde_yaml_ng::Value`], and a failure past that point is about the fields.
+///
+/// The second read goes back to the string rather than through the `Value`,
+/// which costs one more parse of a few hundred bytes and keeps the line and
+/// column in the message. A `Value` has no spans, so deserialising from it would
+/// trade "at line 3 column 10" for a category — and the category is worth having
+/// only if the position comes with it.
 pub fn parse<T: DeserializeOwned + Default>(yaml: &str) -> Result<T, FrontmatterError> {
     if yaml.trim().is_empty() {
         return Ok(T::default());
     }
-    Ok(serde_yaml_ng::from_str(yaml)?)
+
+    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml).map_err(FrontmatterError::InvalidYaml)?;
+
+    serde_yaml_ng::from_str(yaml).map_err(FrontmatterError::UnreadableValue)
 }
 
 /// Read an optional timestamp that may have been written as a bare date.
@@ -98,18 +126,44 @@ pub fn timestamp<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Er
 where
     D: Deserializer<'de>,
 {
-    // Through `String` rather than through chrono, because YAML resolves a plain
-    // scalar against the type it is going into: both spellings arrive here as
-    // text, and neither has been interpreted yet.
-    let Some(raw) = Option::<String>::deserialize(deserializer)? else {
-        return Ok(None);
-    };
+    deserializer.deserialize_option(Stamp)
+}
 
-    parse_timestamp(&raw)
-        .map(Some)
-        .ok_or_else(|| D::Error::custom(format!(
-            "expected a timestamp like 2026-08-19T10:00:00Z or a date like 2026-08-19, found {raw:?}"
-        )))
+/// Raised from inside the visitor rather than after it, which is what puts a
+/// line number on the message: `serde_yaml_ng` attaches the position of the node
+/// it is standing on, and by the time a value has been deserialised out and
+/// checked it is no longer standing on anything.
+struct Stamp;
+
+impl<'de> de::Visitor<'de> for Stamp {
+    type Value = Option<DateTime<Utc>>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a timestamp like 2026-08-19T10:00:00Z or a date like 2026-08-19")
+    }
+
+    // Asked for as text, because YAML resolves a plain scalar against the type
+    // it is going into: both spellings arrive here uninterpreted.
+    fn visit_str<E: de::Error>(self, raw: &str) -> Result<Self::Value, E> {
+        parse_timestamp(raw)
+            .map(Some)
+            .ok_or_else(|| E::invalid_value(de::Unexpected::Str(raw), &self))
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(self)
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
 }
 
 fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
@@ -251,6 +305,41 @@ mod tests {
         ] {
             assert_eq!(parse_timestamp(raw), None, "{raw:?} was accepted");
         }
+    }
+
+    /// YAML that does not parse and YAML that parses into the wrong shape are
+    /// one error type in `serde_yaml_ng` and two here, because they are two
+    /// different mistakes and the wrong message sends a reader to the wrong
+    /// place.
+    #[test]
+    fn a_syntax_error_is_not_the_same_as_an_unreadable_value() {
+        let syntax = parse::<Held>("created: [1, 2\n").expect_err("refused");
+        assert!(
+            matches!(syntax, FrontmatterError::InvalidYaml(_)),
+            "{syntax:?}"
+        );
+        assert!(syntax.to_string().contains("not valid YAML"));
+
+        let value = parse::<Held>("created: tomorrow\n").expect_err("refused");
+        assert!(
+            matches!(value, FrontmatterError::UnreadableValue(_)),
+            "{value:?}"
+        );
+        assert!(
+            !value.to_string().contains("not valid YAML"),
+            "valid YAML was called invalid: {value}"
+        );
+    }
+
+    /// The second read goes back to the string rather than through the parsed
+    /// `Value`, and this is what that buys: a `Value` carries no spans, so a
+    /// reader would lose the line the mistake is on.
+    #[test]
+    fn an_unreadable_value_still_says_where_it_is() {
+        let error = parse::<Held>("title: x\nname: y\ncreated: tomorrow\n").expect_err("refused");
+        let message = error.to_string();
+
+        assert!(message.contains("line 3"), "{message}");
     }
 
     /// The message a reader gets has to name what would have worked. This is a
