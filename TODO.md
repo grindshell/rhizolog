@@ -61,6 +61,74 @@ the machine that built it" and "is a download".
 
 See [The desktop app](knowledge-base/desktop-app.md), "Portable, on Windows".
 
+## The product site
+
+`site/` is the static site at rhizolog.com. The landing page and a 404 page are
+built and `site/dist` is a deployable tree, so most of what follows is the gap
+between a directory of files and a site somebody can reach. The reasoning behind
+the design is in [The product site](knowledge-base/product-site.md); this is
+what is outstanding.
+
+- **The GitHub mirror does not exist yet.** Every link that leaves the site,
+  apart from the licence, resolves to `github.com/grindshell/rhizolog` through
+  `site/src/links.ts`: both calls to action in the hero, Docs and Source in the
+  nav, four of the five footer entries, and the second button on the 404. The
+  site is honest about having nothing to download; it stops being honest if its
+  primary call to action 404s. The mirror is decided on and named, and it is
+  where CI will build releases. It has simply not been pushed.
+- **`site/dist` has not been deployed, and the DNS record is unconfirmed.**
+  Deployment is `./deploy.sh ../../../rhizolog/dist rhizolog` from
+  `server-configs/static`, which unpacks a build into a timestamped release and
+  swaps a symlink. The Caddy block for rhizolog.com has been rewritten for a
+  statically generated tree; see the Deployment section of the knowledge base
+  page for the three ways the old one was wrong. DNS is the piece nothing in
+  this repository can check, and the failure is quiet: the certificate is issued
+  over DNS-01 through Cloudflare, so it is obtained whether or not an A record
+  points anywhere, and a working config and an unreachable site look identical
+  from the server.
+- **No `og:image`, so every shared link renders as a text-only card.**
+  `site/src/layouts/Base.astro` emits the title, description and canonical URL
+  and declares `twitter:card: summary`, and there is no image for either to
+  point at. One static PNG of the mark on the dark ground, and
+  `summary_large_image` with it.
+- **No `robots.txt`.** `site/public/` holds the favicon and nothing else. It is
+  three lines, it is requested on every crawl whether or not it exists, and the
+  `Sitemap:` line in it is the reason to add a sitemap at the same time. A
+  sitemap alone is marginal at two pages and stops being marginal with the docs.
+- **Both figures on the landing page are hand-authored placeholders**, and their
+  components say so at the top. They are meant to be fixtures captured at build
+  time from a real server run against `example-wiki/`, for the same reason the
+  OpenAPI document is generated from the routes rather than written: a figure
+  that has quietly stopped being true is worse than no figure. The graph's node
+  positions come from a hash of the slug, so the picture has to be the one
+  `/api/graph` produces. The heat map's capture needs
+  `?at=2026-08-06T18:00:00Z&offset=0`, because the committed entries are pinned
+  to 30 July to 6 August 2026 and a request without it returns an empty week and
+  renders blank.
+- **`/docs` does not exist.** The nav's Docs entry points at the mirror's
+  README, which is genuinely the documentation until there is something here.
+  This is half of why Astro was chosen: the docs are markdown, and content
+  collections are a documented path rather than something to invent.
+- **`/demo` does not exist.** The page says "Browsable demo coming soon" under
+  both figures. The shape is settled: one browsable static wiki over
+  `example-wiki/`, captured at build time, rendered with the dashboard's own
+  SolidJS components prerendered through `@astrojs/solid-js` rather than
+  reimplemented, so the demo cannot show a UI the download does not have. That
+  costs a real build step, which is the other half of why Astro is here.
+  `Nav.astro` deliberately carries no Demo entry rather than a dead one, so
+  landing it is a one-line change there.
+- **Where `/api` points is deliberately unresolved.** Swagger UI is served by
+  the backend, at an address that only exists once somebody is running one, so
+  the site linking to it needs an answer to "whose instance". Publishing a
+  rendered copy of the OpenAPI document is the obvious alternative and has not
+  been decided on.
+- **The download section is waiting on a first release.**
+  `site/src/pages/index.astro` says "Windows build coming soon" in place of it.
+  The section is written to take a real download without the page changing
+  shape: two entries rather than one button that guesses at the platform, and
+  the SmartScreen warning on an unsigned executable said out loud rather than
+  discovered. Its actual blockers are the two sections above this one.
+
 ## Accounts and visibility
 
 Both halves are built: accounts on disk, sessions, a gate in front of `/api`,
