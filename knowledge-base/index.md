@@ -22,3 +22,6 @@ Every page should be reachable from this index.
   time link is not a link
 - [The desktop app](desktop-app.md) — packaging as a portable Tauri app, and
   keeping the server the only interface
+- [The product site](product-site.md) — rhizolog.com: what the landing page is
+  for before there is anything to download, and why the demo reuses the
+  dashboard's own components

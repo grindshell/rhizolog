@@ -1,0 +1,52 @@
+---
+import Mark from './Mark.astro';
+
+const columns = [
+  {
+    heading: 'PROJECT',
+    links: [
+      { label: 'Docs', href: '/docs' },
+      { label: 'Demo', href: '/demo' },
+      { label: 'Changelog', href: 'https://github.com/rhizolog/rhizolog/releases' },
+    ],
+  },
+  {
+    heading: 'SOURCE',
+    links: [
+      { label: 'GitHub mirror', href: 'https://github.com/rhizolog/rhizolog' },
+      { label: 'Issues', href: 'https://github.com/rhizolog/rhizolog/issues' },
+      { label: 'Licence', href: 'https://www.gnu.org/licenses/agpl-3.0.html' },
+    ],
+  },
+];
+---
+
+<footer
+  class="flex flex-col gap-8 border-t border-line px-5 py-10 sm:flex-row sm:items-start sm:justify-between sm:gap-10 sm:px-16 sm:py-12"
+>
+  <div class="max-w-[470px]">
+    <div class="mb-4 flex items-center gap-2.5">
+      <Mark size={18} color="var(--color-mint-dim)" />
+      <span class="font-mono text-sm text-ink-faint">rhizolog</span>
+    </div>
+    <p class="text-[13.5px] leading-relaxed text-ink-faint">
+      Free software under the GNU Affero General Public Licence, version 3 or later. Running your
+      own copy, changing it, and never letting anyone else near it triggers none of it.
+    </p>
+  </div>
+
+  <div class="flex gap-14 font-mono text-[13px]">
+    {
+      columns.map((column) => (
+        <div class="flex flex-col gap-2.5">
+          <div class="text-[11px] tracking-[0.12em] text-ink-ghost">{column.heading}</div>
+          {column.links.map((l) => (
+            <a href={l.href} class="text-ink-faint hover:text-ink">
+              {l.label}
+            </a>
+          ))}
+        </div>
+      ))
+    }
+  </div>
+</footer>

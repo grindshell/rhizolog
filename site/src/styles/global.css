@@ -1,0 +1,89 @@
+/*
+ * The fonts are self-hosted through @fontsource rather than linked from a font
+ * CDN. A page that argues your notes should not leave your disk has no business
+ * making a third-party request to render its own headings.
+ *
+ * Only the weights actually used: 400/500/600 mono, 400/500 sans.
+ */
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+
+@import 'tailwindcss';
+
+/*
+ * The palette. `mint` is the accent from the app icon; `amber` belongs to
+ * wanted pages and to nothing else on the site, so that a reader who has met
+ * one dashed ring recognises the next.
+ */
+@theme {
+  --color-ground: #0f1317;
+  --color-surface: #121820;
+  --color-surface-raised: #151c23;
+  --color-line: #1e262e;
+  --color-line-strong: #2b3a45;
+  --color-edge: #31414c;
+
+  --color-ink: #e6ecf0;
+  --color-ink-bright: #f2f7f5;
+  --color-ink-muted: #a8b6c2;
+  --color-ink-dim: #9aa8b4;
+  --color-ink-faint: #6d7c89;
+  --color-ink-fainter: #5c6a76;
+  --color-ink-ghost: #46535e;
+
+  --color-mint: #9fe3c5;
+  --color-mint-bright: #c8f1de;
+  --color-mint-dim: #5f8a77;
+  --color-amber: #d9a441;
+  --color-amber-dim: #8a7440;
+  --color-amber-edge: #7a6a3d;
+
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /*
+   * One scale, rather than the fourteen sizes the mockup accumulated. Every
+   * step below is used; nothing here is aspirational.
+   */
+  --text-micro: 10.5px;
+  --text-label: 11.5px;
+  --text-code: 12.5px;
+  --text-meta: 13.5px;
+  --text-small: 14.5px;
+  --text-body: 15.5px;
+  --text-h3: 18px;
+  --text-lede: 17.5px;
+  --text-stat: 21px;
+  --text-h2: 32px;
+  --text-hero: 46px;
+}
+
+html {
+  background: var(--color-ground);
+  color-scheme: dark;
+}
+
+/* Anything with an href gets the accent unless it says otherwise. */
+a {
+  color: var(--color-mint);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--color-mint-bright);
+}
+
+/*
+ * The two figures are links into the demo. The whole card is the hit area, so
+ * the hover has to read on the card rather than on a word inside it.
+ */
+.figure-link {
+  transition: border-color 120ms ease-out;
+}
+
+.figure-link:hover {
+  border-color: var(--color-mint-dim);
+}

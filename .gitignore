@@ -8,6 +8,11 @@ desktop/gen/schemas/
 node_modules/
 dist/
 
+# Astro's generated types and build cache, under site/. Regenerated on every
+# `astro dev` and `astro build`; tsconfig.json references the types file, which
+# is why a fresh checkout has to run one of those before `astro check` passes.
+.astro/
+
 # The development wiki. RHIZOLOG_ROOT defaults to ./wiki, so running the
 # backend creates this — scratch content plus a derived SQLite index under
 # .rhizolog/. None of it belongs in the repo.

@@ -310,6 +310,7 @@ inside it.
 | `backend/` | The Rust library and the headless server (crate `rhizolog`) |
 | `desktop/` | The Tauri app (crate and binary `rhizolog-desktop`) |
 | `frontend/` | The dashboard: Vite, SolidJS, Tailwind, daisyUI |
+| `site/` | The static product site at rhizolog.com: Astro, Tailwind |
 | `example-wiki/` | A small wiki, and a week of time, to run against |
 | `knowledge-base/` | Why the thing is built the way it is |
 
@@ -411,6 +412,19 @@ pnpm typecheck
 
 `pnpm dev` expects a backend already running on port 3000 and proxies `/api`,
 `/api-docs`, and `/swagger-ui` to it.
+
+Site, from `site/`:
+
+```
+pnpm dev         # dev server on :4321
+pnpm build       # static output to site/dist
+pnpm typecheck   # astro check
+```
+
+This one is independent of everything above: the backend does not serve it and
+does not know it exists. Note that `pnpm dev` daemonises — the command returns
+and the server keeps running, so `pnpm exec astro dev status` is how you find
+out whether one is up, and `pnpm exec astro dev stop` ends it.
 
 The frontend's API types are generated from the OpenAPI document rather than
 written by hand, so a backend change that breaks a caller becomes a type error

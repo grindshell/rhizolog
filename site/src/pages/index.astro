@@ -1,0 +1,493 @@
+---
+import Base from '../layouts/Base.astro';
+import LinkGraph from '../components/LinkGraph.astro';
+import HeatMap from '../components/HeatMap.astro';
+
+const source = 'https://github.com/rhizolog/rhizolog';
+
+const stats = [
+  { value: '18 s', label: 'TO INDEX 20,000 PAGES' },
+  { value: '1', label: 'FILE PER PAGE' },
+  { value: 'AGPL', label: '3.0 OR LATER' },
+];
+
+const pillars = [
+  {
+    n: '01',
+    heading: 'Files on disk are the truth',
+    body: 'Not a database with an export button. Edit them in your editor, move them with mv, keep them in git. Delete the index and it rebuilds on startup; a watcher picks up outside edits while the server runs.',
+  },
+  {
+    n: '02',
+    heading: 'The API is not a bolt-on',
+    body: "A full HTTP API with an OpenAPI document generated from the routes, so it cannot drift from them. The dashboard is the API's first client, not its privileged one.",
+  },
+  {
+    n: '03',
+    heading: 'Open by default',
+    body: 'A wiki with no accounts binds to loopback, asks nobody to sign in and refuses nothing. Creating the first account is what turns authentication on.',
+  },
+];
+
+const agentPoints = [
+  {
+    heading: 'Markdown is the default representation',
+    body: 'A page reads back as its source, because that is what an agent can reason about and edit. Rendered HTML is opt-in and arrives as an extra field.',
+  },
+  {
+    heading: 'Search returns enough to decide',
+    body: 'Every hit carries slug, title, tags and a highlighted excerpt, so an agent can triage twenty results and fetch the two that mattered.',
+  },
+  {
+    heading: 'Errors are uniform and recoverable',
+    body: 'One shape, a stable code, and details naming the rule that was broken. A mistyped slug is recoverable from the response alone.',
+  },
+];
+
+/*
+ * PLACEHOLDER RESPONSES, hand-written to match what the API actually returns.
+ * The build-time capture replaces both with the real bytes from a server run
+ * against example-wiki, which is what makes the caption under them true.
+ */
+const searchResponse = `{
+  "total": 1,
+  "results": [
+    {
+      "slug": "notes/rust/async",
+      "title": "Async in Rust",
+      "tags": [ "rust", "async" ],
+      "snippet": "a lifetime error in the <b>poll loop</b>"
+    }
+  ]
+}`;
+
+const errorResponse = `{
+  "error": {
+    "code": "page_not_found",
+    "message": "No page at 'notes/rust/asnyc'",
+    "details": { "slug": "notes/rust/asnyc" }
+  }
+}`;
+
+const visibility = [
+  { value: 'public', who: 'Anyone, including callers who have not signed in' },
+  { value: 'internal', who: 'Any account on this wiki, and the default' },
+  { value: 'restricted', who: 'The readers list, plus the owner' },
+  { value: 'private', who: 'The owner alone' },
+];
+
+const onPurpose = [
+  'Page history and diffs. A wiki directory is very likely a git repository already, and answering the question twice is worse than answering it once.',
+  'Link rewriting when a page moves.',
+  'File attachments.',
+  'Transclusion.',
+];
+
+const knownThin = [
+  'No TLS of its own. Serving one over a network wants a reverse proxy in front.',
+  'No rate limiting on sign-in.',
+  'No audit log.',
+  'No macOS or Linux bundles yet. The architecture is portable; the packaging work is not.',
+];
+
+const pages = [
+  { title: 'Async in Rust', slug: 'notes/rust/async' },
+  { title: 'Pinning', slug: 'notes/rust/pinning' },
+  { title: 'Rhizome', slug: 'notes/rhizome' },
+];
+---
+
+<Base
+  title="Rhizolog"
+  description="A wiki over a directory of markdown files, with an HTTP API that is meant to be used by you, and by whatever agents you point at it."
+>
+  <!-- Hero -->
+  <section class="flex flex-col gap-10 px-5 pt-10 pb-8 sm:flex-row sm:items-center sm:gap-12 sm:px-16 sm:pt-[76px] sm:pb-14">
+    <div class="sm:w-[500px] sm:shrink-0">
+      <p class="mb-5 font-mono text-label tracking-[0.16em] text-mint-dim sm:mb-[26px]">
+        MARKDOWN ON DISK &nbsp;/&nbsp; HTTP API
+      </p>
+      <h1
+        class="mb-[18px] font-mono text-[31px] leading-[1.14] font-medium tracking-[-0.025em] text-balance text-ink-bright sm:mb-6 sm:text-hero sm:leading-[1.12] sm:tracking-[-0.03em]"
+      >
+        A wiki over a directory of markdown files.
+      </h1>
+      <p class="mb-[26px] leading-relaxed text-ink-muted text-pretty sm:mb-8 sm:text-lede">
+        With an HTTP API that is meant to be used by you, and by whatever agents you point at it.
+        Nothing needs importing: point it at a directory of notes and it is already a wiki.
+      </p>
+
+      <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:gap-3">
+        <a
+          href={source}
+          class="rounded-[3px] bg-mint px-[22px] py-[15px] text-center font-mono text-sm font-semibold text-ground hover:bg-mint-bright sm:py-[13px]"
+        >
+          Source on GitHub
+        </a>
+        <a
+          href="/docs"
+          class="rounded-[3px] border border-line-strong px-[22px] py-[14px] text-center font-mono text-sm text-ink hover:border-mint-dim sm:py-3"
+        >
+          Read the docs
+        </a>
+      </div>
+      <p class="mt-4 font-mono text-code leading-relaxed text-ink-faint sm:mt-[18px]">
+        Signed builds coming soon. Until then, clone it and <span class="text-mint">cargo run</span>.
+      </p>
+    </div>
+
+    <div class="grow">
+      <LinkGraph labels={false} weight={1.4} />
+    </div>
+  </section>
+
+  <!-- What running it looks like -->
+  <section class="px-5 pb-10 sm:px-16 sm:pb-16">
+    <div class="overflow-hidden rounded border border-line bg-[#131920]">
+      <div class="flex items-center gap-[7px] border-b border-line px-4 py-[11px]">
+        <span class="block h-[9px] w-[9px] rounded-full bg-[#2c3742]"></span>
+        <span class="block h-[9px] w-[9px] rounded-full bg-[#2c3742]"></span>
+        <span class="block h-[9px] w-[9px] rounded-full bg-[#2c3742]"></span>
+        <span class="ml-2.5 font-mono text-label text-ink-fainter">powershell</span>
+      </div>
+      <pre class="overflow-x-auto px-6 py-[22px] font-mono text-meta leading-[1.85] text-[#b9c6d1]"><span class="text-mint-dim">&gt;</span> $env:RHIZOLOG_ROOT = <span class="text-mint">"../example-wiki"</span>
+<span class="text-mint-dim">&gt;</span> cargo run
+
+  rhizolog 0.1.0 <span class="text-mint">ready</span>
+  wiki     ../example-wiki  <span class="text-ink-faint">9 pages, 18 time entries, 1 wanted</span>
+  serving  <span class="text-mint">http://127.0.0.1:3000</span>
+  docs     http://127.0.0.1:3000/swagger-ui</pre>
+    </div>
+  </section>
+
+  <!-- Numbers -->
+  <section class="grid grid-cols-3 border-y border-line">
+    {
+      stats.map((stat, i) => (
+        <div class:list={['py-6 text-center', i < stats.length - 1 && 'border-r border-line']}>
+          <div class="font-mono text-[19px] text-ink sm:text-stat">{stat.value}</div>
+          <div class="mt-1 px-2 font-mono text-[9.5px] tracking-[0.08em] text-ink-faint sm:text-[11px] sm:tracking-[0.12em]">
+            {stat.label}
+          </div>
+        </div>
+      ))
+    }
+  </section>
+
+  <!-- Three claims -->
+  <section class="grid gap-9 px-5 py-9 sm:grid-cols-3 sm:gap-10 sm:px-16 sm:py-[72px]">
+    {
+      pillars.map((pillar) => (
+        <div>
+          <div class="mb-2.5 font-mono text-label tracking-[0.14em] text-mint-dim sm:mb-3.5">
+            {pillar.n}
+          </div>
+          <h2 class="mb-2.5 font-mono text-[17px] font-medium text-ink-bright sm:mb-3 sm:text-h3">
+            {pillar.heading}
+          </h2>
+          <p class="text-small leading-relaxed text-ink-dim sm:text-[15px]">{pillar.body}</p>
+        </div>
+      ))
+    }
+  </section>
+
+  <!-- The graph -->
+  <section class="flex flex-col gap-8 border-t border-line px-5 py-9 sm:flex-row sm:items-center sm:gap-14 sm:px-16 sm:py-[72px]">
+    <div class="sm:w-[430px] sm:shrink-0">
+      <p class="mb-3.5 font-mono text-label tracking-[0.16em] text-mint-dim sm:mb-5">THE GRAPH</p>
+      <h2 class="mb-3.5 font-mono text-[25px] leading-tight font-medium tracking-[-0.02em] text-ink-bright sm:mb-5 sm:text-h2">
+        Wanted pages are drawn too.
+      </h2>
+      <p class="mb-[18px] text-small text-ink-dim sm:text-body">
+        A link to a page that does not exist is not an error. It is a <em
+          class="not-italic text-amber">wanted page</em
+        >. It shows on the dashboard, and it starts working the moment somebody writes it.
+      </p>
+      <p class="mb-[18px] text-small text-ink-dim sm:text-body">
+        The graph draws them as dashed rings, because leaving them out would make the wiki look
+        tidier than it is.
+      </p>
+      <p class="mb-6 text-small text-ink-dim sm:text-body">
+        Layout is deterministic: node positions come from a hash of the slug rather than a random
+        seed. The same wiki draws the same picture every time, so a shape that changed means the
+        wiki changed.
+      </p>
+      <div class="flex flex-wrap items-center gap-5 font-mono text-xs text-ink-fainter">
+        <span class="flex items-center gap-2">
+          <svg width="12" height="12" aria-hidden="true"
+            ><circle cx="6" cy="6" r="5" fill="var(--color-mint)"></circle></svg
+          >page
+        </span>
+        <span class="flex items-center gap-2">
+          <svg width="12" height="12" aria-hidden="true"
+            ><circle
+              cx="6"
+              cy="6"
+              r="4.4"
+              fill="none"
+              stroke="var(--color-amber)"
+              stroke-width="1.4"
+              stroke-dasharray="3 3"></circle></svg
+          >wanted
+        </span>
+        <span class="flex items-center gap-2">
+          <svg width="12" height="12" aria-hidden="true"
+            ><circle cx="6" cy="6" r="4.4" fill="none" stroke="#63737f" stroke-width="1.4"
+            ></circle></svg
+          >orphan
+        </span>
+      </div>
+    </div>
+
+    <a
+      href="/demo/graph"
+      class="figure-link block grow rounded border border-line-strong bg-surface px-6 py-[22px] text-ink"
+    >
+      <div class="mb-3.5 flex items-baseline justify-between">
+        <span class="font-mono text-xs text-ink-fainter">example-wiki</span>
+        <span class="font-mono text-xs text-mint">Open in the demo &rarr;</span>
+      </div>
+      <LinkGraph />
+      <p class="mt-3.5 text-center font-mono text-label text-ink-fainter">
+        Nine pages, one nobody has written, one nothing links to
+      </p>
+    </a>
+  </section>
+
+  <!-- Agents -->
+  <section class="flex flex-col gap-8 border-t border-line px-5 py-9 sm:flex-row sm:gap-14 sm:px-16 sm:py-[72px]">
+    <div class="sm:w-[430px] sm:shrink-0">
+      <p class="mb-3.5 font-mono text-label tracking-[0.16em] text-mint-dim sm:mb-5">
+        BUILT FOR AGENTS
+      </p>
+      <h2 class="mb-5 font-mono text-[25px] leading-tight font-medium tracking-[-0.02em] text-ink-bright sm:mb-6 sm:text-h2">
+        The spec is the manual.
+      </h2>
+      <div class="flex flex-col gap-[18px]">
+        {
+          agentPoints.map((point) => (
+            <div class="border-l border-line-strong pl-[18px]">
+              <div class="mb-1.5 font-mono text-meta text-mint">{point.heading}</div>
+              <div class="text-small text-ink-dim">{point.body}</div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+
+    <div class="flex grow flex-col gap-4">
+      <div class="overflow-hidden rounded border border-line bg-surface">
+        <div class="flex border-b border-line font-mono text-xs">
+          <div class="bg-mint px-4 py-[11px] text-ground">GET</div>
+          <div class="grow overflow-x-auto px-4 py-[11px] text-[#b9c6d1]">/api/search?q=poll+loop</div>
+          <div class="px-4 py-[11px] text-mint-dim">200</div>
+        </div>
+        <pre class="overflow-x-auto px-5 py-[18px] font-mono text-code leading-[1.75] text-ink-dim">{searchResponse}</pre>
+      </div>
+
+      <div class="overflow-hidden rounded border border-[#3a3524] bg-[#191a15]">
+        <div class="flex border-b border-[#3a3524] font-mono text-xs">
+          <div class="bg-amber px-4 py-[11px] text-ground">GET</div>
+          <div class="grow overflow-x-auto px-4 py-[11px] text-[#b9c6d1]">
+            /api/pages/notes/rust/asnyc
+          </div>
+          <div class="px-4 py-[11px] text-amber">404</div>
+        </div>
+        <pre class="overflow-x-auto px-5 py-[18px] font-mono text-code leading-[1.75] text-ink-dim">{errorResponse}</pre>
+      </div>
+
+      <p class="font-mono text-label leading-relaxed text-ink-fainter">
+        Both responses are generated at build time from a real server running against example-wiki,
+        so this page cannot drift from the API.
+      </p>
+    </div>
+  </section>
+
+  <!-- Time -->
+  <section class="border-t border-line px-5 py-9 sm:px-16 sm:py-[72px]">
+    <div class="mb-8 flex flex-col gap-8 sm:mb-11 sm:flex-row sm:items-start sm:gap-14">
+      <div class="sm:w-[430px] sm:shrink-0">
+        <p class="mb-3.5 font-mono text-label tracking-[0.16em] text-mint-dim sm:mb-5">TIME</p>
+        <h2 class="mb-3.5 font-mono text-[25px] leading-tight font-medium tracking-[-0.02em] text-ink-bright sm:mb-5 sm:text-h2">
+          Where the hours went.
+        </h2>
+        <p class="mb-[18px] text-small text-ink-dim sm:text-body">
+          Timers you start and stop, entries you type in after the fact, and a note on any of them.
+          Attach one to the pages it was spent on and the dashboard totals them by page.
+        </p>
+        <p class="text-small text-ink-dim sm:text-body">
+          Entries are files as well, so <span class="font-mono text-[#b6c3ce]">git log</span> gives
+          you a history of your time nobody had to build.
+        </p>
+      </div>
+      <blockquote class="grow border-l-2 border-mint pl-6">
+        <p class="font-mono text-[15px] leading-relaxed text-[#d5e3dc] sm:text-h3">
+          Several timers can run at once, and they are allowed to overlap, because attention is not
+          exclusive and a tracker that insisted otherwise would be asking you to lie to it.
+        </p>
+      </blockquote>
+    </div>
+
+    <a
+      href="/demo/time"
+      class="figure-link block rounded border border-line-strong bg-surface px-5 py-6 text-ink sm:px-7 sm:py-[26px]"
+    >
+      <div class="mb-5 flex items-baseline justify-between">
+        <span class="font-mono text-[13px] text-[#b9c6d1]">Hours of the week</span>
+        <span class="font-mono text-xs text-mint">Open in the demo &rarr;</span>
+      </div>
+      <div class="overflow-x-auto">
+        <div class="min-w-[520px]">
+          <HeatMap />
+        </div>
+      </div>
+      <p class="mt-[18px] font-mono text-label leading-relaxed text-ink-fainter">
+        18 entries, 5 groups, 25 h 05 m. The Wednesday session runs to 00:45 and lights Thursday
+        too. A session past midnight is split across both days rather than filed under the day it
+        started in.
+      </p>
+    </a>
+  </section>
+
+  <!-- Accounts -->
+  <section class="flex flex-col gap-8 border-t border-line px-5 py-9 sm:flex-row sm:items-start sm:gap-14 sm:px-16 sm:py-[72px]">
+    <div class="sm:w-[430px] sm:shrink-0">
+      <p class="mb-3.5 font-mono text-label tracking-[0.16em] text-mint-dim sm:mb-5">ACCOUNTS</p>
+      <h2 class="mb-3.5 font-mono text-[25px] leading-tight font-medium tracking-[-0.02em] text-ink-bright sm:mb-5 sm:text-h2">
+        One line decides who a page is for.
+      </h2>
+      <p class="mb-[18px] text-small text-ink-dim sm:text-body">
+        A fresh wiki has no accounts and refuses nothing. Creating the first one turns
+        authentication on, which is how a Rhizolog gets served over a network.
+      </p>
+      <p class="text-small text-ink-dim sm:text-body">
+        A page you may not read answers <span class="font-mono text-[#b6c3ce]">404</span>, the same
+        as one that is not there. It is absent from the listing, from search, from the tag counts,
+        from the graph, and from every total.
+      </p>
+    </div>
+
+    <div class="grow">
+      <pre class="mb-5 overflow-x-auto rounded border border-line bg-surface px-5 py-[18px] font-mono text-code leading-[1.75] text-ink-dim">---
+title: Project Roadrunner
+<span class="text-mint">visibility: restricted</span>
+owner: tim
+readers: [alice, bob]
+---</pre>
+
+      <div class="overflow-hidden rounded border border-line">
+        <div class="flex bg-surface-raised px-[18px] py-3 font-mono text-[11px] tracking-[0.1em] text-ink-faint">
+          <div class="w-[110px] shrink-0">VALUE</div>
+          <div class="grow">WHO CAN READ IT</div>
+        </div>
+        {
+          visibility.map((row) => (
+            <div class="flex border-t border-line px-[18px] py-3 text-small">
+              <div class="w-[110px] shrink-0 font-mono text-mint">{row.value}</div>
+              <div class="grow text-ink-dim">{row.who}</div>
+            </div>
+          ))
+        }
+      </div>
+      <p class="mt-3.5 font-mono text-label leading-relaxed text-ink-fainter">
+        A word that is not one of the four reads as private. Somebody who typed <span
+          class="text-amber">privte</span
+        > was trying to restrict a page, and the safe way to get that wrong is to hide too much.
+      </p>
+    </div>
+  </section>
+
+  <!-- The app -->
+  <section class="flex flex-col gap-8 border-t border-line px-5 py-9 sm:flex-row sm:items-center sm:gap-14 sm:px-16 sm:py-[72px]">
+    <div class="sm:w-[430px] sm:shrink-0">
+      <p class="mb-3.5 font-mono text-label tracking-[0.16em] text-mint-dim sm:mb-5">THE APP</p>
+      <h2 class="mb-3.5 font-mono text-[25px] leading-tight font-medium tracking-[-0.02em] text-ink-bright sm:mb-5 sm:text-h2">
+        The server, in a window.
+      </h2>
+      <p class="mb-[18px] text-small text-ink-dim sm:text-body">
+        The desktop app starts a real Rhizolog on loopback in its own process and points a webview
+        at it. The window is talking to the same HTTP API anything else would.
+      </p>
+      <p class="mb-6 text-small text-ink-dim sm:text-body">
+        That is the whole reason it is built this way: nothing the app can do is something a browser
+        pointed at a remote Rhizolog cannot.
+      </p>
+      <p class="inline-block rounded-[3px] border border-dashed border-[#3a4550] px-[18px] py-[11px] font-mono text-code text-ink-fainter">
+        Windows build coming soon
+      </p>
+    </div>
+
+    <div class="grow overflow-hidden rounded-[5px] border border-line bg-surface">
+      <div class="flex items-center justify-between border-b border-line bg-[#171e26] px-3.5 py-2.5">
+        <span class="font-mono text-label text-ink-faint">Rhizolog - C:\notes</span>
+        <div class="flex items-center gap-3.5" aria-hidden="true">
+          <span class="block h-[2px] w-2.5 bg-[#4a5661]"></span>
+          <span class="block h-[9px] w-[9px] border border-[#4a5661]"></span>
+          <span class="font-mono text-xs leading-none text-[#4a5661]">&times;</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-[18px] overflow-x-auto border-b border-line px-4 py-[11px] font-mono text-label text-ink-fainter">
+        <span class="text-mint">Pages</span><span>Search</span><span>Graph</span><span>Time</span>
+        <span>Stats</span>
+        <span class="ml-auto shrink-0 text-amber">&#9679; Deep work 41:12</span>
+      </div>
+      <div class="flex flex-col gap-2.5 px-4 py-5">
+        {
+          pages.map((page) => (
+            <div class="flex justify-between gap-4 border-b border-[#1a2129] pb-2.5 text-[13px] text-[#b9c6d1]">
+              <span>{page.title}</span>
+              <span class="shrink-0 font-mono text-[11px] text-ink-fainter">{page.slug}</span>
+            </div>
+          ))
+        }
+        <div class="flex justify-between gap-4 text-[13px] text-ink-faint">
+          <span>Streams <span class="text-amber">?</span></span>
+          <span class="shrink-0 font-mono text-[11px] text-ink-fainter">notes/rust/streams</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- What it doesn't do -->
+  <section class="border-t border-line px-5 py-9 sm:px-16 sm:py-[72px]">
+    <h2 class="mb-7 font-mono text-[25px] leading-tight font-medium tracking-[-0.02em] text-ink-bright sm:mb-10 sm:text-h2">
+      What it doesn't do.
+    </h2>
+    <div class="grid gap-9 sm:grid-cols-2 sm:gap-14">
+      <div>
+        <p class="mb-4 font-mono text-label tracking-[0.14em] text-mint-dim sm:mb-[18px]">
+          NOT IMPLEMENTED, ON PURPOSE
+        </p>
+        <ul class="flex flex-col gap-3">
+          {
+            onPurpose.map((item) => (
+              <li class="flex gap-3.5 text-small text-ink-dim sm:text-[15px]">
+                <svg width="7" height="7" class="mt-[9px] shrink-0" aria-hidden="true">
+                  <circle cx="3.5" cy="3.5" r="3" fill="var(--color-ink-ghost)" />
+                </svg>
+                <span>{item}</span>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+      <div>
+        <p class="mb-4 font-mono text-label tracking-[0.14em] text-amber-dim sm:mb-[18px]">
+          THIN, AND KNOWN
+        </p>
+        <ul class="flex flex-col gap-3">
+          {
+            knownThin.map((item) => (
+              <li class="flex gap-3.5 text-small text-ink-dim sm:text-[15px]">
+                <svg width="7" height="7" class="mt-[9px] shrink-0" aria-hidden="true">
+                  <circle cx="3.5" cy="3.5" r="3" fill="var(--color-ink-ghost)" />
+                </svg>
+                <span>{item}</span>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </div>
+  </section>
+</Base>

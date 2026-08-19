@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-label="Rhizolog">
+  <rect width="48" height="48" rx="9" fill="#1b2026"/>
+  <g stroke="#9fe3c5" stroke-width="3.2" stroke-linecap="round" fill="none">
+    <path d="M9 11 L16 24"/>
+    <path d="M23 11 L16 24"/>
+    <path d="M39 11 L32 24"/>
+    <path d="M16 24 L24 37"/>
+    <path d="M32 24 L24 37"/>
+  </g>
+  <g fill="#9fe3c5">
+    <circle cx="9" cy="11" r="4.6"/>
+    <circle cx="23" cy="11" r="4.6"/>
+    <circle cx="39" cy="11" r="4.6"/>
+    <circle cx="16" cy="24" r="4.6"/>
+    <circle cx="32" cy="24" r="4.6"/>
+    <circle cx="24" cy="37" r="4.6"/>
+  </g>
+</svg>

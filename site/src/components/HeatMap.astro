@@ -1,0 +1,87 @@
+---
+/*
+ * PLACEHOLDER DATA.
+ *
+ * A plausible week, not the committed one. The real figure comes from
+ * `GET /api/time-stats?at=2026-08-06T18:00:00Z&offset=0` against example-wiki,
+ * and that `at=` matters: the entries are pinned to 30 July - 6 August 2026, so
+ * asking without it returns an empty week and the figure renders blank.
+ */
+interface Props {
+  cell?: number;
+  gap?: number;
+}
+
+const { cell = 22, gap = 4 } = Astro.props;
+
+const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/* [hour, intensity 1-3] per day. Wednesday runs to 00:45, so Thursday 00 is
+ * lit as well: a session past midnight belongs to both days. */
+const week: [number, number][][] = [
+  [[9, 2], [10, 3], [11, 2], [14, 2], [15, 1]],
+  [[9, 2], [10, 3], [11, 3], [13, 2], [14, 2], [15, 1]],
+  [[10, 2], [11, 2], [22, 3], [23, 3]],
+  [[0, 2], [9, 2], [10, 3], [11, 2], [12, 1], [16, 2]],
+  [[9, 2], [10, 2], [13, 1], [14, 2]],
+  [[20, 1], [21, 2]],
+  [[11, 1]],
+];
+
+const shades = ['#161d24', '#2d5c49', '#5aa383', '#9fe3c5'];
+
+const rows = week.map((day, d) => {
+  const lit = new Map(day);
+  return {
+    day: days[d],
+    hours: Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      bg: shades[lit.get(h) ?? 0],
+    })),
+  };
+});
+
+const hourLabels = Array.from({ length: 24 }, (_, h) => (h % 3 === 0 ? String(h) : ''));
+---
+
+<div class="flex gap-2.5">
+  <div class="flex flex-col" style={`gap: ${gap}px; padding-top: ${gap + 14}px;`}>
+    {
+      rows.map((row) => (
+        <div
+          class="font-mono text-ink-faint"
+          style={`height: ${cell}px; line-height: ${cell}px; font-size: 10px;`}
+        >
+          {row.day}
+        </div>
+      ))
+    }
+  </div>
+  <div class="grow">
+    <div
+      class="grid grid-cols-24"
+      style={`gap: ${gap}px; margin-bottom: ${gap}px;`}
+    >
+      {
+        hourLabels.map((label) => (
+          <div class="text-center font-mono text-[9px] text-ink-ghost" style="height: 14px;">
+            {label}
+          </div>
+        ))
+      }
+    </div>
+    <div class="grid grid-cols-24" style={`gap: ${gap}px;`}>
+      {
+        rows.flatMap((row) =>
+          row.hours.map((h) => (
+            <div
+              class="rounded-[2px]"
+              style={`height: ${cell}px; background: ${h.bg};`}
+              title={`${row.day} ${String(h.hour).padStart(2, '0')}:00`}
+            />
+          ))
+        )
+      }
+    </div>
+  </div>
+</div>

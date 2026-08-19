@@ -31,6 +31,7 @@ workspace** whose members are `backend/` and `desktop/`.
 | `backend/` | The Rust library and the headless `rhizolog` server (crate `rhizolog`) |
 | `desktop/` | The Tauri app (crate and binary `rhizolog-desktop`; the *product* is Rhizolog) |
 | `frontend/` | The TypeScript frontend, served by the backend |
+| `site/` | The static product site at rhizolog.com. Astro, built separately and deployed on its own; the backend neither serves it nor knows about it |
 | `example-wiki/` | A small committed wiki *and time log* to run against; its `index.md` states what the dashboard should report about both |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
 | `README.md` | Setup and usage, for people who are not this file |
@@ -71,15 +72,43 @@ authored thing in there that is ignored too. See
 - `axum` — HTTP server
 - `utoipa-axum` — OpenAPI definitions kept in sync with the axum routes
 
-**Frontend** (`frontend/`, not yet scaffolded) — TypeScript:
+**Frontend** (`frontend/`) — TypeScript:
 
 - `pnpm` — package manager
+- Vite — build tool and dev server
 - SolidJS — frontend framework
-- TailwindCSS — CSS framework
-- DaisyUI — component library
+- TailwindCSS v4 — through `@tailwindcss/vite`, with no `tailwind.config.js`
+  and no PostCSS config; `src/index.css` is the whole of it
+- daisyUI 5 — component library, loaded through Tailwind's `@plugin` directive
+  rather than a JS plugin array
+- Vitest — test runner, jsdom environment
 
 The backend serves the built frontend assets; there is no separate frontend
 deployment.
+
+**Site** (`site/`) — the product site at rhizolog.com:
+
+- `pnpm` — package manager, and its own `node_modules` and lockfile, exactly as
+  `frontend/` has. There is no pnpm workspace at the root.
+- Astro — static site generator, no adapter, output is plain files
+- TailwindCSS v4 — through `@tailwindcss/vite`, the same wiring as `frontend/`,
+  with the theme in `src/styles/global.css` under `@theme` and no
+  `tailwind.config.js`
+- `@fontsource` — the fonts are self-hosted rather than linked from a font CDN.
+  A page that argues your notes should not leave your disk has no business
+  making a third-party request to render its own headings.
+
+Astro rather than plain HTML because of what the site grows into: the docs
+section is markdown, and the demo prerenders the dashboard's own SolidJS
+components through `@astrojs/solid-js` so that it cannot show a UI the download
+does not have. daisyUI is deliberately absent until the demo needs it — the
+landing page's design is its own, and the dashboard's component library has no
+business styling it.
+
+**Astro's telemetry is disabled**, which is a per-machine setting written by
+`pnpm exec astro telemetry disable` rather than anything in this repository. A
+build somewhere else — CI, a fresh checkout — needs
+`ASTRO_TELEMETRY_DISABLED=1` in the environment, or it phones home.
 
 ## Managing the monorepo
 
@@ -91,8 +120,9 @@ deployment.
 - **Main branch is `master`.** Commit directly to it or branch off it for
   larger work.
 - **Scope commit subjects** by the area touched: `backend:`, `ui:` for
-  frontend, `kb:` for knowledge base, `repo:` for root-level/tooling changes.
-  A commit may touch several areas; pick the dominant one.
+  frontend, `site:` for the product site, `kb:` for knowledge base, `repo:` for
+  root-level/tooling changes. A commit may touch several areas; pick the
+  dominant one.
 - **The knowledge base is first-class.** When a design decision is made or an
   implementation approach changes, record it as a page in `knowledge-base/`
   in the same commit as the code where practical. `knowledge-base/index.md`
@@ -156,6 +186,32 @@ pnpm test        # vitest run (jsdom); `pnpm test:watch` to iterate
 pnpm typecheck   # tsc --noEmit
 pnpm gen:api     # regenerate API types from openapi.json
 ```
+
+Site (run from `site/`):
+
+```
+pnpm install     # install dependencies
+pnpm dev         # dev server on :4321
+pnpm build       # static output to site/dist
+pnpm preview     # serve what build produced
+pnpm typecheck   # astro check
+```
+
+`pnpm dev` **daemonises** — the command returns and the server keeps running, so
+`pnpm dev` twice does not tell you the port is taken. `pnpm exec astro dev
+status` says whether one is up and `pnpm exec astro dev stop` ends it.
+
+`pnpm typecheck` reads `.astro/types.d.ts`, which `dev` and `build` generate, so
+on a fresh checkout run one of those first or `astro check` fails on a missing
+file rather than on your code.
+
+The two figures on the landing page, the link graph and the hours heat map, are
+**hand-authored placeholders** and say so at the top of their components. They
+are meant to be replaced by fixtures captured from a real server run against
+`example-wiki/`, and the heat map's capture needs
+`?at=2026-08-06T18:00:00Z&offset=0` — the committed entries are pinned to
+30 July to 6 August 2026, so asking without it returns an empty week and the
+figure renders blank. See `knowledge-base/product-site.md`.
 
 `frontend/openapi.json` is the input to `pnpm gen:api`. Refresh it from
 `backend/` with:

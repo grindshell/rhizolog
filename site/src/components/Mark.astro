@@ -1,0 +1,30 @@
+---
+/*
+ * The branching-node mark, the same geometry as `desktop/icons/` and the
+ * dashboard favicon. Six nodes, five edges, no trunk.
+ */
+interface Props {
+  size?: number;
+  color?: string;
+}
+
+const { size = 22, color = 'var(--color-mint)' } = Astro.props;
+---
+
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke={color}
+  stroke-width="1.4"
+  aria-hidden="true"
+>
+  <path d="M4 5 L8 12 M12 5 L8 12 M20 5 L16 12 M8 12 L12 19 M16 12 L12 19"></path>
+  <circle cx="4" cy="5" r="2.4" fill={color} stroke="none"></circle>
+  <circle cx="12" cy="5" r="2.4" fill={color} stroke="none"></circle>
+  <circle cx="20" cy="5" r="2.4" fill={color} stroke="none"></circle>
+  <circle cx="8" cy="12" r="2.4" fill={color} stroke="none"></circle>
+  <circle cx="16" cy="12" r="2.4" fill={color} stroke="none"></circle>
+  <circle cx="12" cy="19" r="2.4" fill={color} stroke="none"></circle>
+</svg>
