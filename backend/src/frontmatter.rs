@@ -7,7 +7,9 @@
 //! Those answers live here rather than being written twice, because the second
 //! copy is where they quietly diverge.
 
-use serde::de::DeserializeOwned;
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use serde::de::{DeserializeOwned, Error as _};
+use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
 pub const DELIMITER: &str = "---";
@@ -74,6 +76,54 @@ pub fn parse<T: DeserializeOwned + Default>(yaml: &str) -> Result<T, Frontmatter
     Ok(serde_yaml_ng::from_str(yaml)?)
 }
 
+/// Read an optional timestamp that may have been written as a bare date.
+///
+/// Rhizolog writes `2026-08-19T10:00:00Z` and chrono's own deserialiser wants
+/// exactly that. A person writing the field by hand writes `2026-08-19`, and
+/// refusing it does not cost them the field — it costs them the **page**, since
+/// a frontmatter block that will not parse makes the whole file malformed and
+/// drops it out of every listing, title, tags and all. That is a heavy price for
+/// a date somebody wrote the ordinary way.
+///
+/// A bare date means **midnight UTC**. There is no time in it to lose, so the
+/// only question is which convention to fill in, and UTC is the one the rest of
+/// this codebase already speaks.
+///
+/// A *naive datetime* — `2026-08-19T10:00:00`, with no zone — is still refused,
+/// and the difference is the point. A bare date carries no time, so supplying
+/// one invents nothing; a wall-clock time with no zone carries a real time whose
+/// meaning depends on where it was written, and reading it as UTC would silently
+/// move it by up to fourteen hours. Being told is better.
+pub fn timestamp<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // Through `String` rather than through chrono, because YAML resolves a plain
+    // scalar against the type it is going into: both spellings arrive here as
+    // text, and neither has been interpreted yet.
+    let Some(raw) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    parse_timestamp(&raw)
+        .map(Some)
+        .ok_or_else(|| D::Error::custom(format!(
+            "expected a timestamp like 2026-08-19T10:00:00Z or a date like 2026-08-19, found {raw:?}"
+        )))
+}
+
+fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
+    let text = raw.trim();
+
+    if let Ok(stamp) = DateTime::parse_from_rfc3339(text) {
+        return Some(stamp.with_timezone(&Utc));
+    }
+
+    NaiveDate::parse_from_str(text, "%Y-%m-%d")
+        .ok()
+        .map(|date| date.and_time(NaiveTime::MIN).and_utc())
+}
+
 /// Put a fenced YAML block back in front of a body.
 pub fn compose(yaml: &str, body: &str) -> String {
     let mut out = String::with_capacity(yaml.len() + body.len() + 16);
@@ -137,5 +187,88 @@ mod tests {
     fn a_bom_is_stripped_but_only_at_the_front() {
         assert_eq!(strip_bom("\u{feff}---\n"), "---\n");
         assert_eq!(strip_bom("a\u{feff}b"), "a\u{feff}b");
+    }
+
+    fn at(text: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(text)
+            .expect("valid timestamp")
+            .with_timezone(&Utc)
+    }
+
+    /// A stand-in for the frontmatter types that carry a timestamp, so this
+    /// module's tests do not have to reach for a page or an account.
+    #[derive(Debug, Default, serde::Deserialize)]
+    struct Held {
+        #[serde(default, deserialize_with = "timestamp")]
+        created: Option<DateTime<Utc>>,
+    }
+
+    #[test]
+    fn a_timestamp_is_read_in_full_or_as_a_bare_date() {
+        assert_eq!(
+            parse_timestamp("2026-08-19T10:00:00Z"),
+            Some(at("2026-08-19T10:00:00Z"))
+        );
+        // An offset is honoured and normalised, as it always was.
+        assert_eq!(
+            parse_timestamp("2026-08-19T12:00:00+02:00"),
+            Some(at("2026-08-19T10:00:00Z"))
+        );
+        // The date somebody actually types. Midnight UTC invents no time, since
+        // there was none there to begin with.
+        assert_eq!(
+            parse_timestamp("2026-08-19"),
+            Some(at("2026-08-19T00:00:00Z"))
+        );
+        // Quoted is the same string, and surrounding space is not a difference
+        // worth failing a whole page over.
+        assert_eq!(
+            parse_timestamp("  2026-08-19  "),
+            Some(at("2026-08-19T00:00:00Z"))
+        );
+    }
+
+    /// A wall-clock time with no zone is a real time whose meaning depends on
+    /// where it was written. Reading it as UTC would move it silently by up to
+    /// fourteen hours, which is worse than saying so.
+    #[test]
+    fn a_time_without_a_zone_is_still_refused() {
+        assert_eq!(parse_timestamp("2026-08-19T10:00:00"), None);
+        assert_eq!(parse_timestamp("2026-08-19 10:00:00"), None);
+    }
+
+    #[test]
+    fn nonsense_is_refused_rather_than_guessed_at() {
+        for raw in [
+            "yes",
+            "",
+            "2026",
+            "2026-08",
+            "19-08-2026",
+            "2026-13-01",
+            "2026-08-19T",
+            "tomorrow",
+        ] {
+            assert_eq!(parse_timestamp(raw), None, "{raw:?} was accepted");
+        }
+    }
+
+    /// The message a reader gets has to name what would have worked. This is a
+    /// field somebody is editing by hand, by definition.
+    #[test]
+    fn the_refusal_says_what_would_have_worked() {
+        let error = parse::<Held>("created: tomorrow\n").expect_err("refused");
+        let message = error.to_string();
+
+        assert!(message.contains("2026-08-19T10:00:00Z"), "{message}");
+        assert!(message.contains("2026-08-19"), "{message}");
+        assert!(message.contains("tomorrow"), "{message}");
+    }
+
+    #[test]
+    fn an_absent_or_null_timestamp_is_simply_absent() {
+        assert_eq!(parse::<Held>("title: x\n").unwrap().created, None);
+        assert_eq!(parse::<Held>("created: null\n").unwrap().created, None);
+        assert_eq!(parse::<Held>("created:\n").unwrap().created, None);
     }
 }

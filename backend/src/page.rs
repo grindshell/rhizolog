@@ -129,7 +129,16 @@ pub struct Frontmatter {
     pub tags: Vec<String>,
 
     /// Set once, when the page is created. Absent for files written by hand.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Accepts a bare `2026-08-19` as well as a full timestamp, because this is
+    /// the one field in a page's frontmatter strict enough that writing it the
+    /// ordinary way would otherwise make the whole page malformed. It is written
+    /// back as a full timestamp — see [`frontmatter::timestamp`].
+    #[serde(
+        default,
+        deserialize_with = "frontmatter::timestamp",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created: Option<DateTime<Utc>>,
 
     /// Who may read this page. Absent means [`Visibility::Internal`].
@@ -476,6 +485,55 @@ mod tests {
                 "{hazard:?} did not survive the round trip:\n{written}"
             );
         }
+    }
+
+    /// The date somebody writes by hand, and what happens to it afterwards.
+    ///
+    /// Rewriting normalises it to a full timestamp, which is worth stating
+    /// because this module otherwise keeps the frontmatter as written. `created`
+    /// is not stored as written and never was — it is parsed into a
+    /// `DateTime<Utc>`, so an offset was already being normalised away. Midnight
+    /// is what the bare date meant; the file just says so afterwards.
+    #[test]
+    fn a_bare_date_is_read_as_midnight_and_written_back_in_full() {
+        let page = page("---\ntitle: Rhizome\ncreated: 2026-08-19\n---\n\nBody.\n");
+
+        assert_eq!(page.created(), at("2026-08-19T00:00:00Z"));
+
+        let written = page.to_markdown();
+        assert!(
+            written.contains("created: 2026-08-19T00:00:00Z"),
+            "the rewritten page did not carry a full timestamp:\n{written}"
+        );
+
+        let again = Page::from_markdown(
+            Slug::parse("notes/rhizome").unwrap(),
+            &written,
+            at("2026-08-05T12:00:00Z"),
+        )
+        .expect("the rewritten page parses");
+        assert_eq!(again.created(), page.created());
+    }
+
+    /// The whole reason the bare date is worth accepting: the cost of refusing
+    /// it was never the field, it was the page.
+    #[test]
+    fn a_date_written_by_hand_does_not_cost_the_page_its_title() {
+        let page = page("---\ntitle: Rhizome\ntags: [theory]\ncreated: 2026-08-19\n---\n\nBody.\n");
+
+        assert_eq!(page.title(), "Rhizome");
+        assert_eq!(page.tags(), ["theory"]);
+
+        // And something that is not a date at all still is refused, because at
+        // that point there is nothing to be faithful to.
+        assert!(
+            Page::from_markdown(
+                Slug::parse("notes/rhizome").unwrap(),
+                "---\ncreated: yes\n---\n\nBody.\n",
+                at("2026-08-05T12:00:00Z"),
+            )
+            .is_err()
+        );
     }
 
     /// The one YAML word that is not a string, and what it means in each place.

@@ -277,7 +277,17 @@ pub struct UserFrontmatter {
     pub password: Option<String>,
 
     /// Set once, when the account is created.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Reads a bare `2026-08-19` too, as a page's does. An account file is
+    /// hand-edited more often than a page is — it is where a display name or a
+    /// role gets changed — and a frontmatter block that will not parse takes the
+    /// password hash with it, which is a locked-out account rather than a
+    /// missing date.
+    #[serde(
+        default,
+        deserialize_with = "frontmatter::timestamp",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created: Option<DateTime<Utc>>,
 }
 
@@ -401,6 +411,21 @@ mod tests {
             at("2026-08-19T12:00:00Z"),
         )
         .expect("account should parse")
+    }
+
+    /// An account file gets hand-edited — it is where a display name or a role
+    /// is changed — and a frontmatter block that will not parse takes the
+    /// password hash down with it. A date written the ordinary way must not be
+    /// the thing that locks somebody out.
+    #[test]
+    fn a_bare_date_does_not_cost_an_account_its_password() {
+        let parsed = user(
+            "---\ndisplay_name: Tim Yuen\nrole: owner\npassword: $argon2id$abc\ncreated: 2026-08-19\n---\n\nHello.\n",
+        );
+
+        assert_eq!(parsed.created(), at("2026-08-19T00:00:00Z"));
+        assert!(parsed.has_password());
+        assert!(parsed.is_owner());
     }
 
     #[test]

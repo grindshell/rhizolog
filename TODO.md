@@ -105,19 +105,21 @@ pieces that are known to be missing.
 
 ## Rough edges
 
-- **"Frontmatter is not valid YAML" is said about valid YAML.**
+- **"Frontmatter is not valid YAML" is still said about valid YAML.**
   `FrontmatterError::InvalidYaml` wraps every `serde_yaml_ng::Error`, and that
-  type covers deserialisation as well as parsing — so `created: 2026-08-19`, a
-  bare date in a field that wants a full timestamp, reports *"frontmatter is not
-  valid YAML: created: premature end of input"*. The YAML is fine; the value is
-  not a timestamp. Worse than the wording is the consequence: `created` is the
-  one frontmatter field strict enough for a plausible hand-written value to make
-  a page malformed, which takes it out of every listing. Every other field is a
-  string, and YAML's reserved words all survive the round trip
-  (`every_yaml_reserved_word_survives_a_round_trip` in `backend/src/page.rs`).
-  Splitting the two cases means telling a syntax error from a type error through
-  `serde_yaml_ng::Error`, which does not distinguish them in its API; accepting a
-  bare date is the other fix and is a separate decision.
+  type covers deserialisation as well as parsing — so `created: yes` reports
+  *"frontmatter is not valid YAML"* about YAML that parses perfectly well and
+  merely holds the wrong kind of value. The case that made this matter is fixed:
+  a bare `created: 2026-08-19` is now read as midnight UTC rather than making the
+  whole page malformed. What is left is the wording, on values that really are
+  wrong. Splitting the two means telling a syntax error from a type error through
+  `serde_yaml_ng::Error`, which does not distinguish them in its API.
+- **A time entry's `start` and `end` do not take a bare date.** `created` does,
+  on both a page and an account, and these were deliberately left out rather than
+  forgotten: a bare date on `created` fills in a time that was never there, while
+  a timer that "started on the 19th" is a claim about when, and midnight is a
+  guess at it rather than a convention for it. Cheap to change — one attribute
+  each — if hand-written entries turn out to want it.
 - **A splash window while a large wiki reconciles.** `server::start` returns
   once the index is in step with the files, and the window is only built after
   that — so on a big wiki the gap between double-click and anything appearing is

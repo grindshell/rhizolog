@@ -143,7 +143,8 @@ Knowledge branches off chaotically. See [[notes/rust/async]].
 - **`title`** — optional. Falls back to the first `# H1`, then to the slug's
   humanized basename.
 - **`tags`** — optional list.
-- **`created`** — set once, on creation.
+- **`created`** — set once, on creation. Written as a full timestamp and read as
+  either that or a bare `2026-08-19`, which means midnight UTC.
 - **`visibility`** — optional, one of `public`, `internal`, `restricted`,
   `private`. Absent means `internal`, and an unrecognised word means `private`.
 - **`owner`** and **`readers`** — optional; who a `private` or `restricted` page
@@ -157,6 +158,27 @@ keeps it honest and is consistent with files being the source of truth.
 
 `serde_yaml` is unmaintained (it is published as `0.9.34+deprecated`), so
 frontmatter uses `serde_yaml_ng`.
+
+### A date somebody typed must not cost them the page
+
+Every other field here is a string, so YAML's reserved words survive being
+written and read back — a title of `123`, a tag of `no`, an owner called `null`.
+`created` is the exception: it is parsed into a `DateTime<Utc>`, and a value it
+cannot read is not a missing field but a **malformed page**, which drops out of
+every listing taking its title and tags with it.
+
+That is a heavy price for `created: 2026-08-19`, which is how a person writes a
+date. So `frontmatter::timestamp` reads a bare date as midnight UTC. There is no
+time in a bare date to lose, so filling one in invents nothing.
+
+A wall-clock time with no zone — `2026-08-19T10:00:00` — is still refused, and
+the difference is the point: that value carries a real time whose meaning depends
+on where it was written, and reading it as UTC would move it silently by up to
+fourteen hours. The refusal names both forms that would have worked.
+
+Rewriting normalises a bare date to the full timestamp. This module otherwise
+keeps frontmatter as written, but `created` was never kept as written — it is a
+parsed value, so an offset was already being normalised away.
 
 ### A UTF-8 BOM is stripped before parsing
 
