@@ -385,6 +385,134 @@ fn humanize(basename: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Every string field in the frontmatter goes out through a YAML emitter and
+    /// comes back through a YAML parser, and YAML has a long list of plain
+    /// scalars that mean something other than themselves. A title of `123`, a
+    /// tag of `no`, an owner called `null`: each is a word somebody may
+    /// reasonably type, and each is a word the format spells differently.
+    ///
+    /// Nothing here needs the *emitted* form to be any particular thing — only
+    /// that what went in comes back. Asserting the quoting instead would be
+    /// asserting `serde_yaml_ng`'s style, which is free to change and is not the
+    /// property that matters.
+    #[test]
+    fn every_yaml_reserved_word_survives_a_round_trip() {
+        let hazards = [
+            // Nulls, booleans, and the YAML 1.1 booleans that are not YAML 1.2's
+            // — `no` for Norway is the famous one.
+            "null",
+            "Null",
+            "NULL",
+            "~",
+            "true",
+            "false",
+            "True",
+            "yes",
+            "no",
+            "on",
+            "off",
+            "y",
+            "n", // Numbers, in every base and shape YAML resolves.
+            "123",
+            "0",
+            "007",
+            "0x1f",
+            "0b101",
+            "0o17",
+            "1_000",
+            "1e3",
+            "inf",
+            "nan",
+            // Timestamps and the sexagesimals YAML 1.1 reads as numbers.
+            "2026-08-19",
+            "12:30:00",
+            "1:30",
+            // Indicators: characters that start something in YAML's grammar.
+            ".inf",
+            ".nan",
+            "-",
+            "--",
+            "---",
+            "...",
+            "#hash",
+            "key: value",
+            "[a, b]",
+            "{a: b}",
+            "*anchor",
+            "&anchor",
+            "!tag",
+            "%directive",
+            "@at",
+            "`tick",
+            "|pipe",
+            ">fold",
+            // Whitespace, emptiness, and the two kinds of quote.
+            " leading",
+            "trailing ",
+            "",
+            "a\nb",
+            "\ttab",
+            "'quoted'",
+            "\"quoted\"",
+        ];
+
+        for hazard in hazards {
+            let mut page = page("Body.\n");
+            page.frontmatter.title = Some(hazard.to_owned());
+            page.frontmatter.tags = vec![hazard.to_owned()];
+            page.frontmatter.owner = Some(hazard.to_owned());
+            page.frontmatter.readers = vec![hazard.to_owned()];
+
+            let written = page.to_markdown();
+            let read = Page::from_markdown(
+                Slug::parse("notes/rhizome").unwrap(),
+                &written,
+                at("2026-08-05T12:00:00Z"),
+            )
+            .unwrap_or_else(|error| panic!("{hazard:?} would not parse back: {error}\n{written}"));
+
+            assert_eq!(
+                read.frontmatter, page.frontmatter,
+                "{hazard:?} did not survive the round trip:\n{written}"
+            );
+        }
+    }
+
+    /// The one YAML word that is not a string, and what it means in each place.
+    ///
+    /// `null`, `~` and an empty value are the *scalar*, so a field holding one is
+    /// a field with nothing in it. That is the right reading for all three
+    /// optional fields, and it is worth stating because each fails in a
+    /// different direction: a missing title is derived, a missing owner is
+    /// nobody, and a missing visibility is the default rather than the
+    /// unrecognised-word rule — `null` never becomes a word for that rule to
+    /// fail closed on.
+    ///
+    /// Inside a list the same token is four characters of text instead, which is
+    /// an asymmetry rather than a hazard: `null` is a legal username, and `~` is
+    /// not a username at all, so it names nobody.
+    #[test]
+    fn an_explicit_yaml_null_is_an_absent_field() {
+        let cleared = page("---\ntitle: null\nowner: ~\nvisibility:\n---\n\nBody.\n");
+
+        assert_eq!(cleared.frontmatter.title, None);
+        assert_eq!(cleared.frontmatter.owner, None);
+        assert_eq!(cleared.frontmatter.visibility, None);
+        assert_eq!(cleared.visibility(), Visibility::Internal);
+        assert_eq!(cleared.owner(), None);
+
+        let listed = page("---\ntags: [null]\nreaders: [null, ~]\n---\n\nBody.\n");
+
+        assert_eq!(listed.frontmatter.tags, ["null"]);
+        assert_eq!(listed.frontmatter.readers, ["null", "~"]);
+        // `~` is not a username, so it is dropped rather than kept as a reader
+        // nobody can ever be.
+        assert_eq!(
+            listed.readers(),
+            [Username::parse("null").expect("null is a username")]
+        );
+    }
+
     fn at(text: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(text)
             .unwrap()

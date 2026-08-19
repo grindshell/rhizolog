@@ -64,6 +64,13 @@ It is deliberately not a hard error either. A page whose frontmatter will not
 parse is reported as malformed and drops out of every listing, taking its title,
 tags and `created` with it; discovering a typo that way is worse than the typo.
 
+One thing is not an unrecognised word: `visibility: null`, `visibility: ~` and a
+`visibility:` with nothing after it are the YAML **null scalar**, so the field is
+absent rather than holding a word this rule could fail closed on. They mean
+`internal`, exactly as leaving the line out does — which is right, because that
+is what they say. `visibility: 'null'`, quoted, *is* a word, and an unrecognised
+one, so it means `private`.
+
 ## `public` needs the instance to agree
 
 Marking a page `public` does nothing on its own. An anonymous caller only ever
