@@ -186,5 +186,3 @@ export default function Layout(props: RouteSectionProps) {
     </div>
   )
 }
-
-export { DESTINATIONS }

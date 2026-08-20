@@ -8,7 +8,7 @@ import {
   rejectCandidate,
   rejectCapturePair,
 } from '../api/client'
-import type { CandidateView, CaptureView, IdeaView } from '../api/client'
+import type { CandidateView, CaptureView } from '../api/client'
 import { ErrorNotice } from './Async'
 
 /**
@@ -24,8 +24,15 @@ import { ErrorNotice } from './Async'
  */
 export default function Candidates(props: {
   capture: CaptureView
-  /** Called when a decision was written, so the screen around this can re-read. */
-  onChanged?: (idea?: IdeaView) => void
+  /**
+   * Called when a decision was written, so the screen around this can re-read.
+   *
+   * Deliberately carries nothing. The four decisions here answer with three
+   * different shapes, two of them an `IdeaView` and one a `CaptureView`, and a
+   * parameter that had to be cast to be useful would be a parameter asserting
+   * something it does not know. Whoever needs the record re-reads it.
+   */
+  onChanged?: () => void
 }) {
   const [reloads, setReloads] = createSignal(0)
   const [failure, setFailure] = createSignal<unknown>()
@@ -46,13 +53,13 @@ export default function Candidates(props: {
    */
   const shown = () => (found.error ? undefined : found.latest)
 
-  const guard = async (work: () => Promise<IdeaView | unknown>) => {
+  const guard = async (work: () => Promise<unknown>) => {
     setFailure(undefined)
     try {
-      const result = await work()
+      await work()
       setNaming(undefined)
       setReloads((count) => count + 1)
-      props.onChanged?.(result as IdeaView)
+      props.onChanged?.()
     } catch (error) {
       setFailure(error)
     }

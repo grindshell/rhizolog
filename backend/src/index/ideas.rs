@@ -801,9 +801,10 @@ impl Index {
     /// Everything the analyzer and the lifecycle rules read about this owner's
     /// ideas, in id order.
     ///
-    /// `only` narrows it to one idea. Two queries either way: one row per
-    /// membership, and one for the affirmations, so a listing of forty ideas
-    /// costs two round trips rather than eighty.
+    /// `only` narrows it to one idea. Three queries either way: one row per
+    /// membership, one for the affirmations, and one for the dismissals, so a
+    /// listing of forty ideas costs three round trips rather than a hundred and
+    /// twenty.
     pub async fn idea_evidence(
         &self,
         owner: &Owner,
@@ -958,15 +959,15 @@ impl Index {
             // today", and it answers it to the caller rather than to the rules.
             let mut dismissals: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
             {
-                let mut statement = connection.prepare(
+                let mut statement = connection.prepare(&format!(
                     "select idea_events.idea_id, max(idea_events.created)
                      from idea_events
                      join idea_threads on idea_threads.id = idea_events.idea_id
                      where idea_threads.owner is :owner
                        and (:only is null or idea_threads.id = :only)
-                       and idea_events.kind = 'rediscovery_dismissed'
-                     group by idea_events.idea_id",
-                )?;
+                       and idea_events.kind = {DISMISSING_KIND}
+                     group by idea_events.idea_id"
+                ))?;
 
                 let rows = statement
                     .query_map(named_params! { ":owner": &owner, ":only": &only }, |row| {
@@ -1579,6 +1580,14 @@ fn affirming(kind: &str) -> Option<EventKind> {
         _ => None,
     }
 }
+
+/// The decision that keeps an idea off the rediscovery card for thirty days.
+///
+/// Here for the same reason as [`AFFIRMING_KINDS`] and read for a different one:
+/// nothing folds a dismissal into any table, because it is not state anybody's
+/// rules consult. The listing reports when it happened and whoever is choosing
+/// what to resurface applies the thirty days.
+const DISMISSING_KIND: &str = "'rediscovery_dismissed'";
 
 /// A capture belongs to an idea when the latest connect-or-disconnect decision
 /// about the pair says connected, and a seed with no decision at all counts as
@@ -2361,6 +2370,7 @@ mod tests {
             FOLD_CAPTURE_STATE,
             FOLD_CAPTURE_REJECTIONS,
             AFFIRMING_KINDS,
+            DISMISSING_KIND,
         ]
         .concat();
         // And the two the lifecycle rules select on read the same way back.
@@ -2381,6 +2391,7 @@ mod tests {
             EventKind::IdeaRetired,
             EventKind::IdeaReopened,
             EventKind::IdeaPromoted,
+            EventKind::RediscoveryDismissed,
         ] {
             assert!(
                 fold.contains(kind.as_str()),
