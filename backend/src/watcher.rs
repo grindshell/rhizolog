@@ -31,6 +31,9 @@ use notify::RecursiveMode;
 use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 use tokio::task::JoinHandle;
 
+use crate::ideas::{
+    CAPTURES_DIR, CaptureId, EVENTS_DIR, EventId, IDEAS_DIR, IdeaId, IdeaStore, THREADS_DIR,
+};
 use crate::index::{Index, sync::sync};
 use crate::slug::Slug;
 use crate::store::{INTERNAL_DIR, Store};
@@ -42,14 +45,36 @@ use crate::times::{TIMES_DIR, TimeId, TimeStore};
 /// that a save feels like it took effect immediately.
 const DEBOUNCE: Duration = Duration::from_millis(500);
 
+/// The individual files a batch of events named.
+///
+/// A struct rather than five fields on the enum variant below, so that a caller
+/// building one can name the tree it cares about and default the rest. There are
+/// five authored trees now and there is no reason to think that is the end of
+/// it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Targets {
+    pub pages: BTreeSet<Slug>,
+    pub times: BTreeSet<TimeId>,
+    pub captures: BTreeSet<CaptureId>,
+    pub ideas: BTreeSet<IdeaId>,
+    pub events: BTreeSet<EventId>,
+}
+
+impl Targets {
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
+            && self.times.is_empty()
+            && self.captures.is_empty()
+            && self.ideas.is_empty()
+            && self.events.is_empty()
+    }
+}
+
 /// What a batch of filesystem events asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reindex {
     /// Re-read these specific files.
-    Targets {
-        pages: BTreeSet<Slug>,
-        times: BTreeSet<TimeId>,
-    },
+    Targets(Targets),
     /// Something happened that cannot be attributed to individual files — a
     /// directory was renamed or deleted, say. Rescan everything.
     Everything,
@@ -65,7 +90,12 @@ pub enum Reindex {
 /// The returned handle exists so a shutdown can cancel the watcher and wait for
 /// it to let go of the index; see [`crate::server::Server::shutdown`]. Dropping
 /// it detaches the watcher, which is what a process about to exit wants.
-pub fn spawn(store: Store, times: TimeStore, index: Index) -> Option<JoinHandle<()>> {
+pub fn spawn(
+    store: Store,
+    times: TimeStore,
+    ideas: IdeaStore,
+    index: Index,
+) -> Option<JoinHandle<()>> {
     let root = store.root().to_path_buf();
     let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -114,7 +144,7 @@ pub fn spawn(store: Store, times: TimeStore, index: Index) -> Option<JoinHandle<
                 continue;
             };
 
-            apply(&store, &times, &index, plan).await;
+            apply(&store, &times, &ideas, &index, plan).await;
         }
 
         tracing::debug!("file watcher stopped");
@@ -128,6 +158,9 @@ enum Change {
     Ignore,
     Page(Slug),
     Time(TimeId),
+    Capture(CaptureId),
+    Idea(IdeaId),
+    Event(EventId),
     /// Something whose effects cannot be enumerated from the event alone.
     Rescan,
 }
@@ -139,8 +172,7 @@ enum Change {
 /// through, both of which live inside the wiki directory and would otherwise
 /// have this chasing its own tail.
 pub fn plan<'a>(root: &Path, paths: impl Iterator<Item = &'a Path>) -> Option<Reindex> {
-    let mut pages = BTreeSet::new();
-    let mut times = BTreeSet::new();
+    let mut targets = Targets::default();
     let mut rescan = false;
 
     for path in paths {
@@ -152,10 +184,19 @@ pub fn plan<'a>(root: &Path, paths: impl Iterator<Item = &'a Path>) -> Option<Re
         match classify(relative) {
             Change::Ignore => {}
             Change::Page(slug) => {
-                pages.insert(slug);
+                targets.pages.insert(slug);
             }
             Change::Time(id) => {
-                times.insert(id);
+                targets.times.insert(id);
+            }
+            Change::Capture(id) => {
+                targets.captures.insert(id);
+            }
+            Change::Idea(id) => {
+                targets.ideas.insert(id);
+            }
+            Change::Event(id) => {
+                targets.events.insert(id);
             }
             Change::Rescan => rescan = true,
         }
@@ -163,10 +204,10 @@ pub fn plan<'a>(root: &Path, paths: impl Iterator<Item = &'a Path>) -> Option<Re
 
     if rescan {
         Some(Reindex::Everything)
-    } else if pages.is_empty() && times.is_empty() {
+    } else if targets.is_empty() {
         None
     } else {
-        Some(Reindex::Targets { pages, times })
+        Some(Reindex::Targets(targets))
     }
 }
 
@@ -208,26 +249,51 @@ fn classify(relative: &Path) -> Change {
 
 /// Work out what a path inside `.rhizolog/` is.
 ///
-/// Almost everything here is the server's own business — the database and its
-/// write-ahead log, which is what the blanket "ignore hidden paths" rule used
-/// to be for. The exception is the time log, which is authored data that
-/// happens to live in the same directory, and which therefore has to be watched
-/// exactly as the pages are.
+/// Most of what lives here is the server's own business — the database and its
+/// write-ahead log, which is what the blanket "ignore hidden paths" rule used to
+/// be for. The exceptions are the time log and Idea Inbox, which are authored
+/// data that happen to share the directory, and which therefore have to be
+/// watched exactly as the pages are. Accounts stay ignored: they are read from
+/// disk on every request and there is no index over them to keep in step.
 fn classify_internal(rest: &[&str]) -> Change {
-    if rest.first() != Some(&TIMES_DIR) {
-        return Change::Ignore;
+    match rest {
+        [TIMES_DIR, tail @ ..] => classify_time(tail),
+        [IDEAS_DIR, tail @ ..] => classify_idea(tail),
+        _ => Change::Ignore,
     }
+}
 
-    match rest.len() {
-        // The times directory itself was created, moved or removed.
-        1 => Change::Rescan,
-        3 => match TimeId::from_relative_path(Path::new(rest[1]).join(rest[2]).as_path()) {
-            Some(id) => Change::Time(id),
-            None => Change::Rescan,
-        },
-        // A month directory, or something nested deeper than an entry can be.
+fn classify_time(rest: &[&str]) -> Change {
+    match rest {
+        [month, file] => month_filed(TimeId::from_relative_path, month, file)
+            .map_or(Change::Rescan, Change::Time),
+        // The times directory itself, a month directory on its own, or
+        // something nested deeper than an entry can be.
         _ => Change::Rescan,
     }
+}
+
+/// Work out which of Idea Inbox's three trees a path is in, and which record.
+///
+/// Anything that is not exactly one of the three shapes forces a rescan rather
+/// than being guessed at, which covers a tree directory being created or moved
+/// and a stray file dropped in by hand.
+fn classify_idea(rest: &[&str]) -> Change {
+    match rest {
+        [CAPTURES_DIR, month, file] => month_filed(CaptureId::from_relative_path, month, file)
+            .map_or(Change::Rescan, Change::Capture),
+        [THREADS_DIR, file] => {
+            IdeaId::from_relative_path(Path::new(file)).map_or(Change::Rescan, Change::Idea)
+        }
+        [EVENTS_DIR, month, file] => month_filed(EventId::from_relative_path, month, file)
+            .map_or(Change::Rescan, Change::Event),
+        _ => Change::Rescan,
+    }
+}
+
+/// Recover an id from the `<YYYY-MM>/<id>.md` shape the two bucketed trees use.
+fn month_filed<Id>(recover: fn(&Path) -> Option<Id>, month: &str, file: &str) -> Option<Id> {
+    recover(&Path::new(month).join(file))
 }
 
 /// A relative path as text segments, or `None` if it holds anything that is not
@@ -242,32 +308,47 @@ fn segments(relative: &Path) -> Option<Vec<&str>> {
         .collect()
 }
 
-async fn apply(store: &Store, times: &TimeStore, index: &Index, plan: Reindex) {
+async fn apply(store: &Store, times: &TimeStore, ideas: &IdeaStore, index: &Index, plan: Reindex) {
     match plan {
-        Reindex::Everything => match sync(store, times, index).await {
+        Reindex::Everything => match sync(store, times, ideas, index).await {
             Ok(report) if report.changed_anything() => {
                 tracing::info!(
                     pages = report.pages.indexed,
                     times = report.times.indexed,
-                    removed = report.pages.removed + report.times.removed,
+                    captures = report.captures.indexed,
+                    ideas = report.ideas.indexed,
+                    events = report.events.indexed,
+                    removed = report.removed(),
                     "picked up external changes"
                 );
             }
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "could not rescan the wiki"),
         },
-        Reindex::Targets {
-            pages,
-            times: changed,
-        } => {
-            for slug in pages {
+        Reindex::Targets(targets) => {
+            for slug in targets.pages {
                 if let Err(error) = reindex_page(store, index, &slug).await {
                     tracing::warn!(%slug, %error, "could not reindex a changed page");
                 }
             }
-            for id in changed {
+            for id in targets.times {
                 if let Err(error) = reindex_time(times, index, &id).await {
                     tracing::warn!(%id, %error, "could not reindex a changed time entry");
+                }
+            }
+            for id in targets.captures {
+                if let Err(error) = reindex_capture(ideas, index, &id).await {
+                    tracing::warn!(%id, %error, "could not reindex a changed capture");
+                }
+            }
+            for id in targets.ideas {
+                if let Err(error) = reindex_idea(ideas, index, &id).await {
+                    tracing::warn!(%id, %error, "could not reindex a changed idea thread");
+                }
+            }
+            for id in targets.events {
+                if let Err(error) = reindex_event(ideas, index, &id).await {
+                    tracing::warn!(%id, %error, "could not reindex a changed decision event");
                 }
             }
         }
@@ -320,6 +401,71 @@ async fn reindex_time(
     Ok(())
 }
 
+/// The same, for one capture.
+///
+/// The index recomputes every idea this capture bears on, so a capture appearing
+/// or disappearing under the server's feet moves the threads that name it too.
+async fn reindex_capture(
+    ideas: &IdeaStore,
+    index: &Index,
+    id: &CaptureId,
+) -> Result<(), crate::index::IndexError> {
+    match ideas.read_capture(id).await {
+        Ok(capture) => {
+            index.upsert_capture(&capture).await?;
+            tracing::debug!(%id, "reindexed a capture after an external edit");
+        }
+        Err(error) => {
+            tracing::debug!(%id, %error, "dropping a capture that could not be read");
+            index.remove_capture(id).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The same, for one idea thread.
+async fn reindex_idea(
+    ideas: &IdeaStore,
+    index: &Index,
+    id: &IdeaId,
+) -> Result<(), crate::index::IndexError> {
+    match ideas.read_idea(id).await {
+        Ok(idea) => {
+            index.upsert_idea(&idea).await?;
+            tracing::debug!(%id, "reindexed an idea thread after an external edit");
+        }
+        Err(error) => {
+            tracing::debug!(%id, %error, "dropping an idea thread that could not be read");
+            index.remove_idea(id).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The same, for one decision event.
+///
+/// Editing an event file by hand is not how decisions are meant to be reversed,
+/// and it is a thing a person with the disk can do. Reindexing it refolds the
+/// idea and captures it names, so the state comes back in line with whatever the
+/// files now say.
+async fn reindex_event(
+    ideas: &IdeaStore,
+    index: &Index,
+    id: &EventId,
+) -> Result<(), crate::index::IndexError> {
+    match ideas.read_event(id).await {
+        Ok(event) => {
+            index.upsert_idea_event(&event).await?;
+            tracing::debug!(%id, "reindexed a decision event after an external edit");
+        }
+        Err(error) => {
+            tracing::debug!(%id, %error, "dropping a decision event that could not be read");
+            index.remove_idea_event(id).await?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,17 +481,17 @@ mod tests {
     }
 
     fn slugs(raw: &[&str]) -> Reindex {
-        Reindex::Targets {
+        Reindex::Targets(Targets {
             pages: raw.iter().map(|s| Slug::parse(s).unwrap()).collect(),
-            times: BTreeSet::new(),
-        }
+            ..Targets::default()
+        })
     }
 
     fn ids(raw: &[&str]) -> Reindex {
-        Reindex::Targets {
-            pages: BTreeSet::new(),
+        Reindex::Targets(Targets {
             times: raw.iter().map(|s| TimeId::parse(s).unwrap()).collect(),
-        }
+            ..Targets::default()
+        })
     }
 
     #[test]
@@ -401,10 +547,82 @@ mod tests {
                 "notes/rhizome.md",
                 ".rhizolog/times/2026-08/20260806T090000-000000000.md",
             ]),
-            Some(Reindex::Targets {
+            Some(Reindex::Targets(Targets {
                 pages: [Slug::parse("notes/rhizome").unwrap()].into(),
                 times: [TimeId::parse("20260806T090000-000000000").unwrap()].into(),
-            })
+                ..Targets::default()
+            }))
+        );
+    }
+
+    /// Idea Inbox is three trees under one directory, each with its own shape,
+    /// and a path in one of them must never be read as a record in another.
+    #[test]
+    fn each_idea_tree_reindexes_just_the_record_that_changed() {
+        assert_eq!(
+            planned(&[".rhizolog/ideas/captures/2026-08/20260820T141530-123456789.md"]),
+            Some(Reindex::Targets(Targets {
+                captures: [CaptureId::parse("20260820T141530-123456789").unwrap()].into(),
+                ..Targets::default()
+            }))
+        );
+        assert_eq!(
+            planned(&[".rhizolog/ideas/threads/20260820T142000-234567890.md"]),
+            Some(Reindex::Targets(Targets {
+                ideas: [IdeaId::parse("20260820T142000-234567890").unwrap()].into(),
+                ..Targets::default()
+            }))
+        );
+        assert_eq!(
+            planned(&[".rhizolog/ideas/events/2026-08/20260820T142030-345678901.md"]),
+            Some(Reindex::Targets(Targets {
+                events: [EventId::parse("20260820T142030-345678901").unwrap()].into(),
+                ..Targets::default()
+            }))
+        );
+    }
+
+    /// A thread is filed flat and a capture is filed by month, so the wrong
+    /// shape in the right tree is not a record: it is something nobody can
+    /// attribute, and the safe reading is to go and look at everything.
+    #[test]
+    fn the_wrong_shape_in_an_idea_tree_forces_a_rescan() {
+        for path in [
+            // A thread nested under a month, and a capture that is not.
+            ".rhizolog/ideas/threads/2026-08/20260820T142000-234567890.md",
+            ".rhizolog/ideas/captures/20260820T141530-123456789.md",
+            // Filed under a month it does not belong to.
+            ".rhizolog/ideas/captures/2026-07/20260820T141530-123456789.md",
+            // A stray file, and the directories themselves.
+            ".rhizolog/ideas/captures/2026-08/notes.md",
+            ".rhizolog/ideas/captures/2026-08",
+            ".rhizolog/ideas/captures",
+            ".rhizolog/ideas/threads",
+            ".rhizolog/ideas",
+            // A tree nobody has heard of.
+            ".rhizolog/ideas/drafts/20260820T142000-234567890.md",
+        ] {
+            assert_eq!(planned(&[path]), Some(Reindex::Everything), "for {path}");
+        }
+    }
+
+    /// Accounts share the directory and are deliberately not watched: they are
+    /// read from disk on every request, so there is no index to keep in step.
+    #[test]
+    fn accounts_are_still_ignored() {
+        assert_eq!(planned(&[".rhizolog/users/tim.md"]), None);
+        assert_eq!(planned(&[".rhizolog/users"]), None);
+    }
+
+    #[test]
+    fn the_temporary_files_of_an_idea_write_are_ignored() {
+        assert_eq!(
+            planned(&[".rhizolog/ideas/captures/2026-08/.20260820T141530-123456789.md.tmp"]),
+            None
+        );
+        assert_eq!(
+            planned(&[".rhizolog/ideas/threads/.20260820T142000-234567890.md.tmp"]),
+            None
         );
     }
 

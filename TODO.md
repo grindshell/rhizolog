@@ -174,26 +174,21 @@ pieces that are known to be missing.
 ## Idea Inbox
 
 The implementation direction is settled and recorded in
-[Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phase I0, the
-authored model and store, is built**; the five phases after it are not, so the
-feature is not usable and capture alone is not the MVP. The work is phased so
-that the authored store can land before analysis and UI without calling that
-partial slice the feature.
+[Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phases I0 and
+I1 are built**: the authored model and store, and the derived index that folds
+decisions into current state, reconciles at startup and follows external edits.
+The four phases after them are not, so the feature is not usable and capture
+alone is not the MVP. The work is phased so that the authored store can land
+before analysis and UI without calling that partial slice the feature.
 
-- **Nothing outside `backend/src/ideas/` knows the store exists.** `AppState`,
-  `server::start`, manual reindex and the watcher are all untouched, because
-  wiring a store into startup before anything reconciles it would create a
-  directory on every wiki for no reason. `AppState` should hold an
-  `IdeaService` and reach the files through `IdeaService::store()`, which is
-  where the owner rules stop being optional.
-- **No derived index.** Folding decision events into current membership,
-  rejections, lifecycle inputs and promotion state, plus startup
-  reconciliation, a rebuild that equals incremental state, capture FTS, term
-  rows and watcher targets. SQLite may accelerate the feature but may not
-  become its only copy.
 - **No API.** Owner-scoped CRUD, the decision operations, uniform errors,
   OpenAPI schemas and unique operation ids, then regenerating
-  `frontend/openapi.json` and `frontend/src/api/schema.d.ts`.
+  `frontend/openapi.json` and `frontend/src/api/schema.d.ts`. `AppState`
+  already carries an `IdeaService`, so the handlers have somewhere to call.
+- **No term index, and so no analyzer.** `idea_terms` is the one table from the
+  plan that I1 deliberately did not create: tokenization belongs to the
+  analyzer, which arrives with its own fixtures and its own schema bump. A
+  bump costs one scan, which is the whole point of the mechanism.
 - **No explainable recurrence.** TF-IDF version 1, candidate rejection and
   reconsideration, the deterministic lifecycle rules and evidence receipts are
   the part that distinguishes this from a second notes inbox.

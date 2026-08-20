@@ -159,6 +159,14 @@ pub struct ReindexResponse {
     /// The time log under `.rhizolog/times/`, which is scanned the same way
     /// and for the same reason.
     pub times: SyncCountsView,
+    /// Idea Inbox captures under `.rhizolog/ideas/captures/`.
+    pub captures: SyncCountsView,
+    /// Idea threads under `.rhizolog/ideas/threads/`.
+    pub ideas: SyncCountsView,
+    /// Decision events under `.rhizolog/ideas/events/`. Counted apart from the
+    /// threads because they are read by different code and go wrong in
+    /// different ways.
+    pub events: SyncCountsView,
 }
 
 /// Rebuild the index from the files on disk.
@@ -176,18 +184,30 @@ pub struct ReindexResponse {
     ),
 )]
 pub async fn reindex(State(state): State<AppState>) -> AppResult<Json<ReindexResponse>> {
-    let report = rebuild(&state.store, &state.times, &state.index).await?;
+    let report = rebuild(
+        &state.store,
+        &state.times,
+        state.ideas.store(),
+        &state.index,
+    )
+    .await?;
 
     tracing::info!(
         pages = report.pages.indexed,
         times = report.times.indexed,
-        removed = report.pages.removed + report.times.removed,
-        failed = report.pages.failed + report.times.failed,
+        captures = report.captures.indexed,
+        ideas = report.ideas.indexed,
+        events = report.events.indexed,
+        removed = report.removed(),
+        failed = report.failed(),
         "index rebuilt on request"
     );
 
     Ok(Json(ReindexResponse {
         pages: report.pages.into(),
         times: report.times.into(),
+        captures: report.captures.into(),
+        ideas: report.ideas.into(),
+        events: report.events.into(),
     }))
 }

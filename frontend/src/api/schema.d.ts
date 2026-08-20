@@ -1309,6 +1309,16 @@ export interface components {
             pins: components["schemas"]["PinView"][];
         };
         ReindexResponse: {
+            /** @description Idea Inbox captures under `.rhizolog/ideas/captures/`. */
+            captures: components["schemas"]["SyncCountsView"];
+            /**
+             * @description Decision events under `.rhizolog/ideas/events/`. Counted apart from the
+             *     threads because they are read by different code and go wrong in
+             *     different ways.
+             */
+            events: components["schemas"]["SyncCountsView"];
+            /** @description Idea threads under `.rhizolog/ideas/threads/`. */
+            ideas: components["schemas"]["SyncCountsView"];
             /** @description The markdown pages. */
             pages: components["schemas"]["SyncCountsView"];
             /**

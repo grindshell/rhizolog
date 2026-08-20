@@ -8,7 +8,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use rhizolog::{Index, Store, TimeStore, watcher};
+use rhizolog::{IdeaId, IdeaStore, Index, Owner, Store, TimeStore, watcher};
 use tempfile::TempDir;
 
 /// The wikis in this file have no accounts, so every page is visible. What
@@ -24,22 +24,35 @@ const PATIENCE: Duration = Duration::from_secs(15);
 const STARTUP: Duration = Duration::from_millis(500);
 
 async fn watched() -> (TempDir, Store, Index) {
-    let (directory, store, _times, index) = watched_with_times().await;
+    let (directory, store, _times, _ideas, index) = watched_with_stores().await;
     (directory, store, index)
 }
 
 async fn watched_with_times() -> (TempDir, Store, TimeStore, Index) {
+    let (directory, store, times, _ideas, index) = watched_with_stores().await;
+    (directory, store, times, index)
+}
+
+async fn watched_with_ideas() -> (TempDir, IdeaStore, Index) {
+    let (directory, _store, _times, ideas, index) = watched_with_stores().await;
+    (directory, ideas, index)
+}
+
+async fn watched_with_stores() -> (TempDir, Store, TimeStore, IdeaStore, Index) {
     let directory = TempDir::new().expect("temp dir");
     let store = Store::open(directory.path()).await.expect("open store");
     let times = TimeStore::open(directory.path())
         .await
         .expect("open time log");
+    let ideas = IdeaStore::open(directory.path())
+        .await
+        .expect("open idea inbox");
     let index = Index::open(None).await.expect("open index");
 
-    watcher::spawn(store.clone(), times.clone(), index.clone());
+    watcher::spawn(store.clone(), times.clone(), ideas.clone(), index.clone());
     tokio::time::sleep(STARTUP).await;
 
-    (directory, store, times, index)
+    (directory, store, times, ideas, index)
 }
 
 /// Poll `condition` until it holds or [`PATIENCE`] runs out.
@@ -113,6 +126,80 @@ async fn picks_up_a_time_entry_written_outside_the_api() {
 
     eventually("the removal to be picked up", || async {
         index.count_times().await.unwrap_or(1) == 0
+    })
+    .await;
+}
+
+/// Idea Inbox is three more trees inside `.rhizolog/`, and the folded state has
+/// to follow a file appearing or vanishing there exactly as an index row follows
+/// a page. The event is the interesting one: it is not a record anybody reads
+/// directly, it is a decision, so removing its file has to take the decision
+/// back out of the state it produced.
+#[tokio::test]
+async fn picks_up_idea_files_written_outside_the_api() {
+    let (_directory, ideas, index) = watched_with_ideas().await;
+    let capture = "20260820T141530-000000000";
+    let thread = IdeaId::parse("20260820T142000-000000000").expect("valid idea id");
+
+    let captures_month = ideas.captures_root().join("2026-08");
+    tokio::fs::create_dir_all(&captures_month)
+        .await
+        .expect("captures month");
+    tokio::fs::write(
+        captures_month.join(format!("{capture}.md")),
+        "---\ncreated: 2026-08-20T14:15:30Z\n---\n\nDungeon seeds.\n",
+    )
+    .await
+    .expect("write capture");
+    tokio::fs::create_dir_all(ideas.threads_root())
+        .await
+        .expect("threads root");
+    tokio::fs::write(
+        ideas.threads_root().join(format!("{thread}.md")),
+        format!(
+            "---\nname: Dungeon seeds\ncreated: 2026-08-20T14:20:00Z\ncaptures:\n- {capture}\n---\n"
+        ),
+    )
+    .await
+    .expect("write thread");
+
+    eventually("the thread and its seed to be indexed", || async {
+        matches!(
+            index.idea_state(&Owner::open(), &thread).await,
+            Ok(Some(state)) if state.members.len() == 1
+        )
+    })
+    .await;
+
+    let events_month = ideas.events_root().join("2026-08");
+    tokio::fs::create_dir_all(&events_month)
+        .await
+        .expect("events month");
+    let retirement = events_month.join("20260820T142100-000000000.md");
+    tokio::fs::write(
+        &retirement,
+        format!("---\nkind: idea_retired\ncreated: 2026-08-20T14:21:00Z\nidea: {thread}\n---\n"),
+    )
+    .await
+    .expect("write event");
+
+    eventually("the retirement to be folded in", || async {
+        matches!(
+            index.idea_state(&Owner::open(), &thread).await,
+            Ok(Some(state)) if state.retired
+        )
+    })
+    .await;
+
+    tokio::fs::remove_file(&retirement)
+        .await
+        .expect("remove event");
+
+    eventually("the retirement to be folded back out", || async {
+        matches!(
+            index.idea_state(&Owner::open(), &thread).await,
+            Ok(Some(state)) if !state.retired
+        )
     })
     .await;
 }

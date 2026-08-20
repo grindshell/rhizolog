@@ -10,6 +10,7 @@
 
 pub mod audience;
 pub mod graph;
+pub mod ideas;
 pub mod pins;
 pub mod schema;
 pub mod sessions;
@@ -34,6 +35,7 @@ pub use graph::{
     Graph, GraphEdge, GraphNode, GraphOptions, InboundLink, LinkTotals, LinkedPage, OutboundLink,
     PageLinks, PageRef, RouteUsage, Stats, TagCount, WantedPage,
 };
+pub use ideas::{CaptureRecord, IdeaState};
 pub use pins::Pin;
 pub use sessions::StoredSession;
 pub use sync::{SyncCounts, SyncReport, sync};
@@ -721,9 +723,14 @@ impl Index {
 
     /// Drop everything derived from the wiki, so the next scan rebuilds it.
     ///
-    /// Times go too. Unlike pins, they are derived — from the files in
-    /// `.rhizolog/times/` rather than from the markdown, but derived all the
-    /// same, so the scan has somewhere to get them back from.
+    /// Times and Idea Inbox go too. Unlike pins, they are derived — from the
+    /// files under `.rhizolog/` rather than from the markdown, but derived all
+    /// the same, so the scan has somewhere to get them back from.
+    ///
+    /// The full-text tables have to be named here explicitly. They hold their
+    /// own copy of the text, and a file that is gone is walked by nothing, so
+    /// this is the only thing that can take a deleted record's searchable text
+    /// with it.
     pub async fn clear(&self) -> Result<(), IndexError> {
         self.with_connection(|connection| {
             let transaction = connection.transaction()?;
@@ -736,6 +743,16 @@ impl Index {
             transaction.execute("delete from time_pages", [])?;
             transaction.execute("delete from times_fts", [])?;
             transaction.execute("delete from times", [])?;
+            // The folded tables cascade off the two they hang from, except the
+            // ones that deliberately carry no foreign key. Those are named.
+            transaction.execute("delete from idea_membership", [])?;
+            transaction.execute("delete from idea_rejections", [])?;
+            transaction.execute("delete from idea_capture_rejections", [])?;
+            transaction.execute("delete from idea_seed_captures", [])?;
+            transaction.execute("delete from idea_events", [])?;
+            transaction.execute("delete from idea_captures_fts", [])?;
+            transaction.execute("delete from idea_captures", [])?;
+            transaction.execute("delete from idea_threads", [])?;
             transaction.commit()?;
             Ok(())
         })

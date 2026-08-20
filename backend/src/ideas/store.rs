@@ -188,24 +188,42 @@ pub struct IdeaStore {
 }
 
 impl IdeaStore {
-    /// Open (creating if necessary) Idea Inbox for the wiki at `wiki_root`.
+    /// Point at Idea Inbox for the wiki at `wiki_root`, without creating it.
+    ///
+    /// **Nothing is written here**, unlike [`crate::times::TimeStore::open`] and
+    /// the accounts store, and the reason is worth keeping. `server::start`
+    /// opens the stores and then watches the wiki directory, so a store that
+    /// creates directories on open is the server writing into the tree it is
+    /// about to watch. Windows reports those creations *after* the watch is
+    /// established, which lands a spurious full rescan in the first debounce
+    /// window; that rescan indexes files whose own create events are still
+    /// pending, and a file created and deleted inside one window correctly
+    /// collapses to no event at all. The result is an index row for a file that
+    /// is gone, until the next scan. Creating four directories at startup is not
+    /// worth that.
+    ///
+    /// So the trees appear when something is first written to them, which also
+    /// means a wiki that has never captured a thought has no `ideas/` directory
+    /// to explain, back up or wonder about.
+    ///
+    /// The wiki root is canonicalised so the containment check in [`Self::resolve`]
+    /// compares like with like; on Windows that means both sides carry the
+    /// `\\?\` verbatim prefix. The tree paths are then plain joins onto it,
+    /// which is the same path canonicalising would produce unless one of
+    /// `.rhizolog`, `ideas`, `captures`, `threads` or `events` is itself a
+    /// symlink. One that is gets refused rather than followed, exactly as a
+    /// symlinked month directory does.
     pub async fn open(wiki_root: impl AsRef<Path>) -> Result<Self, IdeaStoreError> {
-        let root = wiki_root.as_ref().join(INTERNAL_DIR).join(IDEAS_DIR);
-        tokio::fs::create_dir_all(&root).await?;
-
-        // Each tree is canonicalised on its own so the containment check in
-        // `resolve` compares like with like. On Windows that means both sides
-        // carry the `\\?\` verbatim prefix.
-        let root = tokio::fs::canonicalize(&root).await?;
-        let captures = make_tree(&root, CAPTURES_DIR).await?;
-        let threads = make_tree(&root, THREADS_DIR).await?;
-        let events = make_tree(&root, EVENTS_DIR).await?;
+        let root = tokio::fs::canonicalize(wiki_root.as_ref())
+            .await?
+            .join(INTERNAL_DIR)
+            .join(IDEAS_DIR);
 
         Ok(Self {
+            captures: root.join(CAPTURES_DIR),
+            threads: root.join(THREADS_DIR),
+            events: root.join(EVENTS_DIR),
             root,
-            captures,
-            threads,
-            events,
         })
     }
 
@@ -531,13 +549,6 @@ impl IdeaStore {
     }
 }
 
-/// Create and canonicalise one tree under the Idea Inbox root.
-async fn make_tree(root: &Path, name: &str) -> Result<PathBuf, IdeaStoreError> {
-    let path = root.join(name);
-    tokio::fs::create_dir_all(&path).await?;
-    Ok(tokio::fs::canonicalize(&path).await?)
-}
-
 /// The three outcomes of reading an authored file.
 enum Slurped {
     Text {
@@ -603,7 +614,16 @@ async fn prune_month(path: &Path, tree: &Path) {
 }
 
 /// Walk one tree, keeping only the files this module would have written.
+///
+/// A tree that is not there is empty rather than an error. Nothing creates these
+/// directories until something is written to them, so on a wiki that has never
+/// captured a thought this is the ordinary case, and warning about it would be
+/// noise on every scan.
 fn walk<Id>(root: &Path, recover: fn(&Path) -> Option<Id>, what: &str) -> Vec<IdeaWalkEntry<Id>> {
+    if !root.is_dir() {
+        return Vec::new();
+    }
+
     let mut entries = Vec::new();
 
     let walker = WalkDir::new(root)
@@ -1080,6 +1100,9 @@ mod tests {
         let (_directory, store) = store().await;
         let id = IdeaId::parse("20260820T142000-234567890").unwrap();
 
+        tokio::fs::create_dir_all(store.threads_root())
+            .await
+            .expect("threads root");
         tokio::fs::write(
             id.to_path(store.threads_root()),
             "---\nname: No seeds\n---\n",
@@ -1175,5 +1198,35 @@ mod tests {
     async fn the_displayed_root_is_free_of_verbatim_prefixes() {
         let (_directory, store) = store().await;
         assert!(!store.root_display().starts_with(r"\\?\"));
+    }
+
+    /// Opening the store writes nothing, and walking a tree that is not there is
+    /// empty rather than an error.
+    ///
+    /// The server opens its stores and then watches the wiki directory, so a
+    /// store that created directories on open would be the server writing into
+    /// the tree it is about to watch. That cost a spurious full rescan in the
+    /// first debounce window, and a rescan racing a pending create event leaves
+    /// an index row for a file that has already been deleted. See
+    /// [`IdeaStore::open`].
+    #[tokio::test]
+    async fn opening_creates_nothing() {
+        let (directory, store) = store().await;
+
+        assert!(
+            !directory.path().join(INTERNAL_DIR).join(IDEAS_DIR).exists(),
+            "opening the store wrote into the wiki"
+        );
+        assert!(store.walk_captures().is_empty());
+        assert!(store.walk_ideas().is_empty());
+        assert!(store.walk_events().is_empty());
+
+        // And the first write brings the tree it needs into being.
+        store
+            .create_capture(capture_draft("2026-08-20T14:15:30Z", "A thought.\n"))
+            .await
+            .expect("create");
+        assert!(store.captures_root().is_dir());
+        assert!(!store.threads_root().exists());
     }
 }

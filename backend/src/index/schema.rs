@@ -24,7 +24,12 @@
 /// written before it has neither, and every page in it would read as visible to
 /// everybody — so this is one of the bumps where *not* rebuilding is a leak
 /// rather than a stale row. The rebuild is the same one scan it always is.
-pub const SCHEMA_VERSION: i64 = 7;
+///
+/// Version 8 adds Idea Inbox: the three authored trees under `.rhizolog/ideas/`
+/// and the tables folded from them. `idea_terms` is deliberately absent. It
+/// belongs to the analyzer, which arrives with its own fixtures and its own
+/// bump, and a table nothing writes yet is worse than a second version number.
+pub const SCHEMA_VERSION: i64 = 8;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -254,6 +259,140 @@ create virtual table times_fts using fts5(
     note,
     tokenize = 'unicode61'
 );
+
+-- Idea Inbox, derived from `.rhizolog/ideas/` exactly as `times` is derived from
+-- the log beside it. Three tables mirror the three authored trees, and the rest
+-- are *folded*: they hold what the decision events add up to, and every one of
+-- them is thrown away and recomputed whenever anything they depend on changes.
+--
+-- `owner` is nullable and means the open user of a wiki with no accounts, which
+-- is why every idea query compares it with `is` rather than `=`. Under `=` a
+-- null owner would never match anything, including itself.
+create table idea_captures (
+    id      text primary key,
+    owner   text,
+    created integer not null,
+    updated integer not null,
+    size    integer not null
+) strict;
+
+create index idea_captures_by_owner on idea_captures(owner);
+create index idea_captures_by_created on idea_captures(created);
+
+-- The capture's text lives here and nowhere else. It is not a second column on
+-- `idea_captures` because an fts5 table stores its content anyway, so a column
+-- beside it would be the same string written twice with two chances to disagree.
+-- Keyed by the rowid of its `idea_captures` row, exactly as `pages_fts` is.
+create virtual table idea_captures_fts using fts5(
+    id unindexed,
+    body,
+    tokenize = 'unicode61'
+);
+
+create table idea_threads (
+    id      text primary key,
+    owner   text,
+    name    text not null,
+    created integer not null,
+    updated integer not null,
+    size    integer not null
+) strict;
+
+create index idea_threads_by_owner on idea_threads(owner);
+
+-- The `captures:` list from a thread's own file: what it was started from, and
+-- never what it currently holds. Deliberately no `references idea_captures`: a
+-- capture can be deleted and the grouping somebody made still happened, so this
+-- keeps naming it. `idea_membership` below is where still-true is answered.
+create table idea_seed_captures (
+    idea_id    text not null references idea_threads(id) on delete cascade,
+    capture_id text not null,
+    primary key (idea_id, capture_id)
+) strict;
+
+-- Every decision, one row each. No foreign keys at all: an event may name a
+-- record whose file has since been deleted, and the audit trail is supposed to
+-- outlive the evidence rather than cascade away with it.
+--
+-- `id` is the fold order. Every `order by id desc limit 1` below spells the same
+-- rule: the latest applicable decision wins. That is the whole of how the folded
+-- tables are derived.
+create table idea_events (
+    id               text    primary key,
+    owner            text,
+    kind             text    not null,
+    idea_id          text,
+    capture_id       text,
+    other_capture_id text,
+    page_slug        text,
+    created          integer not null,
+    updated          integer not null,
+    size             integer not null
+) strict;
+
+create index idea_events_by_idea on idea_events(idea_id);
+create index idea_events_by_capture on idea_events(capture_id);
+create index idea_events_by_other_capture on idea_events(other_capture_id);
+create index idea_events_by_owner on idea_events(owner);
+
+-- Folded: which captures an idea currently holds, seeds plus connections minus
+-- disconnections. No `references idea_captures` here either, and this is the
+-- load-bearing one: a row naming a deleted capture is exactly what an
+-- `evidence_missing` idea is made of, and a cascade would erase the symptom
+-- rather than report it. Live membership is this table joined to
+-- `idea_captures`; the difference is the missing evidence.
+create table idea_membership (
+    idea_id    text not null references idea_threads(id) on delete cascade,
+    capture_id text not null,
+    primary key (idea_id, capture_id)
+) strict;
+
+create index idea_membership_by_capture on idea_membership(capture_id);
+
+-- Folded: candidates the user said no to, so they are not suggested again.
+-- A reconsider event takes the row away.
+create table idea_rejections (
+    idea_id    text not null references idea_threads(id) on delete cascade,
+    capture_id text not null,
+    primary key (idea_id, capture_id)
+) strict;
+
+-- Folded: the same, for two loose captures suggested for each other before any
+-- thread exists. The pair is held in lexical order, so it has one identity
+-- whichever capture produced the suggestion, and the fold only writes a row
+-- while both captures are still there.
+create table idea_capture_rejections (
+    capture_id       text not null,
+    other_capture_id text not null,
+    primary key (capture_id, other_capture_id)
+) strict;
+
+create index idea_capture_rejections_by_other on idea_capture_rejections(other_capture_id);
+
+-- Folded: whether a capture has been archived out of the inbox. Sparse, because
+-- most captures have never been archived or restored, and an absent row is not
+-- archived.
+create table idea_capture_state (
+    capture_id text primary key references idea_captures(id) on delete cascade,
+    archived   integer not null
+) strict;
+
+-- Folded: everything about a thread that its own file does not say.
+--
+-- `last_signal` is the latest of a connected capture's creation time and an
+-- affirm, connect, reopen or promote event, and it is the one folded value that
+-- reaches outside the event log: it reads `idea_captures.created`. That is why
+-- indexing or removing a capture has to recompute every idea that names it.
+--
+-- Neither the lifecycle label nor the momentum score is here. Both are pure
+-- functions of this row and an explicit `at`, so storing them would be storing
+-- an answer to a question nobody had asked yet.
+create table idea_thread_state (
+    idea_id     text    primary key references idea_threads(id) on delete cascade,
+    retired     integer not null,
+    promoted_to text,
+    last_signal integer
+) strict;
 ";
 
 /// Dropped in dependency order so the foreign keys never block.
@@ -267,4 +406,14 @@ drop table if exists pages;
 drop table if exists time_pages;
 drop table if exists times_fts;
 drop table if exists times;
+drop table if exists idea_membership;
+drop table if exists idea_rejections;
+drop table if exists idea_thread_state;
+drop table if exists idea_seed_captures;
+drop table if exists idea_capture_state;
+drop table if exists idea_capture_rejections;
+drop table if exists idea_events;
+drop table if exists idea_captures_fts;
+drop table if exists idea_captures;
+drop table if exists idea_threads;
 ";

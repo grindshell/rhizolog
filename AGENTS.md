@@ -38,7 +38,8 @@ workspace** whose members are `backend/` and `desktop/`.
 | `TODO.md` | Known and not done, with why. Keep it current rather than growing a second one |
 | `AGENTS.md` | This file: the instructions any coding agent reads; `CLAUDE.md` imports it and holds nothing of its own |
 
-**`Store`, `Index` and `TimeStore` must not appear in `desktop/`.** The app uses
+**`Store`, `Index`, `TimeStore`, `IdeaStore` and `IdeaService` must not appear
+in `desktop/`.** The app uses
 `Config`, `Server`, and `endpoint::live`, which is the same read-the-file-then-
 ask-`/api/health` discovery any client does, not privileged access. Reaching
 into the stores directly would end the property the whole design protects: the

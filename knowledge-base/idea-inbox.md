@@ -1,11 +1,11 @@
 # Idea Inbox implementation plan
 
-Status: in progress. **Phase I0, the authored model and store, is built.**
-Nothing after it is: there is no derived index, no API, no analysis and no UI,
-so the feature is not usable and capture alone is not the MVP. The phases and
-completion gates below remain the handoff for the rest, and
-[What I0 actually built](#what-i0-actually-built) records where the code has
-departed from this page.
+Status: in progress. **Phases I0 and I1 are built**: the authored model and
+store, and the derived index that folds decisions into current state. There is
+still no API, no analysis and no UI, so the feature is not usable and capture
+alone is not the MVP. The phases and completion gates below remain the handoff
+for the rest, and [What I0 and I1 actually built](#what-i0-and-i1-actually-built)
+records where the code has departed from this page.
 
 Idea Inbox gives Rhizolog a low-friction place to capture unfinished thoughts,
 notice which ones recur, and turn a mature idea into a wiki page. A capture is
@@ -672,7 +672,7 @@ logical commit boundary. Stage exact paths and do not include unrelated work.
 
 ### I0: authored model and store
 
-**Built.** See [What I0 actually built](#what-i0-actually-built).
+**Built.** See [What I0 and I1 actually built](#what-i0-and-i1-actually-built).
 
 - Add ids, capture, idea and event parsing and serialization.
 - Add atomic create, read, patch, delete and walk operations.
@@ -685,6 +685,8 @@ Done when files round-trip, ids cannot escape their roots, and the store can be
 reopened over data created through the API-facing drafts.
 
 ### I1: derived index, reconciliation and watcher
+
+**Built.** See [What I0 and I1 actually built](#what-i0-and-i1-actually-built).
 
 - Add schema and index operations.
 - Fold decision events into current membership and state inputs.
@@ -744,20 +746,34 @@ Done when promotion preserves every source capture, creates an ordinary page
 with ordinary visibility, and leaves a retryable path if recording the
 promotion association fails.
 
-## What I0 actually built
+## What I0 and I1 actually built
 
-Three files, and nothing outside them: `backend/src/ideas/mod.rs`,
-`ideas/store.rs` and `ideas/service.rs`. Nothing else in the backend knows Idea
-Inbox exists yet, which is deliberate: `AppState`, `server::start`, the watcher
-and the index are I1 and I2's work, and wiring a store into startup before
-anything reconciles it would be a directory created on every wiki for no reason.
+`backend/src/ideas/{mod,store,service}.rs` are the authored half:
+the three file formats, the three trees on disk, and the rules. `index/ideas.rs`
+is the derived half, and `index/schema.rs`, `index/sync.rs`, `watcher.rs`,
+`server.rs` and `api/mod.rs` carry it into startup, reconciliation and live
+pickup of external edits.
 
-`IdeaStore::open` does create `captures/`, `threads/` and `events/` when it is
-called, so the tree is self-describing the first time anything touches it. Git
-does not track empty directories, so this leaves `git status example-wiki`
-clean.
+### Nothing is created until something is written
 
-Where the code departs from the plan above:
+`IdeaStore::open` does not create its directories, which is a difference from
+`TimeStore` and worth the paragraph it cost to find out.
+
+`server::start` opens the stores and then watches the wiki directory. A store
+that creates directories on open is therefore the server writing into the tree
+it is about to watch, and Windows reports those creations *after* the watch is
+established. That lands a spurious full rescan in the watcher's first debounce
+window, and a rescan is not harmless there: it indexes files whose own create
+events are still pending, so a file created and then deleted inside one window
+correctly collapses to no event at all and the index keeps a row for a file that
+is gone until the next scan. It showed up as a one-in-three flake in
+`tests/watcher.rs` and took a while to stop looking like a lost event.
+
+So the trees appear on first write. A wiki that has never captured a thought has
+no `ideas/` directory to explain, back up or wonder about, which is the better
+answer anyway.
+
+### Where the code departs from the plan above
 
 - **There is an `ideas/service.rs`**, which the module seam list did not name.
   Every rule that is not "does this file parse" lives there: text that is not
@@ -801,6 +817,56 @@ kind may carry and a draft that exists is one the next startup can parse. That
 is the "never ship a writer for a format the reader refuses" rule expressed as a
 constructor, and it is also what puts a capture pair in lexical order without
 every call site having to remember to.
+
+### The fold is SQL, and that is why a rebuild agrees with an update
+
+The plan's table list is built as written, minus `idea_terms`, which belongs to
+the analyzer and arrives with it: a table nothing writes yet is worse than a
+second schema bump, and a bump costs one scan by design.
+
+Every folded table is recomputed by one statement over `idea_seed_captures` and
+`idea_events`, keyed on whatever just changed. There is no separate rebuild
+path, so `a_rebuild_reproduces_the_folded_idea_state` is checking that one query
+gives the same answer twice rather than that two algorithms agree. Each of those
+statements ends in `order by id desc limit 1`, which is the latest-decision-wins
+rule spelled in SQL; event ids sort chronologically as text, so ordering by id
+is ordering by when the decision was taken.
+
+Three consequences worth knowing:
+
+- **A fold for a record that has not been indexed writes nothing** rather than
+  failing. An event can be read before the thread it names, and a scan makes no
+  promises about order, so this is the ordinary case rather than an error. The
+  thread's own upsert folds it again.
+- **`last_signal` is the only folded value that reads outside the event log**,
+  because it takes the creation time of connected captures. That is why indexing
+  or removing a capture recomputes every idea naming it, and why the idea tables
+  are not a pure function of `idea_events` alone.
+- **A rejection needs its capture to still exist**, both for an idea candidate
+  and for a capture pair. A rejection is a standing instruction not to suggest
+  something, and a capture that is gone cannot be suggested. The decision itself
+  is not lost, because the event is still there to read.
+
+`idea_membership` and `idea_seed_captures` deliberately carry no foreign key to
+`idea_captures`. That is what makes `evidence_missing` observable: live
+membership is the membership table joined to the captures, and whatever the join
+drops is the evidence the idea has lost. A cascade would tidy away the symptom.
+
+### Owner filtering is one clause, `owner is :owner`
+
+`is` rather than `=`, and it is load-bearing. An open wiki's records have a null
+owner, and in SQL `null = null` is null, which a `where` clause reads as false:
+under `=` the open user would be unable to see a single thing they had written.
+`is` compares nulls as equal, so the open user matches exactly the open records
+and an account matches exactly its own.
+
+### `SyncReport` counts five trees
+
+Captures, threads and events are counted apart from each other rather than
+totalled. They are read by different code and go wrong in different ways, and a
+scan reporting "412 idea files" when one thread has gone missing is a number
+nobody can act on. `POST /api/reindex` returns all five, and `server::start`
+logs one line each.
 
 ## Test strategy
 

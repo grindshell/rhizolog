@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use rhizolog::{AppState, Assets, Index, Store, TimeStore, UserStore};
+use rhizolog::{AppState, Assets, IdeaService, IdeaStore, Index, Store, TimeStore, UserStore};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -43,10 +43,12 @@ impl App {
         // user — which is what keeps this file testing the API rather than the
         // authentication in front of it. `signed_in` is the other case.
         let users = UserStore::open(directory.path()).await.expect("open users");
+        let ideas = IdeaStore::open(directory.path()).await.expect("open ideas");
         Self {
             router: rhizolog::router(AppState {
                 store,
                 times,
+                ideas: IdeaService::new(ideas),
                 users,
                 index,
                 usage: rhizolog::UsageTally::new(),
@@ -182,12 +184,14 @@ async fn usage_counts_survive_a_restart() {
         let store = Store::open(wiki.path()).await.expect("open store");
         let times = TimeStore::open(wiki.path()).await.expect("open time log");
         let users = UserStore::open(wiki.path()).await.expect("open users");
+        let ideas = IdeaStore::open(wiki.path()).await.expect("open ideas");
         let index = Index::open(Some(&database)).await.expect("open index");
         let usage = rhizolog::UsageTally::new();
         let app = App {
             router: rhizolog::router(AppState {
                 store,
                 times,
+                ideas: IdeaService::new(ideas),
                 users,
                 index: index.clone(),
                 usage: usage.clone(),
@@ -213,11 +217,13 @@ async fn usage_counts_survive_a_restart() {
     let store = Store::open(wiki.path()).await.expect("open store");
     let times = TimeStore::open(wiki.path()).await.expect("open time log");
     let users = UserStore::open(wiki.path()).await.expect("open users");
+    let ideas = IdeaStore::open(wiki.path()).await.expect("open ideas");
     let index = Index::open(Some(&database)).await.expect("reopen index");
     let app = App {
         router: rhizolog::router(AppState {
             store,
             times,
+            ideas: IdeaService::new(ideas),
             users,
             index,
             usage: rhizolog::UsageTally::new(),

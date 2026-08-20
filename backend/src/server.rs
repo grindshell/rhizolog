@@ -26,6 +26,7 @@ use crate::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
 use crate::assets;
 use crate::config::Listen;
 use crate::endpoint::{self, Endpoint};
+use crate::ideas::{IdeaService, IdeaStore};
 use crate::index::sync::sync;
 use crate::store::display_path;
 use crate::users::UserStore;
@@ -118,6 +119,9 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
     let times = TimeStore::open(&config.root)
         .await
         .context("opening the time log")?;
+    let ideas = IdeaStore::open(&config.root)
+        .await
+        .context("opening the idea inbox")?;
     let users = UserStore::open(&config.root)
         .await
         .context("opening the accounts directory")?;
@@ -127,8 +131,9 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
 
     tracing::info!(wiki_root = %store.root_display(), "opened wiki");
     tracing::info!(time_log = %times.root_display(), "opened time log");
+    tracing::info!(idea_inbox = %ideas.root_display(), "opened idea inbox");
 
-    reconcile(&store, &times, &index).await?;
+    reconcile(&store, &times, &ideas, &index).await?;
     announce_access(&users, config).await?;
 
     let listener = bind(config.listen).await?;
@@ -141,11 +146,12 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
 
     // Started after the initial scan, so it only ever reports genuinely new
     // changes rather than racing the reconciliation that just ran.
-    let watching = watcher::spawn(store.clone(), times.clone(), index.clone());
+    let watching = watcher::spawn(store.clone(), times.clone(), ideas.clone(), index.clone());
 
     let state = AppState {
         store,
         times,
+        ideas: IdeaService::new(ideas),
         users,
         index,
         usage: UsageTally::new(),
@@ -228,33 +234,42 @@ async fn bind(listen: Listen) -> anyhow::Result<TcpListener> {
 ///
 /// The wiki may have been edited, or the whole index deleted, while the server
 /// was down.
-async fn reconcile(store: &Store, times: &TimeStore, index: &Index) -> anyhow::Result<()> {
-    let report = sync(store, times, index)
+async fn reconcile(
+    store: &Store,
+    times: &TimeStore,
+    ideas: &IdeaStore,
+    index: &Index,
+) -> anyhow::Result<()> {
+    let report = sync(store, times, ideas, index)
         .await
         .context("reconciling the index with the wiki")?;
 
-    tracing::info!(
-        scanned = report.pages.scanned,
-        indexed = report.pages.indexed,
-        unchanged = report.pages.unchanged,
-        removed = report.pages.removed,
-        failed = report.pages.failed,
-        "pages synchronised"
-    );
-    tracing::info!(
-        scanned = report.times.scanned,
-        indexed = report.times.indexed,
-        unchanged = report.times.unchanged,
-        removed = report.times.removed,
-        failed = report.times.failed,
-        "time log synchronised"
-    );
+    // One line per tree, named. A single total would hide which of the five had
+    // nothing in it, and "nothing in it" is the interesting case when somebody
+    // is looking at this log at all.
+    for (tree, counts) in [
+        ("pages", report.pages),
+        ("time log", report.times),
+        ("captures", report.captures),
+        ("idea threads", report.ideas),
+        ("decision events", report.events),
+    ] {
+        tracing::info!(
+            scanned = counts.scanned,
+            indexed = counts.indexed,
+            unchanged = counts.unchanged,
+            removed = counts.removed,
+            failed = counts.failed,
+            "{tree} synchronised"
+        );
+    }
 
-    let failed = report.pages.failed + report.times.failed;
+    let failed = report.failed();
     if failed > 0 {
         tracing::warn!(
             failed,
-            "some files could not be indexed; they will not appear in search or in the time log"
+            "some files could not be indexed; they will not appear in search, the time log or \
+             the idea inbox"
         );
     }
 

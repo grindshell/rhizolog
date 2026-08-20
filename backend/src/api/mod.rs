@@ -32,6 +32,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::ideas::IdeaService;
 use crate::index::Index;
 use crate::store::Store;
 use crate::times::TimeStore;
@@ -46,6 +47,12 @@ pub struct AppState {
     pub store: Store,
     /// The time log under `.rhizolog/times/`. Also files, also authoritative.
     pub times: TimeStore,
+    /// Idea Inbox under `.rhizolog/ideas/`: captures, threads and the decisions
+    /// taken about them. Files again, and reached through the service rather
+    /// than the store, because every idea operation is asked on somebody's
+    /// behalf and the owner rules live there. Reconciliation and the watcher
+    /// take `IdeaService::store()`, which is unscoped on purpose.
+    pub ideas: IdeaService,
     /// Accounts under `.rhizolog/users/`. Files again, and authored again —
     /// and how many there are is what decides whether this wiki asks anybody to
     /// sign in. See [`crate::auth`].

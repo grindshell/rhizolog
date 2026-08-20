@@ -39,12 +39,16 @@ impl App {
         let users = rhizolog::UserStore::open(directory.path())
             .await
             .expect("open users");
+        let ideas = rhizolog::IdeaStore::open(directory.path())
+            .await
+            .expect("open ideas");
         let index = Index::open(None).await.expect("open index");
 
         Self {
             router: rhizolog::router(AppState {
                 store,
                 times,
+                ideas: rhizolog::IdeaService::new(ideas),
                 users,
                 index,
                 usage: rhizolog::UsageTally::new(),
