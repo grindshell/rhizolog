@@ -259,21 +259,39 @@ Account deletion does not delete idea data. It follows the current private-page
 precedent: the files remain on disk, and recovery requires filesystem access or
 a separately designed ownership-transfer operation.
 
-### Unresolved: what happens to open records when the first account appears
+### Open records are adopted by the first account
 
 Owner comparison is equality, so a capture written while the wiki had no
 accounts belongs to no account once one exists, and its author cannot reach it
-through the API any more. That is what the rule above says and it is not what
-anybody wants on the day they turn authentication on.
+through the API any more. That is what the rule above says on its own, and it is
+not what anybody wants on the day they turn authentication on: it costs somebody
+their whole inbox for doing the thing the documentation told them to do.
 
-The three candidate answers are: leave it as it is and let adoption be writing
-`owner:` into the files, which is honest and unhelpful; treat an unowned record
-as readable by every account, which leaks working notes the moment a second
-account is added; or adopt them on behalf of the first account, which is a
-guess made once and irreversibly. I0 implements the first, because it is the one
-that does not decide the question by accident, and the code deliberately has no
-path that infers an owner. Settle it before I2 ships the endpoints, since that
-is the point at which a person can be locked out of their own inbox.
+**Decided: creating the first account stamps `owner:` onto every unowned
+capture, idea and event.** The open user and the first account are the same
+person, on a single-user wiki that has just been pointed at a network. Reading
+the other two answers out loud settles it. Leaving the files unowned is honest
+and unhelpful. Treating an unowned record as readable by every account leaks
+working notes the moment a second account is added, which is exactly the
+boundary the private-owner design exists to hold, and it leaks them silently.
+
+Two things this does not decide, both for I2:
+
+- **Where adoption runs.** There is no single moment the API controls, because
+  an account can also be created by dropping a file into `.rhizolog/users/`,
+  and `UserStore::count` is answered from the directory on every request so
+  that this works immediately. Adoption in the create-account handler alone
+  would miss it. Startup reconciliation sees both paths and is the obvious
+  second half, with the condition being "there is exactly one account and there
+  are unowned idea records".
+- **That it is a one-way write.** It rewrites authored files, so it is a
+  migration rather than a view, and it should log what it touched and be
+  refused rather than guessed at if there is more than one account by the time
+  it runs. Two accounts and a pile of unowned captures is a question only a
+  person can answer.
+
+I0 implements neither, and deliberately has no code path that infers an owner:
+it is the phase that decides what a file means, not what a migration does.
 
 ## Derived index
 

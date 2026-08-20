@@ -200,13 +200,15 @@ partial slice the feature.
 - **No dashboard surface or promotion path.** `/inbox`, `/ideas` and idea detail
   need a responsive capture-first UI. Promotion should assemble a page draft,
   use the existing page API, then record the association idempotently.
-- **What happens to open captures when the first account appears is
-  undecided.** Owner comparison is equality, so a capture written while the
-  wiki had no accounts belongs to no account once one exists. I0 leaves it that
-  way deliberately rather than guessing an owner, and the three candidate
-  answers are written up under Ownership and disclosure on the knowledge base
-  page. It has to be settled before the endpoints ship, because that is the
-  point at which somebody can be locked out of their own inbox.
+- **Open captures are not yet adopted by the first account.** Owner comparison
+  is equality, so a capture written while the wiki had no accounts belongs to
+  no account once one exists, which would cost somebody their whole inbox for
+  turning authentication on. The answer is decided: creating the first account
+  stamps `owner:` onto every unowned capture, idea and event. What is not
+  decided is where that runs, since an account can also be created by dropping
+  a file into `.rhizolog/users/` and no API handler sees that. It rewrites
+  authored files, so it is a migration and wants a log line and a refusal
+  rather than a guess if more than one account already exists. Needed by I2.
 
 Do not add LLM summaries, embeddings, automatic membership, notifications,
 tasks or a native mobile app while this slice is in progress. Those are later
