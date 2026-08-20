@@ -73,6 +73,123 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/captures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The inbox, newest first. */
+        get: operations["list_captures"];
+        put?: never;
+        /**
+         * Save a thought.
+         * @description The response carries no suggestions. Candidates are a separate request
+         *     against a capture that is already on disk, so nothing about analysis can lose
+         *     or reject the words somebody just typed.
+         */
+        post: operations["create_capture"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/captures/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one capture. */
+        get: operations["read_capture"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a capture for good.
+         * @description Refused with `409 capture_required_by_idea` while it is the only thing a
+         *     live idea still holds: the alternative is a thread with no authored evidence,
+         *     which cannot be given a lifecycle state at all. Connect something else or
+         *     retire the idea first.
+         *
+         *     The decision is recorded before the file goes, so an interrupted delete
+         *     leaves an event saying what was meant rather than a gap saying nothing. The
+         *     response names the threads that changed and carries no other capture's text.
+         */
+        delete: operations["delete_capture"];
+        options?: never;
+        head?: never;
+        /**
+         * Correct a capture's text.
+         * @description Its timestamp and its owner do not move: the first is what the lifecycle
+         *     rules count from, and git is the history of the edit.
+         */
+        patch: operations["patch_capture"];
+        trace?: never;
+    };
+    "/api/captures/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive a capture out of the inbox.
+         * @description Processed, not erased: it stays connected to whatever ideas hold it and
+         *     stays available as evidence. Archiving one that is already archived writes no
+         *     second event.
+         */
+        post: operations["archive_capture"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/captures/{id}/rejections/{other_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn down a suggestion that two loose captures belong together.
+         * @description The pair is held in one canonical order, so rejecting `a` against `b` and
+         *     `b` against `a` are the same decision and the second writes no event.
+         */
+        put: operations["reject_capture_pair"];
+        post?: never;
+        /** Let a rejected pair be suggested again. */
+        delete: operations["reconsider_capture_pair"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/captures/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Put an archived capture back in the inbox. */
+        post: operations["restore_capture"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/graph": {
         parameters: {
             query?: never;
@@ -123,6 +240,166 @@ export interface paths {
         get: operations["health"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Idea threads, most recently active first. */
+        get: operations["list_ideas"];
+        put?: never;
+        /**
+         * Start a named thread from captures you already have.
+         * @description One authored file write, seeds and all, so an idea either exists with the
+         *     grouping you made or does not exist at all.
+         */
+        post: operations["create_idea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One idea, with what it holds. */
+        get: operations["read_idea"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename an idea or edit its note.
+         * @description Its seeds and its creation time do not move: they are what the thread was
+         *     started from, and that already happened.
+         */
+        patch: operations["patch_idea"];
+        trace?: never;
+    };
+    "/api/ideas/{id}/affirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Say that an idea still interests you.
+         * @description An act rather than a state, so it is meaningful every time and writes an
+         *     event every time. It is what a dormant idea's rediscovery card asks for.
+         */
+        post: operations["affirm_idea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas/{id}/captures/{capture_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Connect a capture to an idea. */
+        put: operations["connect_idea_capture"];
+        post?: never;
+        /**
+         * Disconnect a capture from an idea.
+         * @description Refused with `409 idea_would_be_empty` when it is the last one. Retiring the
+         *     idea is the reversible way to set it aside.
+         */
+        delete: operations["disconnect_idea_capture"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas/{id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop an idea being resurfaced for a while.
+         * @description Dismissing a rediscovery card is not the same as saying the idea is over,
+         *     which is what retiring says. This one only quietens it.
+         */
+        post: operations["dismiss_idea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas/{id}/rejections/{capture_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn down a suggestion that a capture belongs to an idea. */
+        put: operations["reject_idea_candidate"];
+        post?: never;
+        /** Let a rejected candidate be suggested again. */
+        delete: operations["reconsider_idea_candidate"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas/{id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bring a retired idea back. */
+        post: operations["reopen_idea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set an idea aside without deleting anything. */
+        post: operations["retire_idea"];
         delete?: never;
         options?: never;
         head?: never;
@@ -540,6 +817,13 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AffectedIdea: {
+            id: components["schemas"]["IdeaId"];
+            /** @example Dungeon seeds */
+            name: string;
+            /** @description Whether it is now short of the evidence it rests on. */
+            needs_repair: boolean;
+        };
         BucketView: {
             /**
              * Format: int64
@@ -552,6 +836,82 @@ export interface components {
              *     calendar terms, not necessarily in length.
              */
             start: string;
+        };
+        /**
+         * @description A capture's identifier: the UTC instant it was recorded for, compacted, plus nanoseconds. `20260820T141530-123456789`.
+         *
+         *     Ids are generated by the server, never chosen by a caller, and they sort chronologically as plain text.
+         * @example 20260820T141530-123456789
+         */
+        CaptureId: string;
+        CaptureListResponse: {
+            /** @description Newest first. */
+            captures: components["schemas"]["CaptureView"][];
+            /**
+             * @description The limit that was applied, after clamping.
+             * @example 50
+             */
+            limit: number;
+            /** @example 0 */
+            offset: number;
+            /**
+             * @description Total matching captures, not the number returned.
+             * @example 143
+             */
+            total: number;
+        };
+        /** @description One captured thought. */
+        CaptureView: {
+            /**
+             * @description Whether it has been archived out of the inbox.
+             *
+             *     Archived means processed, not "this never happened": an archived capture
+             *     still belongs to whatever ideas hold it and still counts as evidence.
+             */
+            archived: boolean;
+            /** Format: date-time */
+            created: string;
+            id: components["schemas"]["CaptureId"];
+            /**
+             * Format: int64
+             * @description The file's size in bytes.
+             * @example 92
+             */
+            size: number;
+            /**
+             * @description The text exactly as it was supplied. Never summarised, never rewritten.
+             * @example Maybe dungeon quests should require finding particular seeds.
+             */
+            text: string;
+            /**
+             * Format: date-time
+             * @description The file's modification time.
+             */
+            updated: string;
+        };
+        CreateCapture: {
+            /**
+             * @description The thought, exactly as you want it kept. The only required field there
+             *     is, and the only one refused when it is blank.
+             * @example Maybe dungeon quests should require finding particular seeds.
+             */
+            text: string;
+        };
+        CreateIdea: {
+            /**
+             * @description The captures it starts from. At least one, and all yours.
+             *
+             *     This list is the thread's creation evidence and is immutable: what it
+             *     holds later is a fold over the decisions taken about it.
+             */
+            captures: components["schemas"]["CaptureId"][];
+            /**
+             * @description What to call it. Rhizolog never generates one.
+             * @example Dungeon seeds
+             */
+            name: string;
+            /** @description Optional working notes. */
+            note?: string | null;
         };
         CreatePage: {
             /**
@@ -632,6 +992,15 @@ export interface components {
             profile?: string | null;
             role?: null | components["schemas"]["Role"];
             username: components["schemas"]["Username"];
+        };
+        /** @description What a capture's deletion cost. */
+        DeletedCapture: {
+            id: components["schemas"]["CaptureId"];
+            /**
+             * @description The ideas that held it, so a caller can say which threads changed
+             *     before refreshing them. Deliberately no other capture's text.
+             */
+            ideas: components["schemas"]["AffectedIdea"][];
         };
         ErrorDetail: {
             /**
@@ -822,6 +1191,94 @@ export interface components {
             from: string;
             /** Format: date-time */
             to: string;
+        };
+        /**
+         * @description An idea thread's identifier: the UTC instant it was created, compacted, plus nanoseconds. `20260820T142000-234567890`.
+         *
+         *     Ids are generated by the server, never chosen by a caller, and they sort chronologically as plain text.
+         * @example 20260820T142000-234567890
+         */
+        IdeaId: string;
+        IdeaListResponse: {
+            /** @description Most recently active first. */
+            ideas: components["schemas"]["IdeaSummaryView"][];
+            /** @example 50 */
+            limit: number;
+            /** @example 0 */
+            offset: number;
+            /** @example 7 */
+            total: number;
+        };
+        /** @description One idea thread, as a listing shows it. */
+        IdeaSummaryView: {
+            /**
+             * @description How many captures it currently holds and can still read.
+             * @example 3
+             */
+            captures: number;
+            /** Format: date-time */
+            created: string;
+            id: components["schemas"]["IdeaId"];
+            /**
+             * Format: date-time
+             * @description The last time anything happened to it: a capture connected, or an
+             *     affirmation, reopening or promotion.
+             */
+            last_signal?: string | null;
+            /**
+             * @description How many it holds whose files are gone.
+             * @example 0
+             */
+            missing: number;
+            /**
+             * @description What the person called it. Never generated.
+             * @example Dungeon seeds
+             */
+            name: string;
+            /**
+             * @description Whether the idea has lost the evidence it rests on.
+             *
+             *     A thread with nothing live connected cannot be given a lifecycle state,
+             *     because there is no authored text left to derive one from. It is reported
+             *     rather than papered over.
+             */
+            needs_repair: boolean;
+            promoted_to?: null | components["schemas"]["Slug"];
+            retired: boolean;
+            /** Format: date-time */
+            updated: string;
+        };
+        /**
+         * @description One idea thread, with what it holds.
+         *
+         *     No lifecycle label and no momentum score: both are pure functions of this and
+         *     an explicit moment, and neither exists until the analyzer does. What is here
+         *     is the folded evidence either would be computed from.
+         */
+        IdeaView: {
+            /** @description The captures it currently holds, oldest first. */
+            captures: components["schemas"]["CaptureView"][];
+            /** Format: date-time */
+            created: string;
+            id: components["schemas"]["IdeaId"];
+            /** Format: date-time */
+            last_signal?: string | null;
+            /**
+             * @description Captures it holds whose files are gone. Named rather than dropped, so a
+             *     reader can see what the idea has lost instead of quietly losing nothing.
+             */
+            missing: components["schemas"]["CaptureId"][];
+            /** @example Dungeon seeds */
+            name: string;
+            needs_repair: boolean;
+            /** @description Working notes from the thread's own file. Usually empty. */
+            note: string;
+            promoted_to?: null | components["schemas"]["Slug"];
+            /** @description Captures turned down as candidates, so they are not suggested again. */
+            rejected: components["schemas"]["CaptureId"][];
+            retired: boolean;
+            /** Format: date-time */
+            updated: string;
         };
         InboundLinkView: {
             /**
@@ -1156,6 +1613,22 @@ export interface components {
             updated: string;
             /** @description Who may read this page. An unmarked page is `internal`. */
             visibility: components["schemas"]["Visibility"];
+        };
+        PatchCapture: {
+            /**
+             * @description Corrected text. `created` and the owner do not move.
+             * @example Maybe dungeon quests should require finding particular seeds.
+             */
+            text: string;
+        };
+        PatchIdea: {
+            /**
+             * @description A new name. Absent leaves it alone; blank is refused.
+             * @example Seeded dungeons
+             */
+            name?: string | null;
+            /** @description New working notes. Absent leaves them alone. */
+            note?: string | null;
         };
         /** @description A partial update. Omitted fields are left alone. */
         PatchPage: {
@@ -1958,6 +2431,386 @@ export interface operations {
             };
         };
     };
+    list_captures: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Narrow the inbox to captures matching these terms.
+                 *
+                 *     A filter rather than a different view: results stay newest-first rather
+                 *     than being reordered by relevance, because an inbox is a thing you read
+                 *     in order. Terms are matched literally and combined with AND; a trailing
+                 *     `*` searches by prefix. Omit it entirely rather than sending `q=`.
+                 * @example dungeon seeds
+                 */
+                q?: string;
+                /**
+                 * @description `false` for the live inbox, `true` for what has been archived out of it,
+                 *     absent for both.
+                 */
+                archived?: boolean;
+                /** @description Only captures made at or after this instant. */
+                from?: string;
+                /** @description Only captures made at or before this instant. */
+                to?: string;
+                /**
+                 * @description Defaults to 50, capped at 200.
+                 * @example 50
+                 */
+                limit?: number;
+                /** @example 0 */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Matching captures */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureListResponse"];
+                };
+            };
+            /** @description This wiki requires authentication */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCapture"];
+            };
+        };
+        responses: {
+            /** @description The capture as written */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureView"];
+                };
+            };
+            /** @description There was no text */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This wiki requires authentication */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The capture */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureView"];
+                };
+            };
+            /** @description The id is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted, and what it cost */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletedCapture"];
+                };
+            };
+            /** @description No such capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An idea has nothing else to stand on */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    patch_capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchCapture"];
+            };
+        };
+        responses: {
+            /** @description The corrected capture */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureView"];
+                };
+            };
+            /** @description There was no text */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    archive_capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The archived capture */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureView"];
+                };
+            };
+            /** @description No such capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reject_capture_pair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                id: string;
+                /**
+                 * @description The capture it was suggested with
+                 * @example 20260820T142000-234567890
+                 */
+                other_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rejected */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reconsider_capture_pair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                id: string;
+                /**
+                 * @description The capture it was suggested with
+                 * @example 20260820T142000-234567890
+                 */
+                other_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reconsidered */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    restore_capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The restored capture */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureView"];
+                };
+            };
+            /** @description No such capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     link_graph: {
         parameters: {
             query?: {
@@ -2046,6 +2899,495 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Health"];
+                };
+            };
+        };
+    };
+    list_ideas: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Defaults to 50, capped at 200.
+                 * @example 50
+                 */
+                limit?: number;
+                /** @example 0 */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ideas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaListResponse"];
+                };
+            };
+            /** @description This wiki requires authentication */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_idea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateIdea"];
+            };
+        };
+        responses: {
+            /** @description The idea as created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No name, or no captures */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description One of the captures does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_idea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    patch_idea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchIdea"];
+            };
+        };
+        responses: {
+            /** @description The idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description The name was blank */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    affirm_idea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    connect_idea_capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The idea, with the capture connected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea or capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    disconnect_idea_capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The idea, with the capture disconnected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea or capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description It was the idea's last capture */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    dismiss_idea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reject_idea_candidate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea or capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reconsider_idea_candidate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea or capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reopen_idea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The reopened idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description It is not retired */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    retire_idea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The retired idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description It is already retired */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

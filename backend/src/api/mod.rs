@@ -8,6 +8,7 @@
 pub mod auth;
 pub mod extract;
 pub mod graph;
+pub mod ideas;
 pub mod meta;
 pub mod pages;
 pub mod pins;
@@ -101,6 +102,10 @@ pub struct AppState {
         (name = "graph", description = "Links between pages, tags, and meta-stats"),
         (name = "pins", description = "Pages kept within reach"),
         (name = "times", description = "Time tracking: timers, entries, groups, and statistics"),
+        (name = "ideas", description = "Idea Inbox: capturing unfinished thoughts, threading \
+                                       them, and deciding about them. Personal working state, \
+                                       so every endpoint answers only for the account making \
+                                       the request and never for an anonymous caller."),
         (name = "accounts", description = "Accounts, sessions, and signing in. A wiki with no \
                                           accounts is open and asks for none of this."),
         (name = "meta", description = "Server and index status"),
@@ -197,6 +202,32 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         .routes(routes!(times::stop_time))
         .routes(routes!(times::list_time_groups))
         .routes(routes!(times::time_statistics))
+        .routes(routes!(ideas::list_captures, ideas::create_capture))
+        .routes(routes!(
+            ideas::read_capture,
+            ideas::patch_capture,
+            ideas::delete_capture
+        ))
+        .routes(routes!(ideas::archive_capture))
+        .routes(routes!(ideas::restore_capture))
+        .routes(routes!(
+            ideas::reject_capture_pair,
+            ideas::reconsider_capture_pair
+        ))
+        .routes(routes!(ideas::list_ideas, ideas::create_idea))
+        .routes(routes!(ideas::read_idea, ideas::patch_idea))
+        .routes(routes!(
+            ideas::connect_idea_capture,
+            ideas::disconnect_idea_capture
+        ))
+        .routes(routes!(
+            ideas::reject_idea_candidate,
+            ideas::reconsider_idea_candidate
+        ))
+        .routes(routes!(ideas::affirm_idea))
+        .routes(routes!(ideas::retire_idea))
+        .routes(routes!(ideas::reopen_idea))
+        .routes(routes!(ideas::dismiss_idea))
         .routes(routes!(auth::login))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::read_session))

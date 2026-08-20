@@ -243,6 +243,15 @@ pub async fn create_user(
             username = %user.username,
             "the first account was created; this wiki now requires authentication"
         );
+
+        // Every idea record written while this wiki was open belongs to nobody
+        // as of the line above, so it is handed to the account that just claimed
+        // the wiki. Doing it here rather than only at startup is what keeps
+        // somebody's inbox from disappearing between creating an account and
+        // restarting; startup runs it too, because an account can also be
+        // created by dropping a file in. See `crate::ideas::adoption`.
+        crate::ideas::adoption::adopt_and_report(state.ideas.store(), &state.users, &state.index)
+            .await;
     }
 
     Ok((StatusCode::CREATED, Json(user.into())))

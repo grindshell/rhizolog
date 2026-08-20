@@ -42,7 +42,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, named_params, params};
 
 use crate::ideas::{Capture, CaptureId, Event, EventId, Idea, IdeaId, Owner};
-use crate::index::{Index, IndexError, Stamp, from_nanos, to_nanos};
+use crate::index::{Index, IndexError, Stamp, from_nanos, to_fts_query, to_nanos};
 use crate::slug::Slug;
 use crate::users::Username;
 
@@ -96,6 +96,93 @@ pub struct IdeaState {
     pub last_signal: Option<DateTime<Utc>>,
     pub updated: DateTime<Utc>,
     pub size: u64,
+}
+
+/// One idea as a listing shows it, without reading its captures back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaSummary {
+    pub id: IdeaId,
+    pub name: String,
+    pub created: DateTime<Utc>,
+    /// Connected captures whose files are still there.
+    pub members: usize,
+    /// Connected captures whose files are gone.
+    pub missing: usize,
+    pub retired: bool,
+    pub promoted_to: Option<Slug>,
+    pub last_signal: Option<DateTime<Utc>>,
+    pub updated: DateTime<Utc>,
+}
+
+impl IdeaSummary {
+    /// The same diagnostic [`IdeaState::evidence_missing`] reports.
+    pub fn evidence_missing(&self) -> bool {
+        !self.retired && self.members == 0
+    }
+}
+
+/// An idea that currently holds a given capture, and how much else it holds.
+///
+/// What deleting a capture has to consult: taking the last live member away from
+/// an idea that is not retired would leave it with nothing to derive a lifecycle
+/// from, so that deletion is refused rather than performed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaHold {
+    pub id: IdeaId,
+    pub name: String,
+    pub retired: bool,
+    /// Live connected captures, this one included.
+    pub members: usize,
+}
+
+impl IdeaHold {
+    /// Whether this capture is the only thing keeping the idea answerable.
+    pub fn depends_on_it(&self) -> bool {
+        !self.retired && self.members <= 1
+    }
+}
+
+/// How to narrow the inbox.
+///
+/// `query` narrows the chronological listing rather than reordering it by
+/// relevance, following the time log: an inbox is a thing you read in order, and
+/// a search over it is one more filter rather than a different view.
+#[derive(Debug, Clone)]
+pub struct CaptureListOptions {
+    pub query: Option<String>,
+    /// `None` for both, `Some(false)` for the live inbox, `Some(true)` for what
+    /// has been processed out of it.
+    pub archived: Option<bool>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+impl Default for CaptureListOptions {
+    fn default() -> Self {
+        Self {
+            query: None,
+            archived: None,
+            from: None,
+            to: None,
+            limit: 50,
+            offset: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureList {
+    pub captures: Vec<CaptureRecord>,
+    /// Total matching captures, not just the ones on this page of results.
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaList {
+    pub ideas: Vec<IdeaSummary>,
+    pub total: usize,
 }
 
 impl IdeaState {
@@ -255,6 +342,127 @@ impl Index {
                 updated: from_nanos(updated),
                 size: size as u64,
             }))
+        })
+        .await
+    }
+
+    /// This owner's inbox, newest first.
+    pub async fn list_captures(
+        &self,
+        owner: &Owner,
+        options: CaptureListOptions,
+    ) -> Result<CaptureList, IndexError> {
+        let asking = owner.clone();
+        let owner = owner_column(owner);
+        let CaptureListOptions {
+            query,
+            archived,
+            from,
+            to,
+            limit,
+            offset,
+        } = options;
+
+        // An empty search is no search rather than no results. The dashboard is
+        // asked to omit `q` entirely, and a caller that sends `q=` anyway means
+        // "show me everything" rather than "show me nothing".
+        let query = query.as_deref().and_then(to_fts_query);
+        let archived = archived.map(i64::from);
+        let from = from.map(|at| to_nanos(at, "from")).transpose()?;
+        let to = to.map(|at| to_nanos(at, "to")).transpose()?;
+
+        self.with_connection(move |connection| {
+            // One filter expression rather than conditional joins: every clause
+            // short-circuits to "everything" when its parameter binds as NULL,
+            // so there is one query to read instead of sixteen. The full-text
+            // match is a rowid subquery because `idea_captures_fts` can only be
+            // looked up by `match` or by rowid, and the listing needs the
+            // capture row beside it either way.
+            let filters = format!(
+                "from idea_captures
+                 left join idea_capture_state
+                      on idea_capture_state.capture_id = idea_captures.id
+                 where {OWNED}
+                   and (:query is null or idea_captures.rowid in (
+                       select rowid from idea_captures_fts
+                       where idea_captures_fts match :query
+                   ))
+                   and (:archived is null
+                        or coalesce(idea_capture_state.archived, 0) = :archived)
+                   and (:from is null or idea_captures.created >= :from)
+                   and (:to is null or idea_captures.created <= :to)"
+            );
+
+            let total: i64 = connection.query_row(
+                &format!("select count(*) {filters}"),
+                named_params! {
+                    ":owner": &owner,
+                    ":query": &query,
+                    ":archived": &archived,
+                    ":from": &from,
+                    ":to": &to,
+                },
+                |row| row.get(0),
+            )?;
+
+            let limit = limit as i64;
+            let offset = offset as i64;
+            let mut statement = connection.prepare(&format!(
+                "select idea_captures.id,
+                        idea_captures.created,
+                        idea_captures.updated,
+                        idea_captures.size,
+                        (select body from idea_captures_fts
+                         where rowid = idea_captures.rowid),
+                        coalesce(idea_capture_state.archived, 0)
+                 {filters}
+                 order by idea_captures.created desc, idea_captures.id desc
+                 limit :limit offset :offset"
+            ))?;
+
+            let rows = statement.query_map(
+                named_params! {
+                    ":owner": &owner,
+                    ":query": &query,
+                    ":archived": &archived,
+                    ":from": &from,
+                    ":to": &to,
+                    ":limit": &limit,
+                    ":offset": &offset,
+                },
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )?;
+
+            let mut captures = Vec::new();
+            for row in rows {
+                let (id, created, updated, size, body, archived) = row?;
+                let Ok(id) = CaptureId::parse(&id) else {
+                    continue;
+                };
+                captures.push(CaptureRecord {
+                    id,
+                    owner: asking.clone(),
+                    created: from_nanos(created),
+                    body,
+                    archived: archived != 0,
+                    updated: from_nanos(updated),
+                    size: size as u64,
+                });
+            }
+
+            Ok(CaptureList {
+                captures,
+                total: total as usize,
+            })
         })
         .await
     }
@@ -453,6 +661,218 @@ impl Index {
                 updated: from_nanos(updated),
                 size: size as u64,
             }))
+        })
+        .await
+    }
+
+    /// This owner's ideas, newest signal first.
+    ///
+    /// No lifecycle label and no momentum: both are pure functions of a state
+    /// and an explicit `at`, and neither exists until the analyzer does. What is
+    /// here is the folded fact each of them would be computed from.
+    pub async fn list_ideas(
+        &self,
+        owner: &Owner,
+        limit: usize,
+        offset: usize,
+    ) -> Result<IdeaList, IndexError> {
+        let owner = owner_column(owner);
+
+        self.with_connection(move |connection| {
+            let total: i64 = connection.query_row(
+                &format!("select count(*) from idea_threads where {OWNED}"),
+                named_params! { ":owner": &owner },
+                |row| row.get(0),
+            )?;
+
+            let limit = limit as i64;
+            let offset = offset as i64;
+            let mut statement = connection.prepare(&format!(
+                "select idea_threads.id,
+                        idea_threads.name,
+                        idea_threads.created,
+                        idea_threads.updated,
+                        (select count(*) from idea_membership
+                         join idea_captures on idea_captures.id = idea_membership.capture_id
+                         where idea_membership.idea_id = idea_threads.id),
+                        (select count(*) from idea_membership
+                         where idea_membership.idea_id = idea_threads.id),
+                        coalesce(idea_thread_state.retired, 0),
+                        idea_thread_state.promoted_to,
+                        idea_thread_state.last_signal
+                 from idea_threads
+                 left join idea_thread_state
+                      on idea_thread_state.idea_id = idea_threads.id
+                 where {OWNED}
+                 order by idea_thread_state.last_signal desc nulls last,
+                          idea_threads.id desc
+                 limit :limit offset :offset"
+            ))?;
+
+            let rows = statement.query_map(
+                named_params! { ":owner": &owner, ":limit": &limit, ":offset": &offset },
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<i64>>(8)?,
+                    ))
+                },
+            )?;
+
+            let mut ideas = Vec::new();
+            for row in rows {
+                let (id, name, created, updated, live, connected, retired, promoted, signal) = row?;
+                let Ok(id) = IdeaId::parse(&id) else {
+                    continue;
+                };
+                ideas.push(IdeaSummary {
+                    id,
+                    name,
+                    created: from_nanos(created),
+                    members: live as usize,
+                    // Connected minus live: the evidence the idea has lost.
+                    missing: (connected - live).max(0) as usize,
+                    retired: retired != 0,
+                    promoted_to: promoted.and_then(|slug| Slug::parse(&slug).ok()),
+                    last_signal: signal.map(from_nanos),
+                    updated: from_nanos(updated),
+                });
+            }
+
+            Ok(IdeaList {
+                ideas,
+                total: total as usize,
+            })
+        })
+        .await
+    }
+
+    /// The ideas that currently hold this capture, and what else they hold.
+    ///
+    /// Consulted before a capture is deleted for good. Retired ideas are
+    /// included so the caller can name every thread the deletion touches, not
+    /// only the ones that would refuse it.
+    pub async fn ideas_holding(
+        &self,
+        owner: &Owner,
+        capture: &CaptureId,
+    ) -> Result<Vec<IdeaHold>, IndexError> {
+        let capture = capture.to_string();
+        let owner = owner_column(owner);
+
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(&format!(
+                "select idea_threads.id,
+                        idea_threads.name,
+                        coalesce(idea_thread_state.retired, 0),
+                        (select count(*) from idea_membership as held
+                         join idea_captures on idea_captures.id = held.capture_id
+                         where held.idea_id = idea_threads.id)
+                 from idea_membership
+                 join idea_threads on idea_threads.id = idea_membership.idea_id
+                 left join idea_thread_state
+                      on idea_thread_state.idea_id = idea_threads.id
+                 where idea_membership.capture_id = :capture and {OWNED}
+                 order by idea_threads.id"
+            ))?;
+
+            let rows = statement.query_map(
+                named_params! { ":capture": &capture, ":owner": &owner },
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )?;
+
+            let mut holds = Vec::new();
+            for row in rows {
+                let (id, name, retired, members) = row?;
+                if let Ok(id) = IdeaId::parse(&id) {
+                    holds.push(IdeaHold {
+                        id,
+                        name,
+                        retired: retired != 0,
+                        members: members as usize,
+                    });
+                }
+            }
+            Ok(holds)
+        })
+        .await
+    }
+
+    /// The captures an idea currently holds, oldest first.
+    ///
+    /// Live ones only: a member whose file is gone has no text to return, and
+    /// [`IdeaState::missing`] is where it is named instead. Ids sort
+    /// chronologically as text, so ordering by id is ordering by when the
+    /// thought was captured.
+    pub async fn idea_captures(
+        &self,
+        owner: &Owner,
+        idea: &IdeaId,
+    ) -> Result<Vec<CaptureRecord>, IndexError> {
+        let asking = owner.clone();
+        let idea = idea.to_string();
+        let owner = owner_column(owner);
+
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(&format!(
+                "select idea_captures.id,
+                        idea_captures.created,
+                        idea_captures.updated,
+                        idea_captures.size,
+                        (select body from idea_captures_fts
+                         where rowid = idea_captures.rowid),
+                        coalesce(idea_capture_state.archived, 0)
+                 from idea_membership
+                 join idea_captures on idea_captures.id = idea_membership.capture_id
+                 left join idea_capture_state
+                      on idea_capture_state.capture_id = idea_captures.id
+                 where idea_membership.idea_id = :idea and {OWNED}
+                 order by idea_captures.id"
+            ))?;
+
+            let rows =
+                statement.query_map(named_params! { ":idea": &idea, ":owner": &owner }, |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                })?;
+
+            let mut captures = Vec::new();
+            for row in rows {
+                let (id, created, updated, size, body, archived) = row?;
+                let Ok(id) = CaptureId::parse(&id) else {
+                    continue;
+                };
+                captures.push(CaptureRecord {
+                    id,
+                    owner: asking.clone(),
+                    created: from_nanos(created),
+                    body,
+                    archived: archived != 0,
+                    updated: from_nanos(updated),
+                    size: size as u64,
+                });
+            }
+            Ok(captures)
         })
         .await
     }

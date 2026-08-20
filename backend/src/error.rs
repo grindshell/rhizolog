@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use utoipa::ToSchema;
 
+use crate::ideas::{CaptureId, IdError, IdeaId, IdeaServiceError, IdeaStoreError, RecordKind};
 use crate::index::IndexError;
 use crate::page::PageError;
 use crate::slug::{Slug, SlugError};
@@ -185,6 +186,67 @@ pub enum AppError {
         visibility: &'static str,
     },
 
+    /// An Idea Inbox id in a URL that is not one.
+    #[error("invalid {record} id {raw:?}: {source}")]
+    InvalidRecordId {
+        record: RecordKind,
+        raw: String,
+        #[source]
+        source: IdError,
+    },
+
+    #[error(transparent)]
+    Ideas(#[from] IdeaServiceError),
+
+    /// Deleting a capture an idea has nothing else to stand on.
+    ///
+    /// A conflict rather than a bad request: the request is well formed and
+    /// would work the moment the idea holds something else or is retired. The
+    /// alternative is an idea with no authored evidence, which cannot be given a
+    /// lifecycle state at all, and manufacturing one out of nothing is the thing
+    /// this feature must never do.
+    #[error("{id} is the only capture {name} still holds; connect another or retire the idea")]
+    CaptureRequiredByIdea {
+        id: CaptureId,
+        idea: IdeaId,
+        name: String,
+    },
+
+    /// Disconnecting an idea's last capture.
+    ///
+    /// Refused for the same reason, and pointed at the reversible answer:
+    /// retiring an idea sets it aside without leaving it unanswerable.
+    #[error("an idea has to keep at least one capture; retire {id} instead")]
+    IdeaWouldBeEmpty { id: IdeaId },
+
+    /// Retiring what is already retired, or reopening what is not.
+    ///
+    /// Conflicts rather than no-ops. Affirming twice is two affirmations at two
+    /// times and is meaningful; retiring twice is a caller that thinks the state
+    /// is something it is not, and telling it so is more use than a second event
+    /// nobody asked for.
+    #[error("{id} is already retired")]
+    IdeaAlreadyRetired { id: IdeaId },
+
+    #[error("{id} is not retired")]
+    IdeaNotRetired { id: IdeaId },
+
+    /// The authored file was written and the index would not take it.
+    ///
+    /// Says so plainly, because the two halves of a write have come apart and a
+    /// caller that retried would write the record twice. Nothing is lost: the
+    /// files are the truth and `POST /api/reindex` puts the derived half back in
+    /// step.
+    #[error(
+        "{what} was written to disk, but the index would not take it. Nothing is lost; run \
+         POST /api/reindex to bring the index back in step."
+    )]
+    WrittenButNotIndexed {
+        what: &'static str,
+        #[source]
+        source: IndexError,
+    },
+
     #[error("{message}")]
     Internal { message: String },
 }
@@ -237,9 +299,36 @@ impl AppError {
             // A bad request rather than a conflict: the caller asked for a state
             // that is not allowed to exist, and adding one field fixes it.
             Self::OwnerlessPage { .. } => StatusCode::BAD_REQUEST,
+            Self::Ideas(error) => match error {
+                IdeaServiceError::CaptureNotFound { .. }
+                | IdeaServiceError::IdeaNotFound { .. } => StatusCode::NOT_FOUND,
+                IdeaServiceError::EmptyCapture
+                | IdeaServiceError::EmptyName
+                | IdeaServiceError::NoSeeds
+                | IdeaServiceError::TooManySeeds { .. } => StatusCode::BAD_REQUEST,
+                // A draft the reader would refuse means the server built one
+                // wrong, which is not something the caller phrased.
+                IdeaServiceError::Record(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                IdeaServiceError::Store(store) => match store {
+                    IdeaStoreError::NotFound { .. } => StatusCode::NOT_FOUND,
+                    IdeaStoreError::EscapesRoot { .. } => StatusCode::BAD_REQUEST,
+                    IdeaStoreError::NotUtf8 { .. } | IdeaStoreError::Malformed { .. } => {
+                        StatusCode::UNPROCESSABLE_ENTITY
+                    }
+                    IdeaStoreError::NoFreeId { .. } | IdeaStoreError::Io(_) => {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                },
+            },
+            Self::CaptureRequiredByIdea { .. }
+            | Self::IdeaWouldBeEmpty { .. }
+            | Self::IdeaAlreadyRetired { .. }
+            | Self::IdeaNotRetired { .. } => StatusCode::CONFLICT,
+            Self::WrittenButNotIndexed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::RouteNotFound { .. } | Self::PinNotFound { .. } => StatusCode::NOT_FOUND,
             Self::TooManyPins { .. } | Self::TimeNotRunning { .. } => StatusCode::CONFLICT,
-            Self::InvalidTimeId { .. }
+            Self::InvalidRecordId { .. }
+            | Self::InvalidTimeId { .. }
             | Self::TimeRangeInverted { .. }
             | Self::InvalidRequestBody { .. }
             | Self::InvalidUsername { .. }
@@ -292,6 +381,17 @@ impl AppError {
             Self::NoPasswordSet { .. } => "no_password_set",
             Self::LastOwner => "last_owner",
             Self::OwnerlessPage { .. } => "ownerless_page",
+            Self::Ideas(error) => error.code(),
+            Self::InvalidRecordId { record, .. } => match record {
+                RecordKind::Capture => "invalid_capture_id",
+                RecordKind::Idea => "invalid_idea_id",
+                RecordKind::Event => "invalid_idea_event_id",
+            },
+            Self::CaptureRequiredByIdea { .. } => "capture_required_by_idea",
+            Self::IdeaWouldBeEmpty { .. } => "idea_would_be_empty",
+            Self::IdeaAlreadyRetired { .. } => "idea_already_retired",
+            Self::IdeaNotRetired { .. } => "idea_not_retired",
+            Self::WrittenButNotIndexed { .. } => "written_but_not_indexed",
             Self::InvalidTimeId { .. } => "invalid_time_id",
             Self::TimeNotRunning { .. } => "time_not_running",
             Self::TimeRangeInverted { .. } => "time_range_inverted",
@@ -365,6 +465,38 @@ impl AppError {
             // exactly what an attacker would like to be told, and a caller's
             // next move — sign in — is the same for all of them.
             Self::Unauthorized | Self::InvalidCredentials | Self::LastOwner => None,
+            Self::Ideas(error) => match error {
+                // The id, and nothing about whose it was. A caller who may not
+                // read a capture must not be able to tell it exists.
+                IdeaServiceError::CaptureNotFound { id } => Some(json!({ "id": id })),
+                IdeaServiceError::IdeaNotFound { id } => Some(json!({ "id": id })),
+                IdeaServiceError::TooManySeeds { count } => Some(json!({
+                    "count": count,
+                    "maximum": crate::ideas::MAX_SEEDS,
+                })),
+                IdeaServiceError::Store(store) => store
+                    .id()
+                    .map(|id| json!({ "id": id, "reason": store.to_string() })),
+                IdeaServiceError::EmptyCapture
+                | IdeaServiceError::EmptyName
+                | IdeaServiceError::NoSeeds
+                | IdeaServiceError::Record(_) => None,
+            },
+            Self::InvalidRecordId { raw, source, .. } => Some(json!({
+                "id": raw,
+                "reason": source.to_string(),
+            })),
+            // Names the idea that would be left with nothing, so a caller can
+            // say which one and offer the two ways out rather than a refusal.
+            Self::CaptureRequiredByIdea { id, idea, name } => Some(json!({
+                "id": id,
+                "idea": idea,
+                "name": name,
+            })),
+            Self::IdeaWouldBeEmpty { id }
+            | Self::IdeaAlreadyRetired { id }
+            | Self::IdeaNotRetired { id } => Some(json!({ "id": id })),
+            Self::WrittenButNotIndexed { what, .. } => Some(json!({ "written": what })),
             Self::InvalidTimeId { raw, source } => Some(json!({
                 "id": raw,
                 "reason": source.to_string(),
@@ -408,8 +540,13 @@ impl AppError {
             Self::Store(StoreError::Io(_))
             | Self::Times(TimeStoreError::Io(_))
             | Self::Users(UserStoreError::Io(_))
+            | Self::Ideas(IdeaServiceError::Store(IdeaStoreError::Io(_)))
             | Self::Index(_)
             | Self::Internal { .. } => "the server failed to handle the request".to_owned(),
+            // The exception to the rule above: this one is a server failure that
+            // the caller has to be told about, because the authored write did
+            // succeed and retrying would write the record a second time.
+            Self::WrittenButNotIndexed { .. } => self.to_string(),
             other => other.to_string(),
         }
     }

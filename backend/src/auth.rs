@@ -47,6 +47,7 @@ use sha2::{Digest, Sha256};
 
 use crate::api::AppState;
 use crate::error::{AppError, AppResult};
+use crate::ideas::Owner;
 use crate::index::Audience;
 use crate::users::{Role, User, Username};
 
@@ -167,6 +168,27 @@ impl Viewer {
 
     pub fn role(&self) -> Option<Role> {
         self.account().map(User::role)
+    }
+
+    /// Whose Idea Inbox records this request is asking about.
+    ///
+    /// Deliberately **not** [`Viewer::username`], which returns `None` for an
+    /// open wiki and `None` for an anonymous caller. Those two have no name for
+    /// opposite reasons: an open wiki has one user and nothing to withhold,
+    /// while an anonymous request on a wiki with accounts is nobody. Mapping
+    /// both to [`Owner::open`] would hand a stranger every capture written
+    /// before the first account existed.
+    ///
+    /// [`gate`] already refuses anonymous callers on every idea route, including
+    /// under `RHIZOLOG_ANONYMOUS_READ`, which lists no idea path. This is the
+    /// second lock on the same door, and it is here because the first one is a
+    /// list somebody could add to by accident.
+    pub fn owner(&self) -> AppResult<Owner> {
+        match self {
+            Self::Open => Ok(Owner::open()),
+            Self::Account(user) => Ok(Owner::of(user.username.clone())),
+            Self::Anonymous => Err(AppError::Unauthorized),
+        }
     }
 
     /// Whether this request may create, change and delete accounts.

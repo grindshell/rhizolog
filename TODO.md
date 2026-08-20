@@ -174,36 +174,28 @@ pieces that are known to be missing.
 ## Idea Inbox
 
 The implementation direction is settled and recorded in
-[Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phases I0 and
-I1 are built**: the authored model and store, and the derived index that folds
-decisions into current state, reconciles at startup and follows external edits.
-The four phases after them are not, so the feature is not usable and capture
-alone is not the MVP. The work is phased so that the authored store can land
-before analysis and UI without calling that partial slice the feature.
+[Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phases I0, I1
+and I2 are built**: the authored model and store, the derived index that folds
+decisions into current state, and the owner-scoped HTTP API over both, with
+twenty-one endpoints and adoption of the open user's records by the first
+account. The three phases after them are not, so the recurrence loop the feature
+exists to test does not run yet and capture alone is not the MVP.
 
-- **No API.** Owner-scoped CRUD, the decision operations, uniform errors,
-  OpenAPI schemas and unique operation ids, then regenerating
-  `frontend/openapi.json` and `frontend/src/api/schema.d.ts`. `AppState`
-  already carries an `IdeaService`, so the handlers have somewhere to call.
 - **No term index, and so no analyzer.** `idea_terms` is the one table from the
   plan that I1 deliberately did not create: tokenization belongs to the
   analyzer, which arrives with its own fixtures and its own schema bump. A
   bump costs one scan, which is the whole point of the mechanism.
-- **No explainable recurrence.** TF-IDF version 1, candidate rejection and
-  reconsideration, the deterministic lifecycle rules and evidence receipts are
-  the part that distinguishes this from a second notes inbox.
+- **No explainable recurrence.** TF-IDF version 1, the candidate endpoint,
+  the deterministic lifecycle rules and evidence receipts are the part that
+  distinguishes this from a second notes inbox. Rejection and reconsideration
+  are already built on both sides, so what is missing is what proposes a
+  candidate in the first place.
+- **`GET /api/ideas` cannot filter by lifecycle state**, because there is no
+  lifecycle function yet. It returns the folded facts one would be computed
+  from, and gains `state`, `integrity` and `at` with I3.
 - **No dashboard surface or promotion path.** `/inbox`, `/ideas` and idea detail
   need a responsive capture-first UI. Promotion should assemble a page draft,
   use the existing page API, then record the association idempotently.
-- **Open captures are not yet adopted by the first account.** Owner comparison
-  is equality, so a capture written while the wiki had no accounts belongs to
-  no account once one exists, which would cost somebody their whole inbox for
-  turning authentication on. The answer is decided: creating the first account
-  stamps `owner:` onto every unowned capture, idea and event. What is not
-  decided is where that runs, since an account can also be created by dropping
-  a file into `.rhizolog/users/` and no API handler sees that. It rewrites
-  authored files, so it is a migration and wants a log line and a refusal
-  rather than a guess if more than one account already exists. Needed by I2.
 
 Do not add LLM summaries, embeddings, automatic membership, notifications,
 tasks or a native mobile app while this slice is in progress. Those are later

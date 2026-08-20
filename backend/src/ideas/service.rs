@@ -69,6 +69,28 @@ pub enum IdeaServiceError {
     Store(#[from] IdeaStoreError),
 }
 
+impl IdeaServiceError {
+    /// A stable, machine-readable identifier for what went wrong.
+    ///
+    /// A record that is not this caller's reports `*_not_found`, exactly as a
+    /// record that never existed does. That is the disclosure rule, and it has
+    /// to hold here as much as in the message: a code a client could branch on
+    /// to tell the two apart would be the oracle the prose was careful not to
+    /// be.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::EmptyCapture => "capture_empty",
+            Self::EmptyName => "idea_name_empty",
+            Self::NoSeeds => "idea_no_seeds",
+            Self::TooManySeeds { .. } => "idea_too_many_seeds",
+            Self::CaptureNotFound { .. } => "capture_not_found",
+            Self::IdeaNotFound { .. } => "idea_not_found",
+            Self::Record(_) => "idea_event_invalid",
+            Self::Store(error) => error.code(),
+        }
+    }
+}
+
 /// Idea Inbox, with its rules attached.
 #[derive(Debug, Clone)]
 pub struct IdeaService {

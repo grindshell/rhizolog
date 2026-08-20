@@ -1,11 +1,12 @@
 # Idea Inbox implementation plan
 
-Status: in progress. **Phases I0 and I1 are built**: the authored model and
-store, and the derived index that folds decisions into current state. There is
-still no API, no analysis and no UI, so the feature is not usable and capture
-alone is not the MVP. The phases and completion gates below remain the handoff
-for the rest, and [What I0 and I1 actually built](#what-i0-and-i1-actually-built)
-records where the code has departed from this page.
+Status: in progress. **Phases I0, I1 and I2 are built**: the authored model and
+store, the derived index that folds decisions into current state, and the
+owner-scoped HTTP API over both. There is still no analysis and no UI, so the
+recurrence loop the feature exists to test does not run yet and capture alone is
+not the MVP. The phases and completion gates below remain the handoff for the
+rest, and [What is built so far](#what-is-built-so-far) records where the code
+has departed from this page.
 
 Idea Inbox gives Rhizolog a low-friction place to capture unfinished thoughts,
 notice which ones recur, and turn a mature idea into a wiki page. A capture is
@@ -267,31 +268,26 @@ through the API any more. That is what the rule above says on its own, and it is
 not what anybody wants on the day they turn authentication on: it costs somebody
 their whole inbox for doing the thing the documentation told them to do.
 
-**Decided: creating the first account stamps `owner:` onto every unowned
-capture, idea and event.** The open user and the first account are the same
+**Decided and built: creating the first account stamps `owner:` onto every
+unowned capture and thread, and `actor:` onto every unowned event.** See
+`backend/src/ideas/adoption.rs`. The open user and the first account are the same
 person, on a single-user wiki that has just been pointed at a network. Reading
 the other two answers out loud settles it. Leaving the files unowned is honest
 and unhelpful. Treating an unowned record as readable by every account leaks
 working notes the moment a second account is added, which is exactly the
 boundary the private-owner design exists to hold, and it leaks them silently.
 
-Two things this does not decide, both for I2:
+It runs in **two places**, because there is no single moment the API controls:
+an account can also be created by dropping a file into `.rhizolog/users/`, and
+`UserStore::count` is answered from the directory on every request so that this
+works immediately. The create-account handler alone would miss that, and startup
+alone would leave the inbox invisible between creating an account through the
+API and restarting. Both, and idempotent, costs a second run that finds nothing.
 
-- **Where adoption runs.** There is no single moment the API controls, because
-  an account can also be created by dropping a file into `.rhizolog/users/`,
-  and `UserStore::count` is answered from the directory on every request so
-  that this works immediately. Adoption in the create-account handler alone
-  would miss it. Startup reconciliation sees both paths and is the obvious
-  second half, with the condition being "there is exactly one account and there
-  are unowned idea records".
-- **That it is a one-way write.** It rewrites authored files, so it is a
-  migration rather than a view, and it should log what it touched and be
-  refused rather than guessed at if there is more than one account by the time
-  it runs. Two accounts and a pile of unowned captures is a question only a
-  person can answer.
-
-I0 implements neither, and deliberately has no code path that infers an owner:
-it is the phase that decides what a file means, not what a migration does.
+It rewrites authored files, so it is a migration rather than a view. It logs
+what it touched, it is written to survive being interrupted, and it refuses to
+act when there is more than one account: two accounts and a pile of unowned
+captures is a question only a person can answer.
 
 ## Derived index
 
@@ -672,7 +668,7 @@ logical commit boundary. Stage exact paths and do not include unrelated work.
 
 ### I0: authored model and store
 
-**Built.** See [What I0 and I1 actually built](#what-i0-and-i1-actually-built).
+**Built.** See [What is built so far](#what-is-built-so-far).
 
 - Add ids, capture, idea and event parsing and serialization.
 - Add atomic create, read, patch, delete and walk operations.
@@ -686,7 +682,7 @@ reopened over data created through the API-facing drafts.
 
 ### I1: derived index, reconciliation and watcher
 
-**Built.** See [What I0 and I1 actually built](#what-i0-and-i1-actually-built).
+**Built.** See [What is built so far](#what-is-built-so-far).
 
 - Add schema and index operations.
 - Fold decision events into current membership and state inputs.
@@ -698,6 +694,8 @@ Done when deleting `index.db` and restarting produces exactly equivalent
 API-visible idea state for a fixed `at` timestamp.
 
 ### I2: capture and idea API
+
+**Built.** See [What is built so far](#what-is-built-so-far).
 
 - Add owner-scoped CRUD and decision operations.
 - Add uniform errors, limits, OpenAPI schemas and unique operation ids.
@@ -746,13 +744,14 @@ Done when promotion preserves every source capture, creates an ordinary page
 with ordinary visibility, and leaves a retryable path if recording the
 promotion association fails.
 
-## What I0 and I1 actually built
+## What is built so far
 
-`backend/src/ideas/{mod,store,service}.rs` are the authored half:
-the three file formats, the three trees on disk, and the rules. `index/ideas.rs`
-is the derived half, and `index/schema.rs`, `index/sync.rs`, `watcher.rs`,
-`server.rs` and `api/mod.rs` carry it into startup, reconciliation and live
-pickup of external edits.
+`backend/src/ideas/{mod,store,service,adoption}.rs` are the authored half: the
+three file formats, the three trees on disk, the rules, and the one migration.
+`index/ideas.rs` is the derived half. `index/schema.rs`, `index/sync.rs`,
+`watcher.rs` and `server.rs` carry it into startup, reconciliation and live
+pickup of external edits, and `api/ideas.rs` is the twenty-one endpoints over
+all of it.
 
 ### Nothing is created until something is written
 
@@ -859,6 +858,64 @@ owner, and in SQL `null = null` is null, which a `where` clause reads as false:
 under `=` the open user would be unable to see a single thing they had written.
 `is` compares nulls as equal, so the open user matches exactly the open records
 and an account matches exactly its own.
+
+### Deciding is `PUT` and `DELETE`, and acting is `POST`
+
+Connecting a capture to an idea is `PUT /api/ideas/{id}/captures/{capture}` and
+disconnecting it is the `DELETE`. The state being asked for is in the URL, so a
+client that repeats itself changes nothing and writes no second event. That is
+the plan's "duplicate idempotent API actions do not write duplicate events",
+enforced by the shape of the route rather than by a check somebody has to
+remember.
+
+Archive and restore are `POST` because they read as acts, and they are
+idempotent anyway. Affirm and dismiss are `POST` and are *not* idempotent, which
+is right: affirming twice is two affirmations at two times and both are real.
+
+Retiring what is already retired is a `409` rather than a no-op. That is not
+inconsistent with the paragraph above: a caller retiring twice believes the
+state is something it is not, and telling it so is more use than an event nobody
+asked for.
+
+### The API's own additions to the plan
+
+- **`Viewer::owner`** refuses an anonymous caller rather than mapping it to the
+  open user. `Viewer::username` returns `None` for both, and they mean opposite
+  things: an open wiki has one user and nothing to withhold, while an anonymous
+  request on a wiki with accounts is nobody. The gate already refuses every idea
+  route to anonymous callers and `RHIZOLOG_ANONYMOUS_READ` lists none of them;
+  this is the second lock, because the first one is a list somebody could add to
+  by accident.
+- **`written_but_not_indexed`** is a new error code, for the case the plan
+  describes: the authored file is on disk and the index would not take it. It
+  says so rather than reporting a generic failure, because a caller told only
+  "internal error" would retry and write the record a second time.
+- **The note is read from the thread's file, not the index.** `idea_threads`
+  carries no `note` column: notes are usually empty, they are needed only by the
+  detail view, and the time log already sets the precedent of keeping the prose
+  on disk and a flag in the index. A file that cannot be read at that instant
+  costs the note rather than the request.
+- **`GET /api/ideas` has no `state` or `at` filter yet.** Both need the lifecycle
+  function, which is I3's. What the listing returns is the folded fact each of
+  them would be computed from.
+
+### Adoption is built, and runs in both places
+
+The handler behind `POST /api/users` runs it when it creates the first account,
+which is what keeps an inbox from disappearing even for a moment, and startup
+runs it after reconciliation, which is what catches an account file somebody
+dropped into `.rhizolog/users/`. It is idempotent, so the second of those is
+three counting queries that find nothing.
+
+After reconciliation and never before it: the decision is made from index counts
+rather than a walk of every file, and a deleted database would otherwise report
+an empty inbox and adopt nothing.
+
+`IdeaStore::adopt_event` is the one operation in the codebase that rewrites a
+decision, and it exists only for this. It changes who a decision is attributed
+to, never what was decided or when, so the fold is untouched and the id, which
+is the fold order, does not move. It refuses an event that already names an
+actor.
 
 ### `SyncReport` counts five trees
 

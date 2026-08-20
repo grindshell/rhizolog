@@ -26,7 +26,7 @@ use crate::api::{OPENAPI_PATH, SWAGGER_UI_PATH};
 use crate::assets;
 use crate::config::Listen;
 use crate::endpoint::{self, Endpoint};
-use crate::ideas::{IdeaService, IdeaStore};
+use crate::ideas::{self, IdeaService, IdeaStore};
 use crate::index::sync::sync;
 use crate::store::display_path;
 use crate::users::UserStore;
@@ -134,6 +134,10 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
     tracing::info!(idea_inbox = %ideas.root_display(), "opened idea inbox");
 
     reconcile(&store, &times, &ideas, &index).await?;
+    // After reconciliation, never before it: this decides what to do from three
+    // counting queries, and a deleted database would report an empty inbox and
+    // adopt nothing. See `crate::ideas::adoption`.
+    ideas::adoption::adopt_and_report(&ideas, &users, &index).await;
     announce_access(&users, config).await?;
 
     let listener = bind(config.listen).await?;

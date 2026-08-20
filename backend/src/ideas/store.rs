@@ -75,6 +75,50 @@ pub enum IdeaStoreError {
 }
 
 impl IdeaStoreError {
+    /// A stable, machine-readable identifier for what went wrong.
+    ///
+    /// Same contract as [`crate::slug::SlugError::code`]: a caller branches on
+    /// this and never on the prose. The record kind is folded into the code
+    /// rather than reported beside it, because "not found" means something
+    /// different to a client depending on which of the three it was.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NotFound { kind, .. } => match kind {
+                RecordKind::Capture => "capture_not_found",
+                RecordKind::Idea => "idea_not_found",
+                RecordKind::Event => "idea_event_not_found",
+            },
+            Self::NotUtf8 { kind, .. } => match kind {
+                RecordKind::Capture => "capture_not_utf8",
+                RecordKind::Idea => "idea_not_utf8",
+                RecordKind::Event => "idea_event_not_utf8",
+            },
+            Self::EscapesRoot { kind, .. } => match kind {
+                RecordKind::Capture => "capture_escapes_root",
+                RecordKind::Idea => "idea_escapes_root",
+                RecordKind::Event => "idea_event_escapes_root",
+            },
+            Self::Malformed { kind, .. } => match kind {
+                RecordKind::Capture => "capture_malformed",
+                RecordKind::Idea => "idea_malformed",
+                RecordKind::Event => "idea_event_malformed",
+            },
+            Self::NoFreeId { .. } => "idea_id_exhausted",
+            Self::Io(_) => "io_error",
+        }
+    }
+
+    /// The id the failure is about, for the error response's `details`.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::NotFound { id, .. }
+            | Self::NotUtf8 { id, .. }
+            | Self::EscapesRoot { id, .. }
+            | Self::Malformed { id, .. } => Some(id),
+            Self::NoFreeId { .. } | Self::Io(_) => None,
+        }
+    }
+
     fn not_found(kind: RecordKind, id: impl fmt::Display) -> Self {
         Self::NotFound {
             kind,
@@ -533,6 +577,41 @@ impl IdeaStore {
             kind: RecordKind::Event,
             at: draft.created,
         })
+    }
+
+    /// Write `actor` into an event that has none.
+    ///
+    /// The one operation in this module that rewrites a decision, and it exists
+    /// for exactly one caller: [`crate::ideas::adoption`], which stamps an owner
+    /// onto the records a wiki accumulated before it had accounts. It changes
+    /// who a decision is attributed to and never what was decided or when, so
+    /// the fold is untouched and the id, which *is* the fold order, does not
+    /// move.
+    ///
+    /// An event that already names an actor is left alone and reported `false`,
+    /// so this can never reattribute one person's decision to another.
+    pub(crate) async fn adopt_event(
+        &self,
+        id: &EventId,
+        actor: &Owner,
+    ) -> Result<Option<Event>, IdeaStoreError> {
+        let existing = self.read_event(id).await?;
+        if !existing.actor.is_open() {
+            return Ok(None);
+        }
+
+        let path = self.event_path(id).await?;
+        let event = Event {
+            actor: actor.clone(),
+            ..existing
+        };
+        let (updated, size) = put(&path, &event.to_markdown()).await?;
+
+        Ok(Some(Event {
+            updated,
+            size,
+            ..event
+        }))
     }
 
     /// Every decision event, in no particular order.

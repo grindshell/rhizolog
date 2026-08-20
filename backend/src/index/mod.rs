@@ -35,7 +35,9 @@ pub use graph::{
     Graph, GraphEdge, GraphNode, GraphOptions, InboundLink, LinkTotals, LinkedPage, OutboundLink,
     PageLinks, PageRef, RouteUsage, Stats, TagCount, WantedPage,
 };
-pub use ideas::{CaptureRecord, IdeaState};
+pub use ideas::{
+    CaptureList, CaptureListOptions, CaptureRecord, IdeaHold, IdeaList, IdeaState, IdeaSummary,
+};
 pub use pins::Pin;
 pub use sessions::StoredSession;
 pub use sync::{SyncCounts, SyncReport, sync};

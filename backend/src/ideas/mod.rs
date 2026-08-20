@@ -64,6 +64,7 @@
 //!
 //! See `knowledge-base/idea-inbox.md` for the reasoning behind all of it.
 
+pub mod adoption;
 pub mod service;
 pub mod store;
 
@@ -79,6 +80,7 @@ use crate::frontmatter::{self, FrontmatterError};
 use crate::slug::Slug;
 use crate::users::Username;
 
+pub use adoption::{Adoption, AdoptionError};
 pub use service::{IdeaService, IdeaServiceError};
 pub use store::{CaptureDraft, EventDraft, IdeaDraft, IdeaStore, IdeaStoreError, IdeaWalkEntry};
 
