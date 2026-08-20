@@ -171,6 +171,47 @@ pieces that are known to be missing.
 - **Sessions are not listable.** `count_sessions` exists and nothing exposes it.
   "Where am I signed in, and sign that one out" is the natural next endpoint.
 
+## Idea Inbox
+
+The implementation direction is settled and recorded in
+[Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phase I0, the
+authored model and store, is built**; the five phases after it are not, so the
+feature is not usable and capture alone is not the MVP. The work is phased so
+that the authored store can land before analysis and UI without calling that
+partial slice the feature.
+
+- **Nothing outside `backend/src/ideas/` knows the store exists.** `AppState`,
+  `server::start`, manual reindex and the watcher are all untouched, because
+  wiring a store into startup before anything reconciles it would create a
+  directory on every wiki for no reason. `AppState` should hold an
+  `IdeaService` and reach the files through `IdeaService::store()`, which is
+  where the owner rules stop being optional.
+- **No derived index.** Folding decision events into current membership,
+  rejections, lifecycle inputs and promotion state, plus startup
+  reconciliation, a rebuild that equals incremental state, capture FTS, term
+  rows and watcher targets. SQLite may accelerate the feature but may not
+  become its only copy.
+- **No API.** Owner-scoped CRUD, the decision operations, uniform errors,
+  OpenAPI schemas and unique operation ids, then regenerating
+  `frontend/openapi.json` and `frontend/src/api/schema.d.ts`.
+- **No explainable recurrence.** TF-IDF version 1, candidate rejection and
+  reconsideration, the deterministic lifecycle rules and evidence receipts are
+  the part that distinguishes this from a second notes inbox.
+- **No dashboard surface or promotion path.** `/inbox`, `/ideas` and idea detail
+  need a responsive capture-first UI. Promotion should assemble a page draft,
+  use the existing page API, then record the association idempotently.
+- **What happens to open captures when the first account appears is
+  undecided.** Owner comparison is equality, so a capture written while the
+  wiki had no accounts belongs to no account once one exists. I0 leaves it that
+  way deliberately rather than guessing an owner, and the three candidate
+  answers are written up under Ownership and disclosure on the knowledge base
+  page. It has to be settled before the endpoints ship, because that is the
+  point at which somebody can be locked out of their own inbox.
+
+Do not add LLM summaries, embeddings, automatic membership, notifications,
+tasks or a native mobile app while this slice is in progress. Those are later
+questions gated on observed use, not missing pieces of the MVP.
+
 ## Rough edges
 
 - **A time entry's `start` and `end` do not take a bare date.** `created` does,

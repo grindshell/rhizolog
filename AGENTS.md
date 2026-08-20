@@ -57,12 +57,14 @@ starting a timer while it is pointed there writes a new file into the fixture
 and breaks those numbers. Check `git status example-wiki` afterwards.
 
 **`.rhizolog/` is not all disposable.** `index.db` is derived and rebuilds on
-startup; `.rhizolog/times/` beside it is the time log, which is authored data
-with no other copy, and `.rhizolog/users/` is the accounts, which are authored
-data *and* secret, since each file carries a password hash. That is why the
+startup. Three things beside it are authored data with no other copy:
+`.rhizolog/times/` is the time log, `.rhizolog/ideas/` is Idea Inbox's captures,
+threads and decision events, and `.rhizolog/users/` is the accounts, which are
+authored *and* secret since each file carries a password hash. That is why the
 gitignore names the database rather than the directory, and why `users/` is the
 one authored thing in there that is ignored too. See
-`knowledge-base/time-tracking.md` and `knowledge-base/accounts.md`.
+`knowledge-base/time-tracking.md`, `knowledge-base/idea-inbox.md` and
+`knowledge-base/accounts.md`.
 
 ## Tech stack
 

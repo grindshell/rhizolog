@@ -20,6 +20,8 @@ Every page should be reachable from this index.
   the one SQL predicate that enforces all four
 - [Time tracking](time-tracking.md) — timers, the time log on disk, and why a
   time link is not a link
+- [Idea Inbox implementation plan](idea-inbox.md): low-friction capture,
+  explainable recurrence, lifecycle receipts, and promotion into wiki pages
 - [The desktop app](desktop-app.md) — packaging as a portable Tauri app, and
   keeping the server the only interface
 - [The product site](product-site.md) — rhizolog.com: what the landing page is

@@ -11,6 +11,7 @@ pub mod config;
 pub mod endpoint;
 pub mod error;
 pub mod frontmatter;
+pub mod ideas;
 pub mod index;
 pub mod markdown;
 pub mod page;
@@ -28,6 +29,10 @@ pub use auth::Viewer;
 pub use config::{Config, Fallbacks, Listen};
 pub use endpoint::Endpoint;
 pub use error::{AppError, AppResult};
+pub use ideas::{
+    Capture, CaptureId, Event, EventId, EventKind, Idea, IdeaId, IdeaService, IdeaServiceError,
+    IdeaStore, IdeaStoreError, Owner, Subject,
+};
 pub use index::{Index, IndexError, SyncReport};
 pub use page::{Frontmatter, Page, PageError};
 pub use server::Server;
