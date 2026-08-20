@@ -1453,6 +1453,16 @@ export interface components {
             captures: number;
             /** Format: date-time */
             created: string;
+            /**
+             * Format: date-time
+             * @description When rediscovery was last dismissed for it. Absent if it never was.
+             *
+             *     Not a lifecycle input, and deliberately so: dismissing a card says
+             *     something about the card rather than about the idea. It is here because
+             *     choosing today's rediscovery is the client's to do, and this is the one
+             *     thing that choice needs which nothing else on this view says.
+             */
+            dismissed?: string | null;
             id: components["schemas"]["IdeaId"];
             /** @description Whether every connected capture is still readable. */
             integrity: components["schemas"]["Integrity"];
@@ -1521,6 +1531,11 @@ export interface components {
             computed_at: string;
             /** Format: date-time */
             created: string;
+            /**
+             * Format: date-time
+             * @description When rediscovery was last dismissed for it. Absent if it never was.
+             */
+            dismissed?: string | null;
             id: components["schemas"]["IdeaId"];
             integrity: components["schemas"]["Integrity"];
             /** Format: date-time */

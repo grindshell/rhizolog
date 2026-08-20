@@ -141,7 +141,13 @@ export default function TimeStats(props: { stats: TimeStatsResponse }) {
       </div>
 
       <div class="grid gap-4 lg:grid-cols-3">
-        <div class="card bg-base-100 shadow lg:col-span-2">
+        {/*
+          `min-w-0`, because a grid item refuses by default to be narrower than
+          its content, and the heat map inside is deliberately wider than a
+          phone. Without it the item wins, the heat map's own `overflow-x-auto`
+          never engages, and the whole row hangs off the side of the screen.
+        */}
+        <div class="card bg-base-100 min-w-0 shadow lg:col-span-2">
           <div class="card-body">
             <h3 class="card-title text-base">Active hours</h3>
             <p class="text-xs opacity-60">

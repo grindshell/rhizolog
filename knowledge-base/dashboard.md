@@ -15,15 +15,66 @@ Setup and versions live in [Tech stack](tech-stack.md).
 | `/tags` | Every tag, linking into the filtered listing |
 | `/graph` | The link graph, drawn; narrowed by `?root=`, `?depth=`, `?prefix=`, `?tag=`, `?wanted=` |
 | `/times` | The time log: running timers, entries, groups; narrowed by `?q=`, `?name=`, `?page=` |
+| `/inbox` | Idea Inbox: the capture field, the chronological inbox, candidate suggestions and one rediscovery card; narrowed by `?q=` and `?show=` |
+| `/ideas` | Idea threads grouped by lifecycle state; narrowed by `?state=` and `?integrity=` |
+| `/ideas/:id` | One thread: its receipt, its captures, and every decision that can be taken about it |
 | `/accounts` | Accounts, and — on a wiki that has none — the form that creates the first |
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
+
+`/inbox` accepts `?capture=1`, which focuses the text field. It is what the
+Create menu links to, and it is a parameter rather than the default because
+arriving at the inbox to read it should not put a keyboard over half a phone
+screen.
 
 There is deliberately no `/login`. See below.
 
 There is deliberately no `/times/:id`. An id is a machine's handle — unlike a
 slug it is not something anyone would link to — so an entry is read and edited
 in the log itself.
+
+`/ideas/:id` is a plain path parameter rather than a splat, because an idea id
+contains no slashes. There is no `/captures/:id` beside it for the `/times/:id`
+reason and one more: a capture is working material rather than a document, and
+the deliberate way to make one into something you would send somebody is to
+promote the idea holding it into a page.
+
+## The top bar renders its navigation twice
+
+`Layout.tsx` holds one `DESTINATIONS` array and draws it in two places: a
+horizontal menu that appears at `lg` and above, and a dropdown that appears below
+it. Two renderings of one list rather than two lists, because two lists drift and
+the one that drifts is always the one only phones see.
+
+Creating is one control containing Capture and New page, in that order. Capture
+is the primary action on a phone and costs one text field; a page costs a slug, a
+title and a decision about where it goes. The standalone New button this replaced
+was fine on a laptop and was competing for space with timers, pins and an account
+everywhere else.
+
+Timers, pins, create and the account never collapse into the menu at any width.
+A pin left in place is harmless and a timer left running overnight is not, and an
+account menu you cannot reach is a session you cannot end. What gives instead, in
+this order, is the two idle labels (glyphs below `sm`), the account's display
+name (truncated harder), and finally the wordmark, which is the only thing in the
+bar that is decoration. At 375 pixels with an account signed in the row comes to
+exactly the viewport width with the wordmark still whole.
+
+### Two CSS rules cost this project three overflowing screens
+
+Checking every route at 375 found three, all pre-dating the work that went
+looking, and between them two causes worth knowing before writing another grid:
+
+- **A grid item's default `min-width` is `auto`**, so it refuses to be narrower
+  than its content. An `<input>` carries an intrinsic width, and an
+  `overflow-x-auto` child never gets to scroll because the item grows instead. It
+  is why the account form and the time heat map each set the width of the page
+  they were on, and why `min-w-0` on the item is the fix in both.
+- **daisyUI's `.label` and `.stat-desc` are `white-space: nowrap`**, which
+  silently defeats `break-all` beside it. A long Windows path in the dashboard's
+  Wiki root stat and a two-line hint under the username field were each one
+  unbreakable line. `whitespace-normal` is the fix, and it has to be said
+  explicitly because the component library said the opposite first.
 
 ## Signing in is not a route
 
@@ -287,6 +338,28 @@ What is covered is the part where the bugs were, not the part that is easy:
 - **The error envelope**, including the transport cases and the one case that
   must *not* become an `ApiError`: an abort, which is a caller who stopped
   caring rather than a failure.
+- **That a capture survives a failed save.** The text stays in the field when the
+  request fails, clears only once the server has it, and never becomes a request
+  at all when it is blank. Beside it, that candidates are asked for only after
+  the capture is saved: two requests in that order and never the other way round,
+  because analysis is derived and retryable and the capture is not.
+- **That a suggestion connects nothing by itself**, from both sides: the shared
+  signals and the score render, no connect or create call is made, and accepting
+  a loose capture asks for the idea's name first, because Rhizolog never invents
+  one.
+- **That a failed resource stays inside its own panel.** An analyzer that is
+  behind leaves the capture field working; a receipt that cannot be worked out
+  leaves the thread readable. Both are one guard on `resource.latest`, and both
+  are invisible in the source: reading a Solid resource that failed rethrows, and
+  an unguarded read takes the whole route with it.
+- **The rediscovery choice**, which is a pure function and tested as one: that it
+  takes only dormant threads with more than one capture, that a dismissal holds
+  for exactly thirty days, that the same day gives the same card however the
+  listing was ordered, and that the date it reads is the reader's local one.
+- **That the shell offers every destination twice**, that Capture and New page
+  are behind one control with no standalone New beside it, and that timers, pins
+  and the account are all still reachable. It is the check that a navigation
+  rewritten for a phone did not quietly drop a route on the way.
 
 Modified clicks are covered too, because intercepting one would break opening a
 page in a new tab, and nothing about the code makes that obvious.

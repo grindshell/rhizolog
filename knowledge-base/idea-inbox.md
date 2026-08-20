@@ -1,13 +1,14 @@
 # Idea Inbox implementation plan
 
-Status: in progress. **Phases I0 through I3 are built**: the authored model and
+Status: in progress. **Phases I0 through I4 are built**: the authored model and
 store, the derived index that folds decisions into current state, the
-owner-scoped HTTP API over both, and the explainable half, `tfidf/v1` candidates
-and `idea-momentum/v1` lifecycle receipts. The recurrence loop now runs end to
-end over HTTP. What it has is no surface, so nobody can walk it without Swagger
-UI, and no way out into the wiki. The phases and completion gates below remain the
-handoff for the rest, and [What is built so far](#what-is-built-so-far) records
-where the code has departed from this page.
+owner-scoped HTTP API over both, the explainable half (`tfidf/v1` candidates and
+`idea-momentum/v1` lifecycle receipts), and the dashboard over the lot. The whole
+loop can be walked in a browser at 375 pixels wide: capture, connect, see why,
+reject a wrong suggestion, retire, reopen and rediscover. What is left is the way
+out into the wiki. The phases and completion gates below remain the handoff for
+the rest, and [What is built so far](#what-is-built-so-far) records where the
+code has departed from this page.
 
 Idea Inbox gives Rhizolog a low-friction place to capture unfinished thoughts,
 notice which ones recur, and turn a mature idea into a wiki page. A capture is
@@ -723,6 +724,8 @@ response without reading implementation code.
 
 ### I4: responsive dashboard
 
+**Built.** See [What is built so far](#what-is-built-so-far).
+
 - Add typed client functions and the three routes.
 - Implement capture success and failure behaviour before candidate UI.
 - Add Ideas and receipt views, then decision actions.
@@ -758,6 +761,12 @@ the two pure modules read and hands it over whole. `index/schema.rs`,
 `index/sync.rs`, `watcher.rs` and `server.rs` carry all of it into startup,
 reconciliation and live pickup of external edits, and `api/ideas.rs` is the
 twenty-three endpoints over the lot.
+
+In `frontend/`, `routes/{Inbox,Ideas,IdeaDetail}.tsx` are the three screens,
+`components/Candidates.tsx` is the suggestion panel both of the first two use,
+`components/Rediscovery.tsx` is the card and the pure function that chooses it,
+and `api/client.ts` grew the twenty-three typed calls. `components/Layout.tsx`
+is the shell, rebuilt for a phone.
 
 ### Nothing is created until something is written
 
@@ -909,6 +918,10 @@ asked for.
   response is the only place to say what it is.
 - **Every float on the wire is rounded to six decimal places**, in one place, so
   a client comparing two numbers is comparing them at the same precision.
+- **An idea carries `dismissed`**, which the plan's tables do not mention. It is
+  the one rediscovery input a caller cannot work out for itself, and it arrived
+  with the card that needed it. See
+  [The rediscovery card is chosen in the browser](#the-rediscovery-card-is-chosen-in-the-browser-and-the-server-had-to-say-one-more-thing).
 
 ### Adoption is built, and runs in both places
 
@@ -1024,6 +1037,93 @@ totalled. They are read by different code and go wrong in different ways, and a
 scan reporting "412 idea files" when one thread has gone missing is a number
 nobody can act on. `POST /api/reindex` returns all five, and `server::start`
 logs one line each.
+
+### The dashboard keeps saving and analyzing apart, because the API does
+
+`POST /api/captures` returns before anything has looked at the text, and
+`Inbox.tsx` is written so that nothing can quietly put the two back together.
+The text stays in the textarea until the create request has resolved, the field
+is cleared only then, and the candidates request is made from the *response*
+rather than from the draft. `keeps the text when the request fails` and
+`asks for candidates only after the capture is saved` are those two sentences as
+tests, and they are the ones to keep if the file is ever rewritten: a form that
+empties optimistically and then fails has thrown away the only copy of a thought
+that existed, and the thought is the entire product.
+
+The suggestion panel is the same component in both places it appears, and its
+resource is read through a guard rather than directly. Reading a Solid resource
+that failed *rethrows*, so an unguarded read of a `503 idea_analysis_unavailable`
+would throw out of the panel and take the capture form above it down with it,
+which is precisely the coupling the two requests exist to prevent. The panel
+shows the error and an offer to try again, and the capture is on disk throughout.
+
+### The rediscovery card is chosen in the browser, and the server had to say one more thing
+
+Selection is `chooseRediscovery` in `components/Rediscovery.tsx`: a pure function
+of the eligible ideas and an instant, which sorts by id, hashes the reader's
+**local** calendar date and indexes into the list. Local rather than UTC, because
+"today" happens where the person is and a UTC date would change the card over
+dinner east of Greenwich. Deterministic, because a card you can refresh past is a
+feed, and this feature has spent its whole design avoiding being one. Nothing is
+written by rendering it: dismissing and affirming are requests, and closing the
+tab is neither.
+
+Three of the four eligibility rules are on the listing already. The fourth,
+"not affirmed or dismissed in the last 30 days", turned out to be one rule and a
+half. Affirmation needs no check at all: an affirmation moves `last_signal`, and
+an idea whose last signal is inside sixty days is not dormant, so the dormancy
+test has already made it. **Dismissal was invisible.** `rediscovery_dismissed`
+was written and stored and folded into nothing, because nothing needed it until
+something had to decide what to offer today.
+
+So `IdeaSummary`, `IdeaSummaryView` and `IdeaView` gained a `dismissed`
+timestamp, gathered by a third query in `idea_evidence` over `idea_events`. Three
+things about that shape were deliberate:
+
+- **Not a column on `idea_thread_state`**, which would have been a schema bump
+  for a value nothing folds. It answers one question, asked once per listing, and
+  a `max(created) group by idea_id` answers it.
+- **Not part of `Evidence`.** The lifecycle must not be able to see it. Dismissing
+  a card is a statement about the card, and a momentum that fell because somebody
+  looked away from a thought would be the product arguing with them.
+- **Not an eligibility flag.** The server returns when it happened and the client
+  applies the thirty days, so the rule stays in one place beside the other three
+  rather than being half here and half there.
+
+`a_dismissal_is_visible_to_whoever_chooses_what_to_resurface` covers all of it,
+including that momentum and state do not move when it is written.
+
+### The shell gives up the wordmark before it gives up a control
+
+The old top bar was a wordmark, six links, timers, pins, a New button and an
+account menu in one row, which is fine at 1280 and off the side of the screen at
+375. What replaced it renders the destinations **twice**, horizontally above
+`lg` and inside a menu below it, from one `DESTINATIONS` array. One array because
+two lists drift, and the one that drifts is always the one only phones see.
+
+Capture and New page moved behind a single Create menu, with Capture first: it is
+the one you reach for while walking, and it costs one text field where a page
+costs a slug, a title and a decision. Its entry is `/inbox?capture=1` rather than
+`/inbox`, because that is the explicit capture action and the one that should
+land in the field. Opening the inbox to read it should not throw a keyboard over
+half the screen.
+
+What stays visible at every width is timers, pins, create and the account. A
+timer left running overnight is the most expensive thing this bar can fail to
+show. To make room, the two idle labels became glyphs below `sm`, the account
+name truncates harder, and the wordmark is the only thing allowed to shrink,
+because it is the only thing there that is decoration. Measured at 375 with an
+account signed in, the bar comes to exactly the viewport width with the wordmark
+still whole.
+
+Checking the whole shell at 375, as this phase's brief says to, found three
+overflows that had nothing to do with Idea Inbox and one cause between them:
+**a grid item will not go narrower than its content, and daisyUI's `.label` and
+`.stat-desc` are `nowrap`.** So a long Windows path in the dashboard's Wiki root
+stat, the heat map inside its own `overflow-x-auto`, and the account form's
+username hint each set the width of the page they were on. Three classes fixed
+all three, and they are recorded here rather than in a commit message because
+the next component to use `grid` will hit it again.
 
 ## Test strategy
 

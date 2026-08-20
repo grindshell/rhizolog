@@ -28,10 +28,15 @@ export default function AccountMenu() {
     <Show when={user()}>
       {(account) => (
         <div class="dropdown dropdown-end">
-          <div tabindex="0" role="button" class="btn btn-ghost btn-sm">
-            <span class="max-w-32 truncate">{account().display_name}</span>
+          <div tabindex="0" role="button" class="btn btn-ghost btn-sm px-2">
+            {/*
+              Harder truncation and no role badge on a narrow screen. Who you
+              are has to stay in the bar at every width; how long your display
+              name is does not.
+            */}
+            <span class="max-w-20 truncate sm:max-w-32">{account().display_name}</span>
             <Show when={account().role === 'owner'}>
-              <span class="badge badge-ghost badge-sm">owner</span>
+              <span class="badge badge-ghost badge-sm hidden sm:inline-flex">owner</span>
             </Show>
           </div>
           <ul

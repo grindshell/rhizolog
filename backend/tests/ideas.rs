@@ -416,6 +416,48 @@ async fn affirming_moves_the_last_signal_every_time() {
     assert_eq!(dismissed.body["retired"], false);
 }
 
+/// Rediscovery decides what to offer today, and it needs to know what it was
+/// told to stop offering. A dismissal is the one decision nothing folds into
+/// anything, so the listing carries when it happened and the caller applies the
+/// thirty days.
+#[tokio::test]
+async fn a_dismissal_is_visible_to_whoever_chooses_what_to_resurface() {
+    let app = App::open().await;
+    let seed = app.capture("Dungeon seeds.\n").await;
+    let idea = app.start_idea("Dungeon seeds", &[&seed]).await;
+
+    let before = app.get("/api/ideas").await;
+    assert_eq!(before.body["ideas"][0]["dismissed"], Value::Null);
+
+    app.post(&format!("/api/ideas/{idea}/dismiss"), None).await;
+
+    let after = app.get("/api/ideas").await;
+    let first = after.body["ideas"][0]["dismissed"]
+        .as_str()
+        .expect("a dismissal on the listing")
+        .to_owned();
+
+    // And on the idea itself, where the detail view says why no card appeared.
+    let detail = app.get(&format!("/api/ideas/{idea}")).await;
+    assert_eq!(detail.body["dismissed"], first);
+
+    // Dismissing again moves it, because the thirty days start over.
+    app.post(&format!("/api/ideas/{idea}/dismiss"), None).await;
+    let again = app.get("/api/ideas").await;
+    assert!(again.body["ideas"][0]["dismissed"].as_str() >= Some(first.as_str()));
+
+    // It is not a lifecycle input. Looking away from a thought does not change
+    // what the thought is worth.
+    assert_eq!(
+        again.body["ideas"][0]["momentum"],
+        before.body["ideas"][0]["momentum"]
+    );
+    assert_eq!(
+        again.body["ideas"][0]["state"],
+        before.body["ideas"][0]["state"]
+    );
+}
+
 /// Deleting a capture an idea has nothing else to stand on is refused, and the
 /// refusal names the thread so a caller can say which one.
 #[tokio::test]

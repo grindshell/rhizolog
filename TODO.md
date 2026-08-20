@@ -175,24 +175,31 @@ pieces that are known to be missing.
 
 The implementation direction is settled and recorded in
 [Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phases I0
-through I3 are built**: the authored model and store, the derived index that
-folds decisions into current state, the owner-scoped HTTP API over both, and the
-explainable half, `tfidf/v1` candidates and `idea-momentum/v1` lifecycle
-receipts. **The recurrence loop now runs end to end over HTTP.** What it does not
-have is a surface a person can use without Swagger UI, or a way out into the
-wiki.
+through I4 are built**: the authored model and store, the derived index that
+folds decisions into current state, the owner-scoped HTTP API over both, the
+explainable half (`tfidf/v1` candidates and `idea-momentum/v1` lifecycle
+receipts), and the dashboard over the lot. **The whole loop can now be walked in
+a browser, on a phone**: capture, connect, see why, reject a wrong suggestion,
+retire, reopen and rediscover. What it does not have is a way out into the wiki.
 
-- **No dashboard surface.** `/inbox`, `/ideas` and idea detail need a responsive
-  capture-first UI, and the app shell's horizontal navigation is too dense for a
-  phone. Until then the loop is real but nobody can walk it: I4.
 - **No promotion path.** `GET /api/ideas/{id}/draft` and
   `PUT /api/ideas/{id}/promotion` are the last two endpoints in the plan. The
   event kind, the fold and the `promoted_to` field all exist and are exercised;
   what is missing is assembling the draft and recording the association. I5.
-- **No rediscovery card.** The eligibility rule is written down and
-  `rediscovery_dismissed` is recorded and folded, but nothing selects the one
-  idea to resurface. Selection has to be stable for an owner and a local
-  calendar date, so refreshing does not rotate through cards.
+- **The ideas screen reads the whole listing and groups it in the browser.** It
+  asks for 200, which is the API's ceiling, and there is no paging control. The
+  states are grouped on that screen, and a page boundary in the middle of Dormant
+  would be a grouping that lied, so the choice was the whole list or a redesign.
+  Somebody who has named two hundred threads has earned the redesign.
+- **An idea's decision events are not listed anywhere.** The receipt shows the
+  affirmations and reopenings, because those are what the rules counted, and
+  nothing shows connects, rejections or archivings as a history. There is no
+  endpoint for it either. The events are all on disk and folded; what is missing
+  is a reason to read them back that is better than `git log`.
+- **A capture has no address of its own.** No `/captures/:id`, so an idea's
+  receipt links to the capture's row inside the same page rather than to the
+  capture. Working material is not a document, and a link somebody could send
+  somebody else is the thing promotion is for.
 - **Candidates are scored against the whole corpus every request.** Every vector
   is rebuilt per call and every thread's centroid with it, which is fine for an
   inbox of hundreds and unmeasured beyond that. The plan's performance gate is
@@ -209,6 +216,16 @@ questions gated on observed use, not missing pieces of the MVP.
 
 ## Rough edges
 
+- **The no-em-dash rule is enforced going forward and was never applied
+  backwards.** `be05e64` made it project-wide and cleared the root documents;
+  everything written before that still has them. As of the Idea Inbox dashboard
+  there are about 949 across 109 files, the worst offenders being
+  `knowledge-base/desktop-app.md`, `frontend/src/api/client.ts` and
+  `knowledge-base/architecture.md`. It is a prose sweep rather than a change of
+  behaviour, which is exactly why it should be one deliberate pass and not a few
+  lines smuggled into a feature commit. Find them with
+  `Select-String -Pattern ([char]0x2014)`, and do not do it by round-tripping
+  files through PowerShell: `AGENTS.md` records what that costs.
 - **A time entry's `start` and `end` do not take a bare date.** `created` does,
   on both a page and an account, and these were deliberately left out rather than
   forgotten: a bare date on `created` fills in a time that was never there, while

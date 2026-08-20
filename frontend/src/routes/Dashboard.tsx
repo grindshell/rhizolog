@@ -100,7 +100,15 @@ export default function Dashboard() {
             </div>
             <div class="stat">
               <div class="stat-title">Wiki root</div>
-              <div class="stat-desc font-mono break-all">{server.wiki_root}</div>
+              {/*
+                `whitespace-normal` because daisyUI's `stat-desc` is `nowrap`,
+                which defeats `break-all` on its own: a long Windows path then
+                sizes the whole stats block and takes the dashboard off the
+                right of a phone screen.
+              */}
+              <div class="stat-desc font-mono break-all whitespace-normal">
+                {server.wiki_root}
+              </div>
             </div>
           </div>
         )}

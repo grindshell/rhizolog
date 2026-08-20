@@ -11,6 +11,9 @@ import PagesBrowse from './routes/PagesBrowse'
 import PageDetail from './routes/PageDetail'
 import Editor from './routes/Editor'
 import GraphView from './routes/GraphView'
+import Inbox from './routes/Inbox'
+import Ideas from './routes/Ideas'
+import IdeaDetail from './routes/IdeaDetail'
 import Tags from './routes/Tags'
 import Times from './routes/Times'
 import NotFound from './routes/NotFound'
@@ -62,6 +65,16 @@ render(
           would link to — unlike a slug, which is the whole point of a page.
         */}
         <Route path="/times" component={Times} />
+        {/*
+          `:id` rather than a splat, and no `/captures/:id` beside it. An idea
+          id has no slashes in it, so an ordinary path parameter is enough.
+          A capture is read where it lives, in the inbox and in whatever
+          threads hold it, because it is working material rather than a
+          document anybody would link somebody else to.
+        */}
+        <Route path="/inbox" component={Inbox} />
+        <Route path="/ideas" component={Ideas} />
+        <Route path="/ideas/:id" component={IdeaDetail} />
         {/*
           A route rather than a section of the shell, because on an open wiki it
           is where the first account gets created — and there is no account menu

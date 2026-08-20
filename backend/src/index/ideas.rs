@@ -113,6 +113,14 @@ pub struct IdeaSummary {
     pub retired: bool,
     pub promoted_to: Option<Slug>,
     pub last_signal: Option<DateTime<Utc>>,
+    /// When rediscovery was last dismissed for it, if it ever was.
+    ///
+    /// Deliberately not part of [`Evidence`]: dismissing a card is a statement
+    /// about the card and not about the idea, and letting it reach the rules
+    /// would make looking away from a thought change what the thought is worth.
+    /// It is here because rediscovery eligibility is the caller's to work out
+    /// and this is the one input it cannot see any other way.
+    pub dismissed: Option<DateTime<Utc>>,
     pub updated: DateTime<Utc>,
 }
 
@@ -867,6 +875,7 @@ impl Index {
                                 retired: retired != 0,
                                 promoted_to: promoted.and_then(|slug| Slug::parse(&slug).ok()),
                                 last_signal: signal.map(from_nanos),
+                                dismissed: None,
                                 updated: from_nanos(updated),
                             },
                             evidence: Evidence {
@@ -943,10 +952,38 @@ impl Index {
                 }
             }
 
+            // The latest dismissal per idea, which is a third query rather than
+            // a column on `idea_thread_state` because nothing folds it into
+            // anything. It answers one question, "should rediscovery offer this
+            // today", and it answers it to the caller rather than to the rules.
+            let mut dismissals: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
+            {
+                let mut statement = connection.prepare(
+                    "select idea_events.idea_id, max(idea_events.created)
+                     from idea_events
+                     join idea_threads on idea_threads.id = idea_events.idea_id
+                     where idea_threads.owner is :owner
+                       and (:only is null or idea_threads.id = :only)
+                       and idea_events.kind = 'rediscovery_dismissed'
+                     group by idea_events.idea_id",
+                )?;
+
+                let rows = statement
+                    .query_map(named_params! { ":owner": &owner, ":only": &only }, |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    })?;
+
+                for row in rows {
+                    let (idea, created) = row?;
+                    dismissals.insert(idea, from_nanos(created));
+                }
+            }
+
             for thread in &mut threads {
                 if let Some(found) = affirmations.remove(thread.summary.id.as_str()) {
                     thread.evidence.affirmations = found;
                 }
+                thread.summary.dismissed = dismissals.remove(thread.summary.id.as_str());
             }
 
             Ok(threads)

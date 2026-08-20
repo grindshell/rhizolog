@@ -67,6 +67,33 @@ export type PatchUserResponse = Schemas['PatchUserResponse']
 export type LoginRequest = Schemas['LoginRequest']
 export type LoginResponse = Schemas['LoginResponse']
 export type SessionStatus = Schemas['SessionStatus']
+export type CaptureId = Schemas['CaptureId']
+export type IdeaId = Schemas['IdeaId']
+export type EventId = Schemas['EventId']
+export type EventKind = Schemas['EventKind']
+export type Lifecycle = Schemas['Lifecycle']
+export type Integrity = Schemas['Integrity']
+export type CaptureView = Schemas['CaptureView']
+export type CaptureListResponse = Schemas['CaptureListResponse']
+export type CreateCapture = Schemas['CreateCapture']
+export type PatchCapture = Schemas['PatchCapture']
+export type DeletedCapture = Schemas['DeletedCapture']
+export type AffectedIdea = Schemas['AffectedIdea']
+export type CandidateResponse = Schemas['CandidateResponse']
+export type CandidateView = Schemas['CandidateView']
+export type SignalView = Schemas['SignalView']
+export type TargetKind = Schemas['TargetKind']
+export type IdeaTargetView = Schemas['IdeaTargetView']
+export type IdeaView = Schemas['IdeaView']
+export type IdeaSummaryView = Schemas['IdeaSummaryView']
+export type IdeaListResponse = Schemas['IdeaListResponse']
+export type CreateIdea = Schemas['CreateIdea']
+export type PatchIdea = Schemas['PatchIdea']
+export type ReceiptResponse = Schemas['ReceiptResponse']
+export type Components = Schemas['Components']
+export type Boundaries = Schemas['Boundaries']
+export type CountedCapture = Schemas['CountedCapture']
+export type CountedAffirmation = Schemas['CountedAffirmation']
 
 /** Query parameters, taken straight from the generated operations. */
 export type ListPagesQuery = NonNullable<operations['list']['parameters']['query']>
@@ -75,6 +102,9 @@ export type ReadPageQuery = NonNullable<operations['read']['parameters']['query'
 export type GraphQuery = NonNullable<operations['link_graph']['parameters']['query']>
 export type ListTimesQuery = NonNullable<operations['list_times']['parameters']['query']>
 export type TimeStatsQuery = NonNullable<operations['time_statistics']['parameters']['query']>
+export type ListCapturesQuery = NonNullable<operations['list_captures']['parameters']['query']>
+export type ListIdeasQuery = NonNullable<operations['list_ideas']['parameters']['query']>
+export type ReceiptQuery = NonNullable<operations['read_idea_receipt']['parameters']['query']>
 
 /**
  * Every failure the API reports, whatever the status, arrives as
@@ -630,6 +660,265 @@ export function deleteUser(username: string, signal?: AbortSignal): Promise<void
     method: 'DELETE',
     signal,
   })
+}
+
+/* ----------------------------------------------------------- idea inbox -- */
+
+/**
+ * Ids are minted by the server and contain nothing that needs escaping, but
+ * they go through `encodeURIComponent` anyway. A path built by concatenation is
+ * a path somebody will one day hand something else.
+ */
+function capturePath(id: string, suffix = ''): string {
+  return `/captures/${encodeURIComponent(id)}${suffix}`
+}
+
+function ideaPath(id: string, suffix = ''): string {
+  return `/ideas/${encodeURIComponent(id)}${suffix}`
+}
+
+/** Where one idea is read in the browser. */
+export function ideaHref(id: string): string {
+  return `/ideas/${encodeURIComponent(id)}`
+}
+
+/**
+ * Where a lifecycle state is browsed.
+ *
+ * A state is a filter in the URL rather than a tab in component state, so
+ * "everything dormant" is a link somebody can keep.
+ */
+export function lifecycleHref(state: string): string {
+  return `/ideas?state=${encodeURIComponent(state)}`
+}
+
+/** `GET /api/captures`: the inbox, newest first. */
+export function listCaptures(
+  query?: ListCapturesQuery,
+  signal?: AbortSignal,
+): Promise<CaptureListResponse> {
+  return request<CaptureListResponse>('/captures', { query, signal })
+}
+
+/**
+ * `POST /api/captures`: save text with a server timestamp.
+ *
+ * The primary operation of the whole feature, and deliberately the one that
+ * asks for nothing else: no title, no tag, no idea. Nothing is analyzed here,
+ * so nothing about the analyzer can lose what somebody just typed.
+ */
+export function createCapture(
+  body: CreateCapture,
+  signal?: AbortSignal,
+): Promise<CaptureView> {
+  return request<CaptureView>('/captures', { method: 'POST', body, signal })
+}
+
+/** `GET /api/captures/{id}`: one capture. */
+export function getCapture(id: string, signal?: AbortSignal): Promise<CaptureView> {
+  return request<CaptureView>(capturePath(id), { signal })
+}
+
+/** `PATCH /api/captures/{id}`: correct the text. `created` does not move. */
+export function patchCapture(
+  id: string,
+  body: PatchCapture,
+  signal?: AbortSignal,
+): Promise<CaptureView> {
+  return request<CaptureView>(capturePath(id), { method: 'PATCH', body, signal })
+}
+
+/**
+ * `DELETE /api/captures/{id}`: permanent, and refused with `409`
+ * (`capture_required_by_idea`) when it is the last thing an idea stands on.
+ *
+ * The response names the ideas that held it so the caller can say what changed
+ * without going and reading them.
+ */
+export function deleteCapture(
+  id: string,
+  signal?: AbortSignal,
+): Promise<DeletedCapture> {
+  return request<DeletedCapture>(capturePath(id), { method: 'DELETE', signal })
+}
+
+/** `POST /api/captures/{id}/archive`: out of the inbox, still evidence. */
+export function archiveCapture(id: string, signal?: AbortSignal): Promise<CaptureView> {
+  return request<CaptureView>(capturePath(id, '/archive'), { method: 'POST', signal })
+}
+
+/** `POST /api/captures/{id}/restore`: back into the inbox. */
+export function restoreCapture(id: string, signal?: AbortSignal): Promise<CaptureView> {
+  return request<CaptureView>(capturePath(id, '/restore'), { method: 'POST', signal })
+}
+
+/**
+ * `GET /api/captures/{id}/candidates`: what this might belong with, and the
+ * arithmetic that says so.
+ *
+ * Advisory. Nothing here has connected anything, and `503`
+ * (`idea_analysis_unavailable`) means the index is behind rather than that
+ * something is broken: the capture is on disk and a reindex fixes it.
+ */
+export function captureCandidates(
+  id: string,
+  signal?: AbortSignal,
+): Promise<CandidateResponse> {
+  return request<CandidateResponse>(capturePath(id, '/candidates'), { signal })
+}
+
+/**
+ * `PUT /api/captures/{id}/rejections/{other}`: stop suggesting these two
+ * together. Idempotent, and the pair is one decision whichever side asked.
+ */
+export function rejectCapturePair(
+  id: string,
+  other: string,
+  signal?: AbortSignal,
+): Promise<CaptureView> {
+  return request<CaptureView>(
+    capturePath(id, `/rejections/${encodeURIComponent(other)}`),
+    { method: 'PUT', signal },
+  )
+}
+
+/** `DELETE /api/captures/{id}/rejections/{other}`: suggest it again. */
+export function reconsiderCapturePair(
+  id: string,
+  other: string,
+  signal?: AbortSignal,
+): Promise<CaptureView> {
+  return request<CaptureView>(
+    capturePath(id, `/rejections/${encodeURIComponent(other)}`),
+    { method: 'DELETE', signal },
+  )
+}
+
+/**
+ * `GET /api/ideas`: the threads, most recently active first.
+ *
+ * `state` and `integrity` are worked out by the rules rather than by SQL, so
+ * `total` counts what matched rather than what existed.
+ */
+export function listIdeas(
+  query?: ListIdeasQuery,
+  signal?: AbortSignal,
+): Promise<IdeaListResponse> {
+  return request<IdeaListResponse>('/ideas', { query, signal })
+}
+
+/** `POST /api/ideas`: name a thread and give it the captures it starts from. */
+export function createIdea(body: CreateIdea, signal?: AbortSignal): Promise<IdeaView> {
+  return request<IdeaView>('/ideas', { method: 'POST', body, signal })
+}
+
+/** `GET /api/ideas/{id}`: the thread, what it holds and where it stands. */
+export function getIdea(id: string, signal?: AbortSignal): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id), { signal })
+}
+
+/** `PATCH /api/ideas/{id}`: rename it or rewrite its note. */
+export function patchIdea(
+  id: string,
+  body: PatchIdea,
+  signal?: AbortSignal,
+): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id), { method: 'PATCH', body, signal })
+}
+
+/**
+ * `PUT /api/ideas/{id}/captures/{capture}`: connect one. Idempotent, because
+ * the state being asked for is in the URL: repeating it writes no second event.
+ */
+export function connectCapture(
+  id: string,
+  capture: string,
+  signal?: AbortSignal,
+): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, `/captures/${encodeURIComponent(capture)}`), {
+    method: 'PUT',
+    signal,
+  })
+}
+
+/**
+ * `DELETE /api/ideas/{id}/captures/{capture}`: disconnect, refused with `409`
+ * (`idea_would_be_empty`) for the last one. Retiring is how an idea is set
+ * aside, and it is reversible.
+ */
+export function disconnectCapture(
+  id: string,
+  capture: string,
+  signal?: AbortSignal,
+): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, `/captures/${encodeURIComponent(capture)}`), {
+    method: 'DELETE',
+    signal,
+  })
+}
+
+/** `PUT /api/ideas/{id}/rejections/{capture}`: never suggest this one again. */
+export function rejectCandidate(
+  id: string,
+  capture: string,
+  signal?: AbortSignal,
+): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, `/rejections/${encodeURIComponent(capture)}`), {
+    method: 'PUT',
+    signal,
+  })
+}
+
+/** `DELETE /api/ideas/{id}/rejections/{capture}`: reconsider it. */
+export function reconsiderCandidate(
+  id: string,
+  capture: string,
+  signal?: AbortSignal,
+): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, `/rejections/${encodeURIComponent(capture)}`), {
+    method: 'DELETE',
+    signal,
+  })
+}
+
+/**
+ * `POST /api/ideas/{id}/affirm`: say you are still interested.
+ *
+ * Not idempotent, and right not to be: affirming twice is two affirmations at
+ * two moments and both of them happened.
+ */
+export function affirmIdea(id: string, signal?: AbortSignal): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, '/affirm'), { method: 'POST', signal })
+}
+
+/** `POST /api/ideas/{id}/retire`: set it aside. `409` if it already is. */
+export function retireIdea(id: string, signal?: AbortSignal): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, '/retire'), { method: 'POST', signal })
+}
+
+/** `POST /api/ideas/{id}/reopen`: take it back up. `409` if it was not retired. */
+export function reopenIdea(id: string, signal?: AbortSignal): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, '/reopen'), { method: 'POST', signal })
+}
+
+/** `POST /api/ideas/{id}/dismiss`: stop resurfacing it for thirty days. */
+export function dismissIdea(id: string, signal?: AbortSignal): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, '/dismiss'), { method: 'POST', signal })
+}
+
+/**
+ * `GET /api/ideas/{id}/receipt`: every number behind the state and momentum,
+ * and every authored record they were counted from.
+ *
+ * `at` asks about another moment. The dashboard asks about now; the parameter
+ * exists so that "why was this dormant last month" is answerable.
+ */
+export function ideaReceipt(
+  id: string,
+  query?: ReceiptQuery,
+  signal?: AbortSignal,
+): Promise<ReceiptResponse> {
+  return request<ReceiptResponse>(ideaPath(id, '/receipt'), { query, signal })
 }
 
 /* ----------------------------------------------------------------- meta -- */

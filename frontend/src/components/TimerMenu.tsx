@@ -53,11 +53,38 @@ export default function TimerMenu(props: { store?: TimerStore }) {
       <div
         tabindex="0"
         role="button"
-        class="btn btn-sm"
+        class="btn btn-sm px-2"
         classList={{ 'btn-ghost': running().length === 0, 'btn-secondary': running().length > 0 }}
         aria-label="Running timers"
       >
-        <Show when={oldest()} fallback={<>Timers</>}>
+        {/*
+          Idle, this is a glyph on a narrow screen and a glyph and a word on a
+          wide one. Running, it is a clock, which is the state worth the space:
+          the count says something is running and the clock says whether it
+          should be.
+        */}
+        <Show
+          when={oldest()}
+          fallback={
+            <>
+              <svg
+                class="size-4"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+              <span class="hidden sm:inline">Timers</span>
+            </>
+          }
+        >
           {(timer) => (
             <>
               <span class="inline-block size-2 animate-pulse rounded-full bg-current" />

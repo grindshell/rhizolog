@@ -39,8 +39,33 @@ export default function PinsMenu(props: { store?: PinStore }) {
 
   return (
     <div class="dropdown dropdown-end">
-      <div tabindex="0" role="button" class="btn btn-ghost btn-sm" aria-label="Pinned pages">
-        Pins
+      <div
+        tabindex="0"
+        role="button"
+        class="btn btn-ghost btn-sm px-2"
+        aria-label="Pinned pages"
+      >
+        {/*
+          The glyph is always there and the word is not, because on a 375px
+          screen this button shares a bar with timers, capture and an account,
+          and every one of those has to survive. The `aria-label` carries the
+          name at any width.
+        */}
+        <svg
+          class="size-4"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M9 4h6l-1 6 4 3v2H6v-2l4-3z" />
+          <path d="M12 15v5" />
+        </svg>
+        <span class="hidden sm:inline">Pins</span>
         <Show when={pins().pins().length > 0}>
           <span class="badge badge-ghost badge-sm">{pins().pins().length}</span>
         </Show>

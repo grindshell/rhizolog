@@ -163,6 +163,13 @@ pub struct IdeaSummaryView {
     /// The last time anything happened to it: a capture connected, or an
     /// affirmation, reopening or promotion.
     pub last_signal: Option<DateTime<Utc>>,
+    /// When rediscovery was last dismissed for it. Absent if it never was.
+    ///
+    /// Not a lifecycle input, and deliberately so: dismissing a card says
+    /// something about the card rather than about the idea. It is here because
+    /// choosing today's rediscovery is the client's to do, and this is the one
+    /// thing that choice needs which nothing else on this view says.
+    pub dismissed: Option<DateTime<Utc>>,
     /// Whether the idea has lost the evidence it rests on.
     ///
     /// A thread with nothing live connected cannot be given a lifecycle state,
@@ -199,6 +206,7 @@ impl From<IdeaStanding> for IdeaSummaryView {
             retired: summary.retired,
             promoted_to: summary.promoted_to,
             last_signal: summary.last_signal,
+            dismissed: summary.dismissed,
             integrity,
             state,
             momentum,
@@ -249,6 +257,8 @@ pub struct IdeaView {
     pub retired: bool,
     pub promoted_to: Option<Slug>,
     pub last_signal: Option<DateTime<Utc>>,
+    /// When rediscovery was last dismissed for it. Absent if it never was.
+    pub dismissed: Option<DateTime<Utc>>,
     pub needs_repair: bool,
     pub integrity: Integrity,
     /// Absent exactly when `needs_repair` is true.
@@ -663,7 +673,7 @@ async fn idea_view(
     at: DateTime<Utc>,
 ) -> AppResult<IdeaView> {
     let captures = state.index.idea_captures(owner, &folded.id).await?;
-    let (_, receipt) = assess(state, owner, &folded.id, at).await?;
+    let (summary, receipt) = assess(state, owner, &folded.id, at).await?;
 
     let note = match state.ideas.read_idea(owner, &folded.id).await {
         Ok(idea) => idea.note,
@@ -689,6 +699,7 @@ async fn idea_view(
         retired: folded.retired,
         promoted_to: folded.promoted_to,
         last_signal: folded.last_signal,
+        dismissed: summary.dismissed,
         updated: folded.updated,
     })
 }

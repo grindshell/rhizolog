@@ -259,7 +259,12 @@ function AccountForm(props: {
     <form class="flex flex-col gap-3 rounded-box border border-base-300 p-4" onSubmit={submit}>
       <Show when={error()}>{(problem) => <ErrorNotice error={problem()} />}</Show>
 
-      <div class="grid gap-3 sm:grid-cols-2">
+      {/*
+        `min-w-0` on every cell, because a grid item will not go narrower than
+        its content and an `input` brings a default intrinsic width with it.
+        Without it this form is wider than a phone.
+      */}
+      <div class="grid gap-3 *:min-w-0 sm:grid-cols-2">
         <label class="form-control">
           <div class="label">
             <span class="label-text">Username</span>
@@ -275,7 +280,11 @@ function AccountForm(props: {
             onInput={(event) => setUsername(event.currentTarget.value)}
           />
           <div class="label">
-            <span class="label-text-alt opacity-60">
+            {/*
+              `whitespace-normal` because daisyUI's label is `nowrap`, and a
+              hint of more than four words then sets the width of the form.
+            */}
+            <span class="label-text-alt whitespace-normal opacity-60">
               Lowercase letters, digits, <code>-</code> and <code>_</code>. It is
               also the filename.
             </span>
@@ -307,7 +316,7 @@ function AccountForm(props: {
             onInput={(event) => setPassword(event.currentTarget.value)}
           />
           <div class="label">
-            <span class="label-text-alt opacity-60">
+            <span class="label-text-alt whitespace-normal opacity-60">
               At least 8 characters. No other rules.
             </span>
           </div>
