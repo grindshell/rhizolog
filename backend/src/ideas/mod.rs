@@ -65,6 +65,8 @@
 //! See `knowledge-base/idea-inbox.md` for the reasoning behind all of it.
 
 pub mod adoption;
+pub mod analysis;
+pub mod lifecycle;
 pub mod service;
 pub mod store;
 
@@ -81,6 +83,11 @@ use crate::slug::Slug;
 use crate::users::Username;
 
 pub use adoption::{Adoption, AdoptionError};
+pub use analysis::{Candidate, Corpus, Document, Field, Signal, Target, Thread, Vector};
+pub use lifecycle::{
+    Affirmation, Boundaries, CaptureMoment, Components, CountedAffirmation, CountedCapture,
+    Evidence, Integrity, Lifecycle, Receipt,
+};
 pub use service::{IdeaService, IdeaServiceError};
 pub use store::{CaptureDraft, EventDraft, IdeaDraft, IdeaStore, IdeaStoreError, IdeaWalkEntry};
 

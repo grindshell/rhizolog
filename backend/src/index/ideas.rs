@@ -36,12 +36,14 @@
 //! filters in SQL before returning text, counts or ids. See [`OWNED`] for why
 //! the comparison is `is` rather than `=`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, named_params, params};
 
-use crate::ideas::{Capture, CaptureId, Event, EventId, Idea, IdeaId, Owner};
+use crate::ideas::analysis::{self, Corpus, Document, Field, Thread};
+use crate::ideas::lifecycle::{self, Affirmation, CaptureMoment, Evidence, Integrity, Lifecycle};
+use crate::ideas::{Capture, CaptureId, Event, EventId, EventKind, Idea, IdeaId, Owner};
 use crate::index::{Index, IndexError, Stamp, from_nanos, to_fts_query, to_nanos};
 use crate::slug::Slug;
 use crate::users::Username;
@@ -179,10 +181,67 @@ pub struct CaptureList {
     pub total: usize,
 }
 
+/// How to narrow the ideas listing.
+///
+/// `state` and `integrity` are filters over values SQL does not compute, so they
+/// are applied after [`lifecycle::assess`] has run over every one of this
+/// owner's ideas. That is also why `total` is honest under them: paginating in
+/// SQL and filtering afterwards would report a total that counted ideas the
+/// caller was not asking for.
+#[derive(Debug, Clone)]
+pub struct IdeaListOptions {
+    pub state: Option<Lifecycle>,
+    pub integrity: Option<Integrity>,
+    /// The instant the lifecycle is worked out for. Usually now; a test or a
+    /// historical view supplies its own.
+    pub at: DateTime<Utc>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+impl IdeaListOptions {
+    /// Everything, as it stood at one instant.
+    pub fn at(at: DateTime<Utc>) -> Self {
+        Self {
+            state: None,
+            integrity: None,
+            at,
+            limit: 50,
+            offset: 0,
+        }
+    }
+
+    fn matches(&self, standing: &IdeaStanding) -> bool {
+        self.state.is_none_or(|state| standing.state == Some(state))
+            && self
+                .integrity
+                .is_none_or(|integrity| standing.integrity == integrity)
+    }
+}
+
+/// One idea in a listing: the folded facts, plus where the rules put it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaStanding {
+    pub summary: IdeaSummary,
+    pub integrity: Integrity,
+    /// Absent exactly when the evidence is missing, because there is then
+    /// nothing to derive it from.
+    pub state: Option<Lifecycle>,
+    pub momentum: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdeaList {
-    pub ideas: Vec<IdeaSummary>,
+    pub ideas: Vec<IdeaStanding>,
     pub total: usize,
+}
+
+/// One idea, and everything both the analyzer and the lifecycle rules read
+/// about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaEvidence {
+    pub summary: IdeaSummary,
+    pub evidence: Evidence,
 }
 
 impl IdeaState {
@@ -209,6 +268,10 @@ impl Index {
         let updated = to_nanos(capture.updated, "capture updated")?;
         let size = capture.size as i64;
         let body = capture.body.clone();
+        // Tokenized here rather than in SQL, by the one function that decides
+        // what a term is. `idea_terms` is its output and nothing else's, which
+        // is why changing it is a schema-version change.
+        let terms = analysis::counts(&capture.body);
 
         self.with_connection(move |connection| {
             let transaction = connection.transaction()?;
@@ -240,6 +303,19 @@ impl Index {
                 "insert into idea_captures_fts (rowid, id, body) values (?1, ?2, ?3)",
                 params![rowid, &id, &body],
             )?;
+
+            // Rewritten wholesale, so a word taken out of the text leaves the
+            // analyzer's view of it too.
+            transaction.execute("delete from idea_terms where capture_id = ?1", params![&id])?;
+            {
+                let mut insert = transaction.prepare(
+                    "insert into idea_terms (capture_id, term, occurrences)
+                     values (?1, ?2, ?3)",
+                )?;
+                for (term, occurrences) in &terms {
+                    insert.execute(params![&id, term, i64::from(*occurrences)])?;
+                }
+            }
 
             refold_capture_and_its_ideas(&transaction, &id)?;
 
@@ -665,93 +741,336 @@ impl Index {
         .await
     }
 
-    /// This owner's ideas, newest signal first.
+    /// This owner's ideas, newest signal first, with where the rules put each
+    /// one.
     ///
-    /// No lifecycle label and no momentum: both are pure functions of a state
-    /// and an explicit `at`, and neither exists until the analyzer does. What is
-    /// here is the folded fact each of them would be computed from.
+    /// The lifecycle runs over every idea before anything is paginated, because
+    /// `state` and `integrity` are filters over values SQL does not compute.
+    /// That is a full pass for a personal inbox of tens of threads, and it is
+    /// what keeps one implementation of the rules: a `where` clause spelling out
+    /// dormancy in SQL would be a second one, free to disagree with the receipt.
     pub async fn list_ideas(
         &self,
         owner: &Owner,
-        limit: usize,
-        offset: usize,
+        options: IdeaListOptions,
     ) -> Result<IdeaList, IndexError> {
+        let mut ideas: Vec<IdeaStanding> = self
+            .idea_evidence(owner, None)
+            .await?
+            .into_iter()
+            .map(|item| {
+                let receipt = lifecycle::assess(&item.evidence, options.at);
+                IdeaStanding {
+                    summary: item.summary,
+                    integrity: receipt.integrity,
+                    state: receipt.state,
+                    momentum: receipt.momentum,
+                }
+            })
+            .filter(|standing| options.matches(standing))
+            .collect();
+
+        // `desc nulls last`, in Rust: `None` sorts below `Some`, so reversing
+        // the comparison puts the dated ideas first and the undated ones after.
+        ideas.sort_by(|first, second| {
+            second
+                .summary
+                .last_signal
+                .cmp(&first.summary.last_signal)
+                .then_with(|| second.summary.id.cmp(&first.summary.id))
+        });
+
+        let total = ideas.len();
+        let ideas = ideas
+            .into_iter()
+            .skip(options.offset)
+            .take(options.limit)
+            .collect();
+
+        Ok(IdeaList { ideas, total })
+    }
+
+    /// Everything the analyzer and the lifecycle rules read about this owner's
+    /// ideas, in id order.
+    ///
+    /// `only` narrows it to one idea. Two queries either way: one row per
+    /// membership, and one for the affirmations, so a listing of forty ideas
+    /// costs two round trips rather than eighty.
+    pub async fn idea_evidence(
+        &self,
+        owner: &Owner,
+        only: Option<&IdeaId>,
+    ) -> Result<Vec<IdeaEvidence>, IndexError> {
+        let owner = owner_column(owner);
+        let only = only.map(IdeaId::to_string);
+
+        self.with_connection(move |connection| {
+            let mut threads: Vec<IdeaEvidence> = Vec::new();
+
+            {
+                let mut statement = connection.prepare(
+                    "select idea_threads.id,
+                            idea_threads.name,
+                            idea_threads.created,
+                            idea_threads.updated,
+                            coalesce(idea_thread_state.retired, 0),
+                            idea_thread_state.promoted_to,
+                            idea_thread_state.last_signal,
+                            idea_membership.capture_id,
+                            idea_captures.created
+                     from idea_threads
+                     left join idea_thread_state
+                          on idea_thread_state.idea_id = idea_threads.id
+                     left join idea_membership
+                          on idea_membership.idea_id = idea_threads.id
+                     left join idea_captures
+                          on idea_captures.id = idea_membership.capture_id
+                     where idea_threads.owner is :owner
+                       and (:only is null or idea_threads.id = :only)
+                     order by idea_threads.id, idea_membership.capture_id",
+                )?;
+
+                let rows = statement.query_map(
+                    named_params! { ":owner": &owner, ":only": &only },
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                            row.get::<_, Option<i64>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
+                            row.get::<_, Option<i64>>(8)?,
+                        ))
+                    },
+                )?;
+
+                // One row per membership, so a thread appears as many times as
+                // it holds captures and exactly once when it holds none.
+                for row in rows {
+                    let (id, name, created, updated, retired, promoted, signal, member, made) =
+                        row?;
+                    let Ok(id) = IdeaId::parse(&id) else {
+                        continue;
+                    };
+
+                    if threads.last().is_none_or(|last| last.summary.id != id) {
+                        threads.push(IdeaEvidence {
+                            summary: IdeaSummary {
+                                id,
+                                name,
+                                created: from_nanos(created),
+                                members: 0,
+                                missing: 0,
+                                retired: retired != 0,
+                                promoted_to: promoted.and_then(|slug| Slug::parse(&slug).ok()),
+                                last_signal: signal.map(from_nanos),
+                                updated: from_nanos(updated),
+                            },
+                            evidence: Evidence {
+                                retired: retired != 0,
+                                last_signal: signal.map(from_nanos),
+                                ..Evidence::default()
+                            },
+                        });
+                    }
+
+                    let thread = threads.last_mut().expect("just pushed");
+                    let Some(member) = member.as_deref().and_then(|id| CaptureId::parse(id).ok())
+                    else {
+                        continue;
+                    };
+
+                    // A membership row whose capture has no `created` is one
+                    // whose file is gone. That is the whole `evidence_missing`
+                    // diagnostic: the row survives the deletion so the idea can
+                    // say what it lost.
+                    match made {
+                        Some(made) => {
+                            thread.summary.members += 1;
+                            thread.evidence.captures.push(CaptureMoment {
+                                id: member,
+                                created: from_nanos(made),
+                            });
+                        }
+                        None => {
+                            thread.summary.missing += 1;
+                            thread.evidence.missing.push(member);
+                        }
+                    }
+                }
+            }
+
+            let mut affirmations: BTreeMap<String, Vec<Affirmation>> = BTreeMap::new();
+            {
+                let mut statement = connection.prepare(&format!(
+                    "select idea_events.idea_id,
+                            idea_events.id,
+                            idea_events.kind,
+                            idea_events.created
+                     from idea_events
+                     join idea_threads on idea_threads.id = idea_events.idea_id
+                     where idea_threads.owner is :owner
+                       and (:only is null or idea_threads.id = :only)
+                       and idea_events.kind in {AFFIRMING_KINDS}
+                     order by idea_events.id"
+                ))?;
+
+                let rows = statement.query_map(
+                    named_params! { ":owner": &owner, ":only": &only },
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )?;
+
+                for row in rows {
+                    let (idea, id, kind, created) = row?;
+                    let (Ok(id), Some(kind)) = (EventId::parse(&id), affirming(&kind)) else {
+                        continue;
+                    };
+                    affirmations.entry(idea).or_default().push(Affirmation {
+                        id,
+                        kind,
+                        created: from_nanos(created),
+                    });
+                }
+            }
+
+            for thread in &mut threads {
+                if let Some(found) = affirmations.remove(thread.summary.id.as_str()) {
+                    thread.evidence.affirmations = found;
+                }
+            }
+
+            Ok(threads)
+        })
+        .await
+    }
+
+    /// Every one of this owner's captures and the terms in it.
+    ///
+    /// A `left join`, so a capture whose text holds no terms at all is still
+    /// here. It is one of the `N` the weights are computed over, and leaving it
+    /// out would make everybody's idf depend on whether somebody had once saved
+    /// a line of punctuation.
+    pub async fn capture_corpus(&self, owner: &Owner) -> Result<Corpus, IndexError> {
         let owner = owner_column(owner);
 
         self.with_connection(move |connection| {
-            let total: i64 = connection.query_row(
-                &format!("select count(*) from idea_threads where {OWNED}"),
-                named_params! { ":owner": &owner },
-                |row| row.get(0),
+            let mut statement = connection.prepare(
+                "select idea_captures.id, idea_terms.term, idea_terms.occurrences
+                 from idea_captures
+                 left join idea_terms on idea_terms.capture_id = idea_captures.id
+                 where idea_captures.owner is :owner
+                 order by idea_captures.id, idea_terms.term",
             )?;
 
-            let limit = limit as i64;
-            let offset = offset as i64;
-            let mut statement = connection.prepare(&format!(
-                "select idea_threads.id,
-                        idea_threads.name,
-                        idea_threads.created,
-                        idea_threads.updated,
-                        (select count(*) from idea_membership
-                         join idea_captures on idea_captures.id = idea_membership.capture_id
-                         where idea_membership.idea_id = idea_threads.id),
-                        (select count(*) from idea_membership
-                         where idea_membership.idea_id = idea_threads.id),
-                        coalesce(idea_thread_state.retired, 0),
-                        idea_thread_state.promoted_to,
-                        idea_thread_state.last_signal
-                 from idea_threads
-                 left join idea_thread_state
-                      on idea_thread_state.idea_id = idea_threads.id
-                 where {OWNED}
-                 order by idea_thread_state.last_signal desc nulls last,
-                          idea_threads.id desc
-                 limit :limit offset :offset"
-            ))?;
+            let rows = statement.query_map(named_params! { ":owner": &owner }, |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            })?;
 
-            let rows = statement.query_map(
-                named_params! { ":owner": &owner, ":limit": &limit, ":offset": &offset },
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, i64>(6)?,
-                        row.get::<_, Option<String>>(7)?,
-                        row.get::<_, Option<i64>>(8)?,
-                    ))
-                },
-            )?;
-
-            let mut ideas = Vec::new();
+            let mut documents: Vec<Document> = Vec::new();
             for row in rows {
-                let (id, name, created, updated, live, connected, retired, promoted, signal) = row?;
-                let Ok(id) = IdeaId::parse(&id) else {
+                let (capture, term, occurrences) = row?;
+                let Ok(capture) = CaptureId::parse(&capture) else {
                     continue;
                 };
-                ideas.push(IdeaSummary {
-                    id,
-                    name,
-                    created: from_nanos(created),
-                    members: live as usize,
-                    // Connected minus live: the evidence the idea has lost.
-                    missing: (connected - live).max(0) as usize,
-                    retired: retired != 0,
-                    promoted_to: promoted.and_then(|slug| Slug::parse(&slug).ok()),
-                    last_signal: signal.map(from_nanos),
-                    updated: from_nanos(updated),
-                });
+
+                if documents.last().is_none_or(|last| last.capture != capture) {
+                    documents.push(Document {
+                        capture,
+                        terms: BTreeMap::new(),
+                    });
+                }
+                if let (Some(term), Some(occurrences)) = (term, occurrences) {
+                    let document = documents.last_mut().expect("just pushed");
+                    document.terms.insert(term, occurrences.max(0) as u32);
+                }
             }
 
-            Ok(IdeaList {
-                ideas,
-                total: total as usize,
-            })
+            Ok(Corpus::new(documents))
         })
         .await
+    }
+
+    /// Every idea candidate this owner has turned down and not reconsidered.
+    pub async fn rejected_idea_candidates(
+        &self,
+        owner: &Owner,
+    ) -> Result<BTreeSet<(IdeaId, CaptureId)>, IndexError> {
+        let owner = owner_column(owner);
+
+        self.with_connection(move |connection| {
+            let mut statement = connection.prepare(
+                "select idea_rejections.idea_id, idea_rejections.capture_id
+                 from idea_rejections
+                 join idea_threads on idea_threads.id = idea_rejections.idea_id
+                 where idea_threads.owner is :owner
+                 order by idea_rejections.idea_id, idea_rejections.capture_id",
+            )?;
+
+            let rows = statement.query_map(named_params! { ":owner": &owner }, |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+
+            let mut rejected = BTreeSet::new();
+            for row in rows {
+                let (idea, capture) = row?;
+                if let (Ok(idea), Ok(capture)) = (IdeaId::parse(&idea), CaptureId::parse(&capture))
+                {
+                    rejected.insert((idea, capture));
+                }
+            }
+            Ok(rejected)
+        })
+        .await
+    }
+
+    /// Everything candidate selection reads, for one owner.
+    ///
+    /// Gathered whole and handed to [`analysis::candidates`], which is a pure
+    /// function of it. Four queries, none of them per-candidate, and no scoring
+    /// happens here: the index's job is to say what is true, not what is
+    /// similar.
+    pub async fn candidate_field(&self, owner: &Owner) -> Result<Field, IndexError> {
+        let threads = self
+            .idea_evidence(owner, None)
+            .await?
+            .into_iter()
+            .map(|item| Thread {
+                id: item.summary.id,
+                name: item.summary.name,
+                retired: item.summary.retired,
+                members: item
+                    .evidence
+                    .captures
+                    .into_iter()
+                    .map(|capture| capture.id)
+                    .collect(),
+            })
+            .collect();
+
+        Ok(Field {
+            corpus: self.capture_corpus(owner).await?,
+            threads,
+            rejected_candidates: self.rejected_idea_candidates(owner).await?,
+            rejected_pairs: self
+                .rejected_capture_pairs(owner)
+                .await?
+                .into_iter()
+                .collect(),
+        })
     }
 
     /// The ideas that currently hold this capture, and what else they hold.
@@ -1206,6 +1525,23 @@ fn fold_capture(transaction: &Transaction<'_>, capture: &str) -> rusqlite::Resul
 // authored file. Renaming one is an authored-format change and has to be made in
 // three places at once; `the_fold_spells_event_kinds_the_way_the_files_do` below
 // is the tripwire that says so.
+
+/// The two decisions the lifecycle rules read as "somebody still cares about
+/// this".
+///
+/// Not folded into a table, because unlike everything below there is no current
+/// state to fold: an affirmation is worth a point for thirty days and then it is
+/// worth nothing, and which it is depends on the instant being asked about.
+const AFFIRMING_KINDS: &str = "('interest_affirmed', 'idea_reopened')";
+
+/// Read back one of the two kinds [`AFFIRMING_KINDS`] selects.
+fn affirming(kind: &str) -> Option<EventKind> {
+    match kind {
+        "interest_affirmed" => Some(EventKind::InterestAffirmed),
+        "idea_reopened" => Some(EventKind::IdeaReopened),
+        _ => None,
+    }
+}
 
 /// A capture belongs to an idea when the latest connect-or-disconnect decision
 /// about the pair says connected, and a seed with no decision at all counts as
@@ -1987,8 +2323,16 @@ mod tests {
             FOLD_THREAD_STATE,
             FOLD_CAPTURE_STATE,
             FOLD_CAPTURE_REJECTIONS,
+            AFFIRMING_KINDS,
         ]
         .concat();
+        // And the two the lifecycle rules select on read the same way back.
+        assert_eq!(
+            affirming("interest_affirmed"),
+            Some(EventKind::InterestAffirmed)
+        );
+        assert_eq!(affirming("idea_reopened"), Some(EventKind::IdeaReopened));
+        assert_eq!(affirming("idea_retired"), None);
         for kind in [
             EventKind::CaptureConnected,
             EventKind::CaptureDisconnected,

@@ -82,6 +82,10 @@ impl App {
         Res { status, body }
     }
 
+    fn root(&self) -> &std::path::Path {
+        self._directory.path()
+    }
+
     async fn get(&self, path: &str) -> Res {
         self.send(Method::GET, path, None).await
     }
@@ -479,7 +483,7 @@ async fn the_whole_loop_survives_a_rebuild() {
     app.post(&format!("/api/ideas/{idea}/retire"), None).await;
     app.post(&format!("/api/ideas/{idea}/reopen"), None).await;
 
-    let before = app.get(&format!("/api/ideas/{idea}")).await.body;
+    let before = timeless(app.get(&format!("/api/ideas/{idea}")).await.body);
     let captures_before = app.get("/api/captures").await.body;
 
     let rebuilt = app.post("/api/reindex", None).await;
@@ -487,8 +491,560 @@ async fn the_whole_loop_survives_a_rebuild() {
     assert_eq!(rebuilt.body["captures"]["indexed"], 3);
     assert_eq!(rebuilt.body["ideas"]["indexed"], 1);
 
-    assert_eq!(app.get(&format!("/api/ideas/{idea}")).await.body, before);
+    // `state` and `momentum` are inside this comparison, so the rebuild has to
+    // reproduce the lifecycle answer and not merely the folded rows.
+    assert_eq!(
+        timeless(app.get(&format!("/api/ideas/{idea}")).await.body),
+        before
+    );
     assert_eq!(app.get("/api/captures").await.body, captures_before);
+}
+
+/// Drop `computed_at`, the one field in an idea that is a function of when you
+/// asked rather than of what is on disk.
+///
+/// Everything else has to come back identical after a rebuild, this one cannot,
+/// and that is the whole point of not storing it.
+fn timeless(mut body: Value) -> Value {
+    if let Some(object) = body.as_object_mut() {
+        object.remove("computed_at");
+    }
+    body
+}
+
+// --------------------------------------------- candidates and the lifecycle
+
+/// One thought written three times, which is what the whole feature exists to
+/// notice.
+async fn a_recurring_thought() -> (App, String, String, String) {
+    let app = App::open().await;
+    let first = app.capture("Dungeon seeds should decide the loot.\n").await;
+    let second = app
+        .capture("Dungeon seeds should decide the layout.\n")
+        .await;
+    let third = app
+        .capture("Dungeon seeds should decide the rooms.\n")
+        .await;
+    (app, first, second, third)
+}
+
+fn number(value: &Value) -> f64 {
+    value.as_f64().expect("a number")
+}
+
+/// Six decimal places, which is what the API rounds to.
+fn near(found: f64, expected: f64) {
+    assert!(
+        (found - expected).abs() < 2e-6,
+        "expected {expected}, found {found}"
+    );
+}
+
+/// The gate on phase I3, for candidates: every number in the response can be
+/// checked against the other numbers in the response.
+#[tokio::test]
+async fn a_candidate_carries_the_arithmetic_that_produced_it() {
+    let (app, _first, _second, third) = a_recurring_thought().await;
+
+    let res = app.get(&format!("/api/captures/{third}/candidates")).await;
+    assert_eq!(res.status, StatusCode::OK, "{:?}", res.body);
+
+    assert_eq!(res.body["analyzer"], "tfidf/v1");
+    assert_eq!(res.body["capture"], third);
+    assert_eq!(
+        res.body["corpus"], 3,
+        "the owner's captures, and only those"
+    );
+    // Six unigrams and the five bigrams between them.
+    assert_eq!(res.body["terms"], 11);
+    near(number(&res.body["threshold"]), 0.35);
+
+    let candidates = res.body["candidates"].as_array().expect("candidates");
+    assert_eq!(candidates.len(), 2, "{:#?}", res.body);
+
+    for candidate in candidates {
+        assert_eq!(candidate["kind"], "capture");
+        assert!(candidate["capture"]["text"].is_string());
+        assert!(candidate["idea"].is_null());
+
+        let similarity = number(&candidate["similarity"]);
+        assert!(similarity >= 0.35, "{similarity} is below the threshold");
+        assert!(similarity <= 1.0);
+
+        let signals = candidate["signals"].as_array().expect("signals");
+        assert!(!signals.is_empty());
+        assert!(signals.len() <= 5);
+
+        // Each contribution is the product of the two weights beside it, the
+        // signals are ordered by it, and they add up to what the response says
+        // they add up to.
+        let mut running = 0.0;
+        let mut previous = f64::INFINITY;
+        for signal in signals {
+            let contribution = number(&signal["contribution"]);
+            near(
+                contribution,
+                number(&signal["capture_weight"]) * number(&signal["target_weight"]),
+            );
+            assert!(contribution <= previous, "{signals:#?} is out of order");
+            assert!(!signal["term"].as_str().expect("a term").is_empty());
+            assert!(signal["documents"].as_u64().expect("a count") >= 1);
+            previous = contribution;
+            running += contribution;
+        }
+
+        near(number(&candidate["explained"]), running);
+        assert!(
+            number(&candidate["explained"]) <= similarity + 2e-6,
+            "five signals cannot explain more than the whole score"
+        );
+    }
+}
+
+/// Every signal is a term appearing literally in both captures, because the
+/// receipt says "these words are why" and a stem is not a word anybody wrote.
+#[tokio::test]
+async fn every_signal_is_text_that_appears_in_both_captures() {
+    let (app, _first, _second, third) = a_recurring_thought().await;
+
+    let res = app.get(&format!("/api/captures/{third}/candidates")).await;
+    let asking = app.get(&format!("/api/captures/{third}")).await.body["text"]
+        .as_str()
+        .expect("text")
+        .to_lowercase();
+
+    for candidate in res.body["candidates"].as_array().expect("candidates") {
+        let target = candidate["capture"]["text"]
+            .as_str()
+            .expect("text")
+            .to_lowercase();
+        for signal in candidate["signals"].as_array().expect("signals") {
+            let term = signal["term"].as_str().expect("a term");
+            assert!(asking.contains(term), "{term:?} is not in the capture");
+            assert!(target.contains(term), "{term:?} is not in the target");
+        }
+    }
+}
+
+/// Nothing to match on is a different answer from nothing matched, and the
+/// response says which it is.
+#[tokio::test]
+async fn a_capture_with_no_terms_says_so_rather_than_failing() {
+    let app = App::open().await;
+    app.capture("Dungeon seeds should decide the loot.\n").await;
+    let punctuation = app.capture("...\n").await;
+
+    let res = app
+        .get(&format!("/api/captures/{punctuation}/candidates"))
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["terms"], 0);
+    assert_eq!(res.body["candidates"].as_array().expect("empty").len(), 0);
+    // And it still counts toward the corpus, because it is still a capture.
+    assert_eq!(res.body["corpus"], 2);
+}
+
+/// Once a thread exists it is the suggestion, and its members stop being
+/// suggested on their own: connecting to one of them would be proposing a
+/// grouping that already exists.
+#[tokio::test]
+async fn a_thread_takes_over_from_the_captures_it_holds() {
+    let (app, first, second, third) = a_recurring_thought().await;
+    let idea = app.start_idea("Dungeon seeds", &[&first, &second]).await;
+
+    let res = app.get(&format!("/api/captures/{third}/candidates")).await;
+    let candidates = res.body["candidates"].as_array().expect("candidates");
+
+    assert_eq!(candidates.len(), 1, "{:#?}", res.body);
+    assert_eq!(candidates[0]["kind"], "idea");
+    assert_eq!(candidates[0]["idea"]["id"], idea);
+    assert_eq!(candidates[0]["idea"]["name"], "Dungeon seeds");
+    assert_eq!(candidates[0]["idea"]["captures"], 2);
+    assert!(candidates[0]["capture"].is_null());
+}
+
+/// A retired thread is not suggested, and its captures go back to being loose.
+#[tokio::test]
+async fn retiring_a_thread_frees_the_captures_it_held() {
+    let (app, first, second, third) = a_recurring_thought().await;
+    let idea = app.start_idea("Dungeon seeds", &[&first, &second]).await;
+    app.post(&format!("/api/ideas/{idea}/retire"), None).await;
+
+    let res = app.get(&format!("/api/captures/{third}/candidates")).await;
+    let candidates = res.body["candidates"].as_array().expect("candidates");
+
+    assert_eq!(candidates.len(), 2);
+    for candidate in candidates {
+        assert_eq!(candidate["kind"], "capture");
+    }
+}
+
+/// Saying no has to stick, including across the derived half being thrown away,
+/// and reconsidering has to undo it.
+#[tokio::test]
+async fn a_rejected_candidate_stays_rejected_across_a_rebuild() {
+    let (app, first, second, third) = a_recurring_thought().await;
+    let idea = app.start_idea("Dungeon seeds", &[&first, &second]).await;
+    let candidates = format!("/api/captures/{third}/candidates");
+
+    assert_eq!(
+        app.get(&candidates).await.body["candidates"][0]["kind"],
+        "idea"
+    );
+
+    app.send(
+        Method::PUT,
+        &format!("/api/ideas/{idea}/rejections/{third}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        app.get(&candidates).await.body["candidates"]
+            .as_array()
+            .expect("empty")
+            .len(),
+        0
+    );
+
+    app.post("/api/reindex", None).await;
+    assert_eq!(
+        app.get(&candidates).await.body["candidates"]
+            .as_array()
+            .expect("still empty")
+            .len(),
+        0,
+        "the rejection did not survive the rebuild"
+    );
+
+    app.send(
+        Method::DELETE,
+        &format!("/api/ideas/{idea}/rejections/{third}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        app.get(&candidates).await.body["candidates"][0]["kind"],
+        "idea"
+    );
+}
+
+/// Two loose captures turned down are one decision, whichever way round it was
+/// recorded.
+#[tokio::test]
+async fn a_rejected_pair_is_not_suggested_from_either_side() {
+    let (app, first, second, third) = a_recurring_thought().await;
+
+    for other in [&first, &second] {
+        app.send(
+            Method::PUT,
+            &format!("/api/captures/{other}/rejections/{third}"),
+            None,
+        )
+        .await;
+    }
+
+    assert_eq!(
+        app.get(&format!("/api/captures/{third}/candidates"))
+            .await
+            .body["candidates"]
+            .as_array()
+            .expect("empty")
+            .len(),
+        0
+    );
+    // Recorded against `third` from the other side, and suppressed here too.
+    assert_eq!(
+        app.get(&format!("/api/captures/{first}/candidates"))
+            .await
+            .body["candidates"]
+            .as_array()
+            .expect("one left")
+            .len(),
+        1
+    );
+}
+
+/// The gate on phase I3, for the lifecycle: the momentum can be recomputed from
+/// the receipt without reading any of the code that produced it.
+#[tokio::test]
+async fn a_receipt_reconstructs_its_own_momentum() {
+    let (app, first, second, third) = a_recurring_thought().await;
+    let idea = app
+        .start_idea("Dungeon seeds", &[&first, &second, &third])
+        .await;
+
+    let res = app.get(&format!("/api/ideas/{idea}/receipt")).await;
+    assert_eq!(res.status, StatusCode::OK, "{:?}", res.body);
+
+    assert_eq!(res.body["ruleset"], "idea-momentum/v1");
+    assert_eq!(res.body["idea"], idea);
+    assert_eq!(res.body["name"], "Dungeon seeds");
+    assert_eq!(res.body["integrity"], "sound");
+    assert_eq!(res.body["state"], "active");
+    assert_eq!(res.body["missing"].as_array().expect("none").len(), 0);
+    assert!(res.body["boundaries"]["recent_14"].is_string());
+    assert!(res.body["boundaries"]["recent_30"].is_string());
+    assert!(res.body["boundaries"]["dormant"].is_string());
+
+    // The counted flags on the evidence add up to the counts in the components.
+    let captures = res.body["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 3);
+    let within_14 = captures
+        .iter()
+        .filter(|capture| capture["within_14_days"] == true)
+        .count();
+    let within_30 = captures
+        .iter()
+        .filter(|capture| capture["within_30_days"] == true)
+        .count();
+
+    let components = &res.body["components"];
+    assert_eq!(components["total"], captures.len());
+    assert_eq!(components["recent_14"], within_14);
+    assert_eq!(components["recent_30"], within_30);
+
+    // And the components add up to the score, by the rule the ruleset states.
+    let total = components["total"].as_u64().expect("total");
+    let base = total.min(4);
+    let recency = if within_14 >= 3 {
+        2
+    } else if within_30 >= 1 {
+        1
+    } else {
+        0
+    };
+    let affirmation = u64::from(
+        res.body["affirmations"]
+            .as_array()
+            .expect("affirmations")
+            .iter()
+            .any(|event| event["within_30_days"] == true),
+    );
+    assert_eq!(components["base"], base);
+    assert_eq!(components["recency"], recency);
+    assert_eq!(components["affirmation"], affirmation);
+    assert_eq!(
+        components["momentum"],
+        (base + recency + affirmation).min(10)
+    );
+    assert_eq!(res.body["momentum"], components["momentum"]);
+
+    // Two sentences from fixed templates, naming the state and the arithmetic.
+    let explanation = res.body["explanation"].as_array().expect("explanation");
+    assert_eq!(explanation.len(), 2);
+    assert!(
+        explanation[0]
+            .as_str()
+            .expect("prose")
+            .starts_with("Active:"),
+        "{explanation:#?}"
+    );
+    assert!(
+        explanation[1]
+            .as_str()
+            .expect("prose")
+            .starts_with("Momentum 5 ="),
+        "{explanation:#?}"
+    );
+}
+
+/// Affirming is worth a point, and the event that earned it is named.
+#[tokio::test]
+async fn an_affirmation_shows_up_in_the_receipt_that_counted_it() {
+    let (app, first, second, _third) = a_recurring_thought().await;
+    let idea = app.start_idea("Dungeon seeds", &[&first, &second]).await;
+
+    let before = app.get(&format!("/api/ideas/{idea}/receipt")).await;
+    assert_eq!(before.body["components"]["affirmation"], 0);
+    assert_eq!(before.body["momentum"], 3);
+
+    app.post(&format!("/api/ideas/{idea}/affirm"), None).await;
+
+    let after = app.get(&format!("/api/ideas/{idea}/receipt")).await;
+    assert_eq!(after.body["components"]["affirmation"], 1);
+    assert_eq!(after.body["momentum"], 4);
+    assert_eq!(after.body["state"], "active");
+
+    let affirmations = after.body["affirmations"].as_array().expect("affirmations");
+    assert_eq!(affirmations.len(), 1);
+    assert_eq!(affirmations[0]["kind"], "interest_affirmed");
+    assert_eq!(affirmations[0]["within_30_days"], true);
+}
+
+/// Nothing about the state is stored, so the same files answer differently at a
+/// different moment. That is what makes dormancy need no scheduler.
+#[tokio::test]
+async fn a_receipt_answers_for_a_moment_you_choose() {
+    let (app, first, second, _third) = a_recurring_thought().await;
+    let idea = app.start_idea("Dungeon seeds", &[&first, &second]).await;
+
+    let now = app.get(&format!("/api/ideas/{idea}/receipt")).await;
+    assert_eq!(now.body["state"], "recurring");
+    assert_eq!(now.body["components"]["momentum"], 3);
+
+    let later = app
+        .get(&format!(
+            "/api/ideas/{idea}/receipt?at=2030-01-01T00:00:00Z"
+        ))
+        .await;
+    assert_eq!(later.status, StatusCode::OK);
+    assert_eq!(later.body["state"], "dormant");
+    assert_eq!(later.body["computed_at"], "2030-01-01T00:00:00Z");
+    // The captures are the same ones; only which windows they fall in moved.
+    assert_eq!(later.body["components"]["total"], 2);
+    assert_eq!(later.body["components"]["recent_30"], 0);
+    assert_eq!(later.body["components"]["momentum"], 2);
+    assert!(
+        later.body["explanation"][0]
+            .as_str()
+            .expect("prose")
+            .starts_with("Dormant:"),
+        "{:#?}",
+        later.body["explanation"]
+    );
+}
+
+/// A capture deleted from under an idea leaves it with nothing to stand on. The
+/// answer is to say so, not to derive a state from the absence.
+#[tokio::test]
+async fn an_idea_that_lost_its_evidence_gets_no_state_and_no_score() {
+    let app = App::open().await;
+    let only = app.capture("Dungeon seeds should decide the loot.\n").await;
+    let idea = app.start_idea("Dungeon seeds", &[&only]).await;
+
+    // The API refuses to take an idea's last capture away, so this is the
+    // external deletion the plan describes: somebody's editor, or a sync.
+    let month = format!("{}-{}", &only[..4], &only[4..6]);
+    let path = app
+        .root()
+        .join(".rhizolog/ideas/captures")
+        .join(month)
+        .join(format!("{only}.md"));
+    std::fs::remove_file(&path).expect("remove the capture file");
+    app.post("/api/reindex", None).await;
+
+    let res = app.get(&format!("/api/ideas/{idea}/receipt")).await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["integrity"], "evidence_missing");
+    assert!(res.body["state"].is_null());
+    assert!(res.body["momentum"].is_null());
+    assert!(res.body["components"].is_null());
+    assert_eq!(res.body["missing"][0], only);
+    assert!(
+        res.body["explanation"][0]
+            .as_str()
+            .expect("prose")
+            .contains("no authored evidence"),
+        "{:#?}",
+        res.body["explanation"]
+    );
+
+    // The listing agrees, and groups it where the dashboard puts Needs repair.
+    let repair = app.get("/api/ideas?integrity=evidence_missing").await;
+    assert_eq!(repair.body["total"], 1);
+    assert_eq!(repair.body["ideas"][0]["id"], idea);
+    assert_eq!(repair.body["ideas"][0]["needs_repair"], true);
+    assert!(repair.body["ideas"][0]["state"].is_null());
+    assert_eq!(app.get("/api/ideas?integrity=sound").await.body["total"], 0);
+}
+
+/// The listing carries the same answers the receipts do, and can be narrowed by
+/// them.
+#[tokio::test]
+async fn the_ideas_listing_can_be_filtered_by_state() {
+    let (app, first, second, third) = a_recurring_thought().await;
+    let busy = app
+        .start_idea("Dungeon seeds", &[&first, &second, &third])
+        .await;
+    let lone = app.capture("Compiler passes run in order.\n").await;
+    let quiet = app.start_idea("Compiler passes", &[&lone]).await;
+    app.post(&format!("/api/ideas/{quiet}/retire"), None).await;
+
+    let all = app.get("/api/ideas").await;
+    assert_eq!(all.status, StatusCode::OK);
+    assert_eq!(all.body["total"], 2);
+    assert_eq!(all.body["ruleset"], "idea-momentum/v1");
+    assert!(all.body["at"].is_string());
+
+    let active = app.get("/api/ideas?state=active").await;
+    assert_eq!(active.body["total"], 1);
+    assert_eq!(active.body["ideas"][0]["id"], busy);
+    assert_eq!(active.body["ideas"][0]["state"], "active");
+    assert_eq!(active.body["ideas"][0]["momentum"], 5);
+    assert_eq!(active.body["ideas"][0]["integrity"], "sound");
+
+    let retired = app.get("/api/ideas?state=retired").await;
+    assert_eq!(retired.body["total"], 1);
+    assert_eq!(retired.body["ideas"][0]["id"], quiet);
+
+    assert_eq!(app.get("/api/ideas?state=dormant").await.body["total"], 0);
+
+    // And the same listing at a moment where nothing has happened for years.
+    // The retired one stays retired: that is a decision rather than an
+    // inference, and no amount of time passing overturns it.
+    let later = app
+        .get("/api/ideas?at=2030-01-01T00:00:00Z&state=dormant")
+        .await;
+    assert_eq!(later.body["total"], 1);
+    assert_eq!(later.body["ideas"][0]["id"], busy);
+    assert_eq!(later.body["at"], "2030-01-01T00:00:00Z");
+    assert_eq!(
+        app.get("/api/ideas?at=2030-01-01T00:00:00Z&state=retired")
+            .await
+            .body["total"],
+        1
+    );
+}
+
+/// A filter nobody could have meant names the ones that would have worked, so a
+/// caller can fix itself from the response.
+#[tokio::test]
+async fn an_unknown_state_names_the_states_there_are() {
+    let app = App::open().await;
+
+    let res = app.get("/api/ideas?state=dormantish").await;
+
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.code(), "invalid_parameter");
+    assert_eq!(res.body["error"]["details"]["parameter"], "state");
+    assert_eq!(res.body["error"]["details"]["value"], "dormantish");
+    let allowed = res.body["error"]["details"]["allowed"]
+        .as_array()
+        .expect("allowed");
+    assert_eq!(allowed.len(), 5);
+    assert!(allowed.contains(&json!("dormant")));
+
+    let integrity = app.get("/api/ideas?integrity=broken").await;
+    assert_eq!(integrity.status, StatusCode::BAD_REQUEST);
+    assert_eq!(integrity.body["error"]["details"]["parameter"], "integrity");
+}
+
+/// A `total` that counted ideas the filter excluded would make paging through a
+/// filtered view miss some of them.
+#[tokio::test]
+async fn a_filtered_total_counts_only_what_matched() {
+    let (app, first, second, third) = a_recurring_thought().await;
+    for (name, seed) in [("One", &first), ("Two", &second), ("Three", &third)] {
+        let idea = app.start_idea(name, &[seed.as_str()]).await;
+        if name == "Three" {
+            app.post(&format!("/api/ideas/{idea}/retire"), None).await;
+        }
+    }
+
+    let res = app.get("/api/ideas?state=new&limit=1").await;
+
+    assert_eq!(res.body["total"], 2, "{:#?}", res.body);
+    assert_eq!(res.body["ideas"].as_array().expect("one page").len(), 1);
+    assert_eq!(res.body["limit"], 1);
+
+    let second_page = app.get("/api/ideas?state=new&limit=1&offset=1").await;
+    assert_eq!(second_page.body["total"], 2);
+    assert_ne!(
+        second_page.body["ideas"][0]["id"],
+        res.body["ideas"][0]["id"]
+    );
 }
 
 // -------------------------------------------------- wikis that have accounts
@@ -585,6 +1141,81 @@ async fn one_account_sees_nothing_of_another() {
     );
 }
 
+/// The reason the corpus is one owner's and never the wiki's.
+///
+/// Two accounts write the same words. Neither is suggested to the other, and
+/// neither one's `N` or document frequency moves when the other writes, which
+/// would otherwise make a similarity score a channel out of somebody's inbox.
+#[tokio::test]
+async fn one_account_never_sees_another_owners_candidates() {
+    let (app, tim, alice) = with_two_accounts().await;
+
+    async fn capture_as(app: &App, token: &str, text: &str) -> String {
+        let res = app
+            .send_as(
+                Some(token),
+                Method::POST,
+                "/api/captures",
+                Some(json!({ "text": text })),
+            )
+            .await;
+        assert_eq!(res.status, StatusCode::CREATED, "{:?}", res.body);
+        res.body["id"].as_str().expect("id").to_owned()
+    }
+
+    capture_as(&app, &tim, "Dungeon seeds should decide the loot.\n").await;
+    let asking = capture_as(&app, &tim, "Dungeon seeds should decide the rooms.\n").await;
+
+    let alone = app
+        .send_as(
+            Some(&tim),
+            Method::GET,
+            &format!("/api/captures/{asking}/candidates"),
+            None,
+        )
+        .await;
+    assert_eq!(alone.body["corpus"], 2);
+    let signals = alone.body["candidates"][0]["signals"].clone();
+    let similarity = alone.body["candidates"][0]["similarity"].clone();
+
+    // Alice writes the same thing three times. Nothing about tim's answer moves.
+    for text in [
+        "Dungeon seeds should decide the loot.\n",
+        "Dungeon seeds should decide the layout.\n",
+        "Dungeon seeds should decide the rooms.\n",
+    ] {
+        capture_as(&app, &alice, text).await;
+    }
+
+    let after = app
+        .send_as(
+            Some(&tim),
+            Method::GET,
+            &format!("/api/captures/{asking}/candidates"),
+            None,
+        )
+        .await;
+    assert_eq!(
+        after.body["corpus"], 2,
+        "alice's captures joined the corpus"
+    );
+    assert_eq!(after.body["candidates"].as_array().expect("one").len(), 1);
+    assert_eq!(after.body["candidates"][0]["similarity"], similarity);
+    assert_eq!(after.body["candidates"][0]["signals"], signals);
+
+    // And alice cannot ask about tim's capture at all.
+    let hers = app
+        .send_as(
+            Some(&alice),
+            Method::GET,
+            &format!("/api/captures/{asking}/candidates"),
+            None,
+        )
+        .await;
+    assert_eq!(hers.status, StatusCode::NOT_FOUND);
+    assert_eq!(hers.code(), "capture_not_found");
+}
+
 /// Not one idea route is reachable without an account, and that has to hold
 /// however the instance is configured.
 #[tokio::test]
@@ -599,6 +1230,11 @@ async fn no_idea_route_answers_an_anonymous_caller() {
         (Method::POST, "/api/ideas"),
         (Method::GET, "/api/ideas/20200101T000000-000000000"),
         (Method::POST, "/api/ideas/20200101T000000-000000000/retire"),
+        (
+            Method::GET,
+            "/api/captures/20200101T000000-000000000/candidates",
+        ),
+        (Method::GET, "/api/ideas/20200101T000000-000000000/receipt"),
     ] {
         let res = app.send_as(None, method.clone(), path, None).await;
         assert_eq!(

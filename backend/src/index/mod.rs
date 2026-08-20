@@ -36,7 +36,8 @@ pub use graph::{
     PageLinks, PageRef, RouteUsage, Stats, TagCount, WantedPage,
 };
 pub use ideas::{
-    CaptureList, CaptureListOptions, CaptureRecord, IdeaHold, IdeaList, IdeaState, IdeaSummary,
+    CaptureList, CaptureListOptions, CaptureRecord, IdeaEvidence, IdeaHold, IdeaList,
+    IdeaListOptions, IdeaStanding, IdeaState, IdeaSummary,
 };
 pub use pins::Pin;
 pub use sessions::StoredSession;
@@ -745,13 +746,17 @@ impl Index {
             transaction.execute("delete from time_pages", [])?;
             transaction.execute("delete from times_fts", [])?;
             transaction.execute("delete from times", [])?;
-            // The folded tables cascade off the two they hang from, except the
-            // ones that deliberately carry no foreign key. Those are named.
+            // Most of the folded tables would cascade off the two they hang
+            // from. Naming them anyway costs nothing and means a foreign key
+            // quietly changing does not leave a row behind here.
             transaction.execute("delete from idea_membership", [])?;
             transaction.execute("delete from idea_rejections", [])?;
             transaction.execute("delete from idea_capture_rejections", [])?;
+            transaction.execute("delete from idea_capture_state", [])?;
+            transaction.execute("delete from idea_thread_state", [])?;
             transaction.execute("delete from idea_seed_captures", [])?;
             transaction.execute("delete from idea_events", [])?;
+            transaction.execute("delete from idea_terms", [])?;
             transaction.execute("delete from idea_captures_fts", [])?;
             transaction.execute("delete from idea_captures", [])?;
             transaction.execute("delete from idea_threads", [])?;

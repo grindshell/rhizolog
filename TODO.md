@@ -174,28 +174,34 @@ pieces that are known to be missing.
 ## Idea Inbox
 
 The implementation direction is settled and recorded in
-[Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phases I0, I1
-and I2 are built**: the authored model and store, the derived index that folds
-decisions into current state, and the owner-scoped HTTP API over both, with
-twenty-one endpoints and adoption of the open user's records by the first
-account. The three phases after them are not, so the recurrence loop the feature
-exists to test does not run yet and capture alone is not the MVP.
+[Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phases I0
+through I3 are built**: the authored model and store, the derived index that
+folds decisions into current state, the owner-scoped HTTP API over both, and the
+explainable half, `tfidf/v1` candidates and `idea-momentum/v1` lifecycle
+receipts. **The recurrence loop now runs end to end over HTTP.** What it does not
+have is a surface a person can use without Swagger UI, or a way out into the
+wiki.
 
-- **No term index, and so no analyzer.** `idea_terms` is the one table from the
-  plan that I1 deliberately did not create: tokenization belongs to the
-  analyzer, which arrives with its own fixtures and its own schema bump. A
-  bump costs one scan, which is the whole point of the mechanism.
-- **No explainable recurrence.** TF-IDF version 1, the candidate endpoint,
-  the deterministic lifecycle rules and evidence receipts are the part that
-  distinguishes this from a second notes inbox. Rejection and reconsideration
-  are already built on both sides, so what is missing is what proposes a
-  candidate in the first place.
-- **`GET /api/ideas` cannot filter by lifecycle state**, because there is no
-  lifecycle function yet. It returns the folded facts one would be computed
-  from, and gains `state`, `integrity` and `at` with I3.
-- **No dashboard surface or promotion path.** `/inbox`, `/ideas` and idea detail
-  need a responsive capture-first UI. Promotion should assemble a page draft,
-  use the existing page API, then record the association idempotently.
+- **No dashboard surface.** `/inbox`, `/ideas` and idea detail need a responsive
+  capture-first UI, and the app shell's horizontal navigation is too dense for a
+  phone. Until then the loop is real but nobody can walk it: I4.
+- **No promotion path.** `GET /api/ideas/{id}/draft` and
+  `PUT /api/ideas/{id}/promotion` are the last two endpoints in the plan. The
+  event kind, the fold and the `promoted_to` field all exist and are exercised;
+  what is missing is assembling the draft and recording the association. I5.
+- **No rediscovery card.** The eligibility rule is written down and
+  `rediscovery_dismissed` is recorded and folded, but nothing selects the one
+  idea to resurface. Selection has to be stable for an owner and a local
+  calendar date, so refreshing does not rotate through cards.
+- **Candidates are scored against the whole corpus every request.** Every vector
+  is rebuilt per call and every thread's centroid with it, which is fine for an
+  inbox of hundreds and unmeasured beyond that. The plan's performance gate is
+  1,000, 5,000 and 10,000 scratch captures, and the numbers should exist before
+  anybody adds a centroid cache, let alone approximate search.
+- **`tfidf/v1` has no stemming and no stop-word list, on purpose.** So `dungeon`
+  does not match `dungeons`. That is the explainability trade: every signal
+  shown appears literally in text the user wrote. Revisit only after real false
+  negatives, and only with a version bump.
 
 Do not add LLM summaries, embeddings, automatic membership, notifications,
 tasks or a native mobile app while this slice is in progress. Those are later

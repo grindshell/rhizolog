@@ -1,12 +1,13 @@
 # Idea Inbox implementation plan
 
-Status: in progress. **Phases I0, I1 and I2 are built**: the authored model and
-store, the derived index that folds decisions into current state, and the
-owner-scoped HTTP API over both. There is still no analysis and no UI, so the
-recurrence loop the feature exists to test does not run yet and capture alone is
-not the MVP. The phases and completion gates below remain the handoff for the
-rest, and [What is built so far](#what-is-built-so-far) records where the code
-has departed from this page.
+Status: in progress. **Phases I0 through I3 are built**: the authored model and
+store, the derived index that folds decisions into current state, the
+owner-scoped HTTP API over both, and the explainable half, `tfidf/v1` candidates
+and `idea-momentum/v1` lifecycle receipts. The recurrence loop now runs end to
+end over HTTP. What it has is no surface, so nobody can walk it without Swagger
+UI, and no way out into the wiki. The phases and completion gates below remain the
+handoff for the rest, and [What is built so far](#what-is-built-so-far) records
+where the code has departed from this page.
 
 Idea Inbox gives Rhizolog a low-friction place to capture unfinished thoughts,
 notice which ones recur, and turn a mature idea into a wiki page. A capture is
@@ -708,6 +709,8 @@ state after a clean rebuild.
 
 ### I3: explainable analysis and lifecycle
 
+**Built.** See [What is built so far](#what-is-built-so-far).
+
 - Implement TF-IDF version 1 and shared-signal contributions.
 - Implement the pure lifecycle function and receipt.
 - Use small fixed corpora with exact expected candidates and arithmetic.
@@ -748,10 +751,13 @@ promotion association fails.
 
 `backend/src/ideas/{mod,store,service,adoption}.rs` are the authored half: the
 three file formats, the three trees on disk, the rules, and the one migration.
-`index/ideas.rs` is the derived half. `index/schema.rs`, `index/sync.rs`,
-`watcher.rs` and `server.rs` carry it into startup, reconciliation and live
-pickup of external edits, and `api/ideas.rs` is the twenty-one endpoints over
-all of it.
+`ideas/{analysis,lifecycle}.rs` are the explainable half, and both are pure
+functions of stated inputs with no access to the index or the disk.
+`index/ideas.rs` is the derived half and the seam between them: it gathers what
+the two pure modules read and hands it over whole. `index/schema.rs`,
+`index/sync.rs`, `watcher.rs` and `server.rs` carry all of it into startup,
+reconciliation and live pickup of external edits, and `api/ideas.rs` is the
+twenty-three endpoints over the lot.
 
 ### Nothing is created until something is written
 
@@ -819,9 +825,9 @@ every call site having to remember to.
 
 ### The fold is SQL, and that is why a rebuild agrees with an update
 
-The plan's table list is built as written, minus `idea_terms`, which belongs to
-the analyzer and arrives with it: a table nothing writes yet is worse than a
-second schema bump, and a bump costs one scan by design.
+The plan's table list is built as written. `idea_terms` arrived a version later
+than the rest, with the analyzer that fills it: a table nothing writes yet is
+worse than a second schema bump, and a bump costs one scan by design.
 
 Every folded table is recomputed by one statement over `idea_seed_captures` and
 `idea_events`, keyed on whatever just changed. There is no separate rebuild
@@ -895,9 +901,14 @@ asked for.
   detail view, and the time log already sets the precedent of keeping the prose
   on disk and a flag in the index. A file that cannot be read at that instant
   costs the note rather than the request.
-- **`GET /api/ideas` has no `state` or `at` filter yet.** Both need the lifecycle
-  function, which is I3's. What the listing returns is the folded fact each of
-  them would be computed from.
+- **`idea_analysis_unavailable` is a `503`, not a `500`.** Nothing is broken and
+  nothing is lost: the capture is on disk and the derived half is behind, which a
+  reindex fixes. 503 is the status that means come back rather than something
+  went wrong, and like `written_but_not_indexed` its message is put on the wire
+  rather than swallowed, because the caller's next move is specific and the
+  response is the only place to say what it is.
+- **Every float on the wire is rounded to six decimal places**, in one place, so
+  a client comparing two numbers is comparing them at the same precision.
 
 ### Adoption is built, and runs in both places
 
@@ -916,6 +927,95 @@ decision, and it exists only for this. It changes who a decision is attributed
 to, never what was decided or when, so the fold is untouched and the id, which
 is the fold order, does not move. It refuses an event that already names an
 actor.
+
+### The analyzer, and what 0.35 actually means
+
+`ideas/analysis.rs` is `tfidf/v1` and it is arithmetic over one owner's captures,
+exactly as written above. Three things about it are worth knowing before reading
+a score.
+
+**Bigrams roughly halve what a paraphrase can score.** A capture of six words
+produces six unigrams and five bigrams, so about half of any capture's vector is
+phrases. Two captures using the same words in a different order share every
+unigram and no bigram, and score around 0.43;
+`shuffling_the_word_order_costs_about_half_the_score` pins that. Identical text
+scores 1. So 0.35 is not "a third alike": it is roughly "most of the same words,
+or a good few of the same phrases", and it is deliberately hard to reach by
+accident. It is also why there is no point tuning the threshold without tuning
+tokenization at the same time, since they set each other's scale.
+
+**The smoothed idf floors a ubiquitous term at 1 rather than erasing it.**
+`ln((1 + N) / (1 + df)) + 1` gives exactly 1 when a term is in every capture,
+where the unsmoothed form would give 0. That is the standard shape and it is the
+right one here: a single-user inbox is full of the same handful of words, and a
+formula that erased them would erase the signal along with the noise. The
+consequence is that a corpus of one repeated thought scores near 1 against
+itself, which is the honest answer to "these really do all say the same thing"
+and is what the threshold and the three-candidate cap are for rather than the
+weighting.
+
+**The contributions are the score, not a summary of it.** Both vectors are unit
+length, so the cosine is a dot product, and a dot product is a sum of per-term
+products. The signals in a response are the actual terms of that actual sum, and
+`explained` is what the listed five add up to. It is below `similarity` whenever
+more than five terms were shared, and saying so is the difference between showing
+the evidence and implying it is all of it. `explained` is summed from the
+*rounded* contributions rather than the exact ones, so a reader adding up the
+numbers in front of them arrives at the number printed beside them.
+
+A centroid is the mean of its members' unit vectors, normalised. Normalising
+matters for the same reason: without it the contributions would not sum to the
+similarity, and the receipt would be approximately true.
+
+### Lifecycle is a pure function, and the ceiling is unreachable
+
+`ideas/lifecycle.rs` takes the folded evidence and an instant and returns the
+whole receipt: state, momentum, every component, the window boundaries each was
+measured against, and every capture and event that was counted with a flag saying
+which window it fell in. `a_receipt_reconstructs_its_own_momentum` recomputes the
+score from nothing but the response, which is the phase gate written as a test.
+
+Two things the plan states that are worth restating as consequences:
+
+- **`min(base + recency + affirmation, 10)` cannot reach 10.** Four plus two plus
+  one is seven. The cap is implemented because the ruleset defines it and because
+  a component added later must not silently change what the top of the scale
+  means, but nobody should build a bar chart out of ten.
+- **Dormancy is decided before the capture count**, so an idea with one capture
+  and nothing since is dormant rather than new. That is the ordering the plan
+  gives and it is the right way round: rediscovery looks for dormant ideas, and a
+  thought from last year is exactly what it should resurface.
+
+An `at` that comes off a query string is subtracted from, and chrono's
+subtraction panics on overflow, so the boundaries saturate rather than taking the
+request handler down with them.
+
+### The listing filters on values SQL does not compute
+
+`GET /api/ideas?state=` runs the lifecycle over every one of the owner's ideas
+before anything is paginated. That is a full pass rather than a `where` clause,
+and it is the deliberate trade: dormancy spelled in SQL would be a second
+implementation of the rules, free to disagree with the receipt that explains
+them. It also makes `total` honest under a filter, which paginating first and
+filtering after cannot be.
+
+The cost is bounded by how many threads a person names, which is tens. The same
+is not true of candidates, where every vector is rebuilt per request; that one is
+in `TODO.md` waiting for the plan's measurements rather than for a guess.
+
+### `idea_terms` is the analyzer's output and nobody else's
+
+The table holds what `analysis::counts` produced, which is why **changing
+tokenization is a schema-version change even though it changes no DDL**. It is
+separate from `idea_captures_fts` because the two answer different questions:
+search wants to find a capture from a word somebody typed into a box, and this
+wants weights, occurrence counts and bigrams, none of which fts5 offers without
+reaching into its internals.
+
+A capture whose text holds no terms at all, such as one that is only punctuation,
+has no rows here and no vector. It still counts toward `N`, because it is still a
+capture, and the candidates response says `terms: 0` so that "nothing to match
+on" and "nothing matched" are distinguishable answers.
 
 ### `SyncReport` counts five trees
 

@@ -26,10 +26,16 @@
 /// rather than a stale row. The rebuild is the same one scan it always is.
 ///
 /// Version 8 adds Idea Inbox: the three authored trees under `.rhizolog/ideas/`
-/// and the tables folded from them. `idea_terms` is deliberately absent. It
-/// belongs to the analyzer, which arrives with its own fixtures and its own
-/// bump, and a table nothing writes yet is worse than a second version number.
-pub const SCHEMA_VERSION: i64 = 8;
+/// and the tables folded from them. `idea_terms` was deliberately absent, since
+/// a table nothing writes yet is worse than a second version number.
+///
+/// Version 9 is that second version number, and it is the analyzer arriving:
+/// `idea_terms` holds the unigrams and bigrams `tfidf/v1` counts. An index
+/// written before it has no terms at all, so candidates would come back empty
+/// for every capture rather than wrong, and rebuilding is what fills them in.
+/// **Changing how a capture is tokenized is a bump too**, because every row here
+/// is the output of that one function.
+pub const SCHEMA_VERSION: i64 = 9;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -393,6 +399,27 @@ create table idea_thread_state (
     promoted_to text,
     last_signal integer
 ) strict;
+
+-- The analyzer's view of a capture: every unigram and every adjacent bigram in
+-- its text, counted. Derived from the body by `ideas::analysis::counts` and by
+-- nothing else, which is why changing that function is a schema-version change
+-- even though it changes no DDL.
+--
+-- Separate from `idea_captures_fts`, which tokenizes for a different purpose.
+-- Search wants to find a capture from a word somebody typed into a box; this
+-- wants weights, occurrence counts and bigrams, and fts5 offers none of the
+-- three without reaching into its internals.
+--
+-- No `owner` column. Every read joins `idea_captures` for it, so there is one
+-- place a capture's owner is recorded and no way for the two to disagree.
+create table idea_terms (
+    capture_id  text    not null references idea_captures(id) on delete cascade,
+    term        text    not null,
+    occurrences integer not null,
+    primary key (capture_id, term)
+) strict;
+
+create index idea_terms_by_term on idea_terms(term);
 ";
 
 /// Dropped in dependency order so the foreign keys never block.
@@ -413,6 +440,7 @@ drop table if exists idea_seed_captures;
 drop table if exists idea_capture_state;
 drop table if exists idea_capture_rejections;
 drop table if exists idea_events;
+drop table if exists idea_terms;
 drop table if exists idea_captures_fts;
 drop table if exists idea_captures;
 drop table if exists idea_threads;

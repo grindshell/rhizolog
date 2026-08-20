@@ -52,13 +52,33 @@ use crate::api::AppState;
 use crate::api::extract::Json as JsonBody;
 use crate::auth::Viewer;
 use crate::error::{AppError, AppResult};
+use crate::ideas::analysis::{self, Target};
+use crate::ideas::lifecycle::{
+    self, Boundaries, Components, CountedAffirmation, CountedCapture, Integrity, Lifecycle, Receipt,
+};
 use crate::ideas::{
     Capture, CaptureId, Event, EventKind, Idea, IdeaId, Owner, RecordKind, Subject,
 };
-use crate::index::{CaptureListOptions, CaptureRecord, IdeaState, IdeaSummary};
+use crate::index::{
+    CaptureListOptions, CaptureRecord, IdeaListOptions, IdeaStanding, IdeaState, IdeaSummary,
+};
 use crate::slug::Slug;
 
 const DEFAULT_LIMIT: usize = 50;
+
+/// How many decimal places a weight, a score or a contribution keeps on the
+/// wire.
+///
+/// Enough that adding the listed contributions reproduces the similarity to
+/// within a millionth, and few enough that a receipt reads as arithmetic rather
+/// than as floating-point noise.
+const PLACES: f64 = 1e6;
+
+/// Round a score for the wire. Every float this module returns goes through it,
+/// so a client comparing two numbers is comparing them at the same precision.
+fn rounded(value: f64) -> f64 {
+    (value * PLACES).round() / PLACES
+}
 
 /// Caps how much one listing can return.
 ///
@@ -120,6 +140,10 @@ pub struct CaptureListResponse {
 }
 
 /// One idea thread, as a listing shows it.
+///
+/// `state` and `momentum` are worked out for the instant the listing was asked
+/// about, which the response repeats. Neither is stored: the same files answer
+/// differently tomorrow, and that is the feature rather than staleness.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct IdeaSummaryView {
     pub id: IdeaId,
@@ -145,11 +169,26 @@ pub struct IdeaSummaryView {
     /// because there is no authored text left to derive one from. It is reported
     /// rather than papered over.
     pub needs_repair: bool,
+    /// Whether every connected capture is still readable.
+    pub integrity: Integrity,
+    /// Where the rules put it. Absent exactly when `needs_repair` is true.
+    pub state: Option<Lifecycle>,
+    /// How much is going on. Absent for the same reason. Never shown without a
+    /// way to open the receipt that explains it.
+    #[schema(example = 5)]
+    pub momentum: Option<u32>,
     pub updated: DateTime<Utc>,
 }
 
-impl From<IdeaSummary> for IdeaSummaryView {
-    fn from(summary: IdeaSummary) -> Self {
+impl From<IdeaStanding> for IdeaSummaryView {
+    fn from(standing: IdeaStanding) -> Self {
+        let IdeaStanding {
+            summary,
+            integrity,
+            state,
+            momentum,
+        } = standing;
+
         Self {
             needs_repair: summary.evidence_missing(),
             id: summary.id,
@@ -160,6 +199,9 @@ impl From<IdeaSummary> for IdeaSummaryView {
             retired: summary.retired,
             promoted_to: summary.promoted_to,
             last_signal: summary.last_signal,
+            integrity,
+            state,
+            momentum,
             updated: summary.updated,
         }
     }
@@ -169,19 +211,26 @@ impl From<IdeaSummary> for IdeaSummaryView {
 pub struct IdeaListResponse {
     /// Most recently active first.
     pub ideas: Vec<IdeaSummaryView>,
+    /// Matching ideas, not the number returned. Counted after the `state` and
+    /// `integrity` filters, so paging through it reaches every one of them.
     #[schema(example = 7)]
     pub total: usize,
     #[schema(example = 50)]
     pub limit: usize,
     #[schema(example = 0)]
     pub offset: usize,
+    /// The instant every state and momentum here was worked out for.
+    pub at: DateTime<Utc>,
+    /// The rules that produced them.
+    #[schema(example = "idea-momentum/v1")]
+    pub ruleset: String,
 }
 
-/// One idea thread, with what it holds.
+/// One idea thread, with what it holds and where the rules put it.
 ///
-/// No lifecycle label and no momentum score: both are pure functions of this and
-/// an explicit moment, and neither exists until the analyzer does. What is here
-/// is the folded evidence either would be computed from.
+/// The state and momentum here are worked out for the moment of the request.
+/// `GET /api/ideas/{id}/receipt` is the same answer with every number and every
+/// piece of evidence behind it, and takes an `at` for any other moment.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct IdeaView {
     pub id: IdeaId,
@@ -201,6 +250,14 @@ pub struct IdeaView {
     pub promoted_to: Option<Slug>,
     pub last_signal: Option<DateTime<Utc>>,
     pub needs_repair: bool,
+    pub integrity: Integrity,
+    /// Absent exactly when `needs_repair` is true.
+    pub state: Option<Lifecycle>,
+    /// Absent for the same reason. See the receipt for how it was arrived at.
+    #[schema(example = 5)]
+    pub momentum: Option<u32>,
+    /// The instant the two above were worked out for.
+    pub computed_at: DateTime<Utc>,
     pub updated: DateTime<Utc>,
 }
 
@@ -220,6 +277,136 @@ pub struct AffectedIdea {
     pub name: String,
     /// Whether it is now short of the evidence it rests on.
     pub needs_repair: bool,
+}
+
+/// What one capture might belong with, and why the analyzer thinks so.
+///
+/// Advisory and only advisory. Nothing here has created a connection, and
+/// accepting one is a separate request the user makes.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CandidateResponse {
+    pub capture: CaptureId,
+    /// The analyzer that produced these. Changing tokenization, weighting, the
+    /// threshold or how a centroid is built changes this string.
+    #[schema(example = "tfidf/v1")]
+    pub analyzer: String,
+    /// How many of your captures the weights were computed over. This is the
+    /// `N` in the idf, and it is your corpus alone.
+    #[schema(example = 143)]
+    pub corpus: usize,
+    /// How many distinct terms this capture has. Zero means there was nothing
+    /// to match on, which is not the same answer as nothing matched.
+    #[schema(example = 11)]
+    pub terms: usize,
+    /// The similarity a candidate has to reach to be suggested at all.
+    #[schema(example = 0.35)]
+    pub threshold: f64,
+    /// At most three, highest first.
+    pub candidates: Vec<CandidateView>,
+}
+
+/// Whether a candidate suggests a thread that exists or another loose capture.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKind {
+    /// Accepting appends one membership event.
+    Idea,
+    /// Accepting means naming a new idea holding both, which is how a thread
+    /// comes to exist before there is a thread.
+    Capture,
+}
+
+/// The thread a candidate points at.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IdeaTargetView {
+    pub id: IdeaId,
+    #[schema(example = "Dungeon seeds")]
+    pub name: String,
+    /// How many captures it currently holds.
+    #[schema(example = 3)]
+    pub captures: usize,
+}
+
+/// One suggestion.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CandidateView {
+    pub kind: TargetKind,
+    /// Present when `kind` is `idea`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idea: Option<IdeaTargetView>,
+    /// Present when `kind` is `capture`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture: Option<CaptureView>,
+    /// Lexical similarity between 0 and 1, rounded to six decimal places. This
+    /// is how alike the words are, not a probability that the thoughts are
+    /// related, and the interface has to say so.
+    #[schema(example = 0.482913)]
+    pub similarity: f64,
+    /// The shared terms that produced it, biggest contribution first, at most
+    /// five of them.
+    pub signals: Vec<SignalView>,
+    /// What the listed signals add up to. Below `similarity` when more than five
+    /// terms were shared, which is the honest way to show five of them.
+    #[schema(example = 0.44021)]
+    pub explained: f64,
+}
+
+/// One term both records carry, and what it was worth.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SignalView {
+    /// A word, or two adjacent words, appearing literally in both. Never a stem
+    /// and never a synonym: every signal shown is text you wrote.
+    #[schema(example = "dungeon seeds")]
+    pub term: String,
+    /// How many of your captures contain it. The input to its idf, and the
+    /// reason a word you use constantly counts for less.
+    #[schema(example = 4)]
+    pub documents: usize,
+    /// Its weight in this capture, as a component of a unit vector.
+    #[schema(example = 0.51203)]
+    pub capture_weight: f64,
+    /// Its weight in the target.
+    #[schema(example = 0.44107)]
+    pub target_weight: f64,
+    /// `capture_weight * target_weight`. These sum to the similarity.
+    #[schema(example = 0.225837)]
+    pub contribution: f64,
+}
+
+/// Why an idea is in the state it is in.
+///
+/// Everything needed to recompute `momentum` is here: the components, the
+/// boundaries they were measured against, and every capture and event that was
+/// counted with a flag saying which window it fell in. A reader should never
+/// have to take the number on trust.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReceiptResponse {
+    pub idea: IdeaId,
+    #[schema(example = "Dungeon seeds")]
+    pub name: String,
+    /// The rules that produced this, and the only thing that changes it.
+    #[schema(example = "idea-momentum/v1")]
+    pub ruleset: String,
+    /// The instant this is an answer about: your `at`, or the server's now.
+    pub computed_at: DateTime<Utc>,
+    pub boundaries: Boundaries,
+    pub integrity: Integrity,
+    /// Absent when the evidence is missing. There is then nothing to derive it
+    /// from, and inventing one is the thing this feature must never do.
+    pub state: Option<Lifecycle>,
+    #[schema(example = 5)]
+    pub momentum: Option<u32>,
+    pub components: Option<Components>,
+    pub last_signal: Option<DateTime<Utc>>,
+    /// Every connected capture still readable, oldest first.
+    pub captures: Vec<CountedCapture>,
+    /// Every affirmation and reopening, in decision order. One that fell outside
+    /// the window is listed too, flagged as not counted.
+    pub affirmations: Vec<CountedAffirmation>,
+    /// Connected captures whose files are gone.
+    pub missing: Vec<CaptureId>,
+    /// One sentence per line, each from a fixed template.
+    pub explanation: Vec<String>,
 }
 
 // ----------------------------------------------------------------- requests
@@ -293,11 +480,30 @@ pub struct CaptureListQuery {
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct IdeaListQuery {
+    /// Only ideas in this state: `retired`, `dormant`, `new`, `active` or
+    /// `recurring`. Absent means every state.
+    #[param(example = "active")]
+    pub state: Option<String>,
+    /// Only ideas whose evidence is `sound`, or only those with
+    /// `evidence_missing`. The second is the Needs repair group.
+    #[param(example = "sound")]
+    pub integrity: Option<String>,
+    /// Work the states out for this instant instead of now. The files do not
+    /// change; what they add up to does.
+    pub at: Option<DateTime<Utc>>,
     /// Defaults to 50, capped at 200.
     #[param(example = 50)]
     pub limit: Option<usize>,
     #[param(example = 0)]
     pub offset: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ReceiptQuery {
+    /// Work the answer out for this instant instead of now. Nothing about the
+    /// state is stored, so this is inspection rather than history.
+    pub at: Option<DateTime<Utc>>,
 }
 
 // ------------------------------------------------------------------ helpers
@@ -323,6 +529,37 @@ fn page_of(limit: Option<usize>, offset: Option<usize>) -> (usize, usize) {
         limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT),
         offset.unwrap_or(0),
     )
+}
+
+/// Read a `state=` filter, naming every value that would have worked.
+fn lifecycle_filter(raw: Option<&str>) -> AppResult<Option<Lifecycle>> {
+    match raw {
+        None => Ok(None),
+        Some(value) => {
+            Lifecycle::parse(value)
+                .map(Some)
+                .ok_or_else(|| AppError::InvalidParameter {
+                    parameter: "state",
+                    value: value.to_owned(),
+                    allowed: Lifecycle::NAMES,
+                })
+        }
+    }
+}
+
+fn integrity_filter(raw: Option<&str>) -> AppResult<Option<Integrity>> {
+    match raw {
+        None => Ok(None),
+        Some(value) => {
+            Integrity::parse(value)
+                .map(Some)
+                .ok_or_else(|| AppError::InvalidParameter {
+                    parameter: "integrity",
+                    value: value.to_owned(),
+                    allowed: Integrity::NAMES,
+                })
+        }
+    }
 }
 
 /// Put a freshly written capture into the index, and say so plainly if it will
@@ -389,14 +626,44 @@ async fn capture_of(state: &AppState, owner: &Owner, id: &CaptureId) -> AppResul
     })
 }
 
+/// Work out where one of this owner's ideas stands at a given instant.
+///
+/// The index gathers the evidence and the pure rules read it. There is one
+/// implementation of those rules and this is how everything reaches it, so the
+/// number a listing shows and the number a receipt explains cannot drift apart.
+async fn assess(
+    state: &AppState,
+    owner: &Owner,
+    id: &IdeaId,
+    at: DateTime<Utc>,
+) -> AppResult<(IdeaSummary, Receipt)> {
+    let found = state
+        .index
+        .idea_evidence(owner, Some(id))
+        .await?
+        .pop()
+        .ok_or_else(|| {
+            AppError::Ideas(crate::ideas::IdeaServiceError::IdeaNotFound { id: id.clone() })
+        })?;
+
+    let receipt = lifecycle::assess(&found.evidence, at);
+    Ok((found.summary, receipt))
+}
+
 /// Assemble the full view of one idea.
 ///
 /// The folded state comes from the index, which is the read path everywhere in
 /// Rhizolog. The note comes from the thread's own file, because it is the one
 /// thing about an idea the index does not hold; a file that cannot be read at
 /// this instant costs the note rather than the request.
-async fn idea_view(state: &AppState, owner: &Owner, folded: IdeaState) -> AppResult<IdeaView> {
+async fn idea_view(
+    state: &AppState,
+    owner: &Owner,
+    folded: IdeaState,
+    at: DateTime<Utc>,
+) -> AppResult<IdeaView> {
     let captures = state.index.idea_captures(owner, &folded.id).await?;
+    let (_, receipt) = assess(state, owner, &folded.id, at).await?;
 
     let note = match state.ideas.read_idea(owner, &folded.id).await {
         Ok(idea) => idea.note,
@@ -407,7 +674,11 @@ async fn idea_view(state: &AppState, owner: &Owner, folded: IdeaState) -> AppRes
     };
 
     Ok(IdeaView {
-        needs_repair: folded.evidence_missing(),
+        needs_repair: receipt.needs_repair(),
+        integrity: receipt.integrity,
+        state: receipt.state,
+        momentum: receipt.momentum,
+        computed_at: receipt.computed_at,
         id: folded.id,
         name: folded.name,
         note,
@@ -429,7 +700,7 @@ async fn answer_with_idea(
     id: &IdeaId,
 ) -> AppResult<Json<IdeaView>> {
     let folded = state_of(state, owner, id).await?;
-    Ok(Json(idea_view(state, owner, folded).await?))
+    Ok(Json(idea_view(state, owner, folded, Utc::now()).await?))
 }
 
 fn created<T: Serialize>(location: String, body: T) -> Response {
@@ -801,9 +1072,119 @@ async fn set_pair_rejected(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// What this capture might belong with, and why.
+///
+/// Scored against every non-retired idea and every capture of yours that
+/// belongs to none, over a corpus that is yours alone. A candidate carries the
+/// shared terms that produced it and what each was worth, so the number can be
+/// checked rather than believed.
+///
+/// This creates nothing. Every candidate is a question, and the answer is
+/// `PUT .../captures/...` to connect, `POST /api/ideas` to name a new thread
+/// from two loose captures, or `PUT .../rejections/...` to say no and not be
+/// asked again.
+///
+/// A capture with no terms at all, such as one whose text is punctuation, comes
+/// back with `terms: 0` and no candidates. That is a different answer from
+/// nothing having matched and the response says which it is.
+#[utoipa::path(
+    get,
+    path = "/api/captures/{id}/candidates",
+    tag = "ideas",
+    params(("id" = String, Path, description = "Capture id", example = "20260820T141530-123456789")),
+    responses(
+        (status = 200, description = "What it might belong with", body = CandidateResponse),
+        (status = 404, description = "No such capture", body = crate::error::ErrorResponse),
+        (status = 503, description = "The analyzer has no terms for it; reindex", body = crate::error::ErrorResponse),
+    ),
+)]
+pub async fn read_capture_candidates(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(raw): Path<String>,
+) -> AppResult<Json<CandidateResponse>> {
+    let owner = viewer.owner()?;
+    let id = capture_id(&raw)?;
+    capture_of(&state, &owner, &id).await?;
+
+    let field = state.index.candidate_field(&owner).await?;
+    // The capture is indexed and the corpus is not: the two reads happened at
+    // different moments and something moved between them. Derived and
+    // retryable, and saying so is more use than a generic failure.
+    if !field.corpus.contains(&id) {
+        return Err(AppError::IdeaAnalysisUnavailable { id });
+    }
+
+    let found = analysis::candidates(&field, &id);
+    let mut candidates = Vec::with_capacity(found.len());
+    for candidate in found {
+        let signals: Vec<SignalView> = candidate
+            .signals
+            .into_iter()
+            .map(|signal| SignalView {
+                documents: field.corpus.frequency(&signal.term),
+                term: signal.term,
+                capture_weight: rounded(signal.capture_weight),
+                target_weight: rounded(signal.target_weight),
+                contribution: rounded(signal.contribution),
+            })
+            .collect();
+        // Summed from the rounded contributions rather than the exact ones, so
+        // that a reader adding up the numbers in front of them arrives at this
+        // number and not one two millionths away from it.
+        let explained = rounded(signals.iter().map(|signal| signal.contribution).sum());
+
+        let (kind, idea, capture) = match candidate.target {
+            Target::Idea { id, name, members } => (
+                TargetKind::Idea,
+                Some(IdeaTargetView {
+                    id,
+                    name,
+                    captures: members,
+                }),
+                None,
+            ),
+            // Read back for its text, which the interface has to show before it
+            // can ask whether the two belong together. It is the caller's own
+            // capture, and it was reached through the owner-scoped read.
+            Target::Capture { id } => (
+                TargetKind::Capture,
+                None,
+                state
+                    .index
+                    .capture(&owner, &id)
+                    .await?
+                    .map(CaptureView::from),
+            ),
+        };
+
+        candidates.push(CandidateView {
+            kind,
+            idea,
+            capture,
+            similarity: rounded(candidate.similarity),
+            signals,
+            explained,
+        });
+    }
+
+    Ok(Json(CandidateResponse {
+        analyzer: analysis::ANALYZER.to_owned(),
+        corpus: field.corpus.len(),
+        terms: field.corpus.distinct_terms(&id),
+        threshold: analysis::THRESHOLD,
+        capture: id,
+        candidates,
+    }))
+}
+
 // -------------------------------------------------------------------- ideas
 
 /// Idea threads, most recently active first.
+///
+/// `state` and `integrity` narrow the list by values that are computed rather
+/// than stored, so `total` counts what matched and paging through it reaches
+/// every one of them.
 #[utoipa::path(
     get,
     path = "/api/ideas",
@@ -811,6 +1192,7 @@ async fn set_pair_rejected(
     params(IdeaListQuery),
     responses(
         (status = 200, description = "The ideas", body = IdeaListResponse),
+        (status = 400, description = "No such state or integrity", body = crate::error::ErrorResponse),
         (status = 401, description = "This wiki requires authentication", body = crate::error::ErrorResponse),
     ),
 )]
@@ -821,14 +1203,29 @@ pub async fn list_ideas(
 ) -> AppResult<Json<IdeaListResponse>> {
     let owner = viewer.owner()?;
     let (limit, offset) = page_of(query.limit, query.offset);
+    let at = query.at.unwrap_or_else(Utc::now);
 
-    let list = state.index.list_ideas(&owner, limit, offset).await?;
+    let list = state
+        .index
+        .list_ideas(
+            &owner,
+            IdeaListOptions {
+                state: lifecycle_filter(query.state.as_deref())?,
+                integrity: integrity_filter(query.integrity.as_deref())?,
+                at,
+                limit,
+                offset,
+            },
+        )
+        .await?;
 
     Ok(Json(IdeaListResponse {
         ideas: list.ideas.into_iter().map(IdeaSummaryView::from).collect(),
         total: list.total,
         limit,
         offset,
+        at,
+        ruleset: lifecycle::RULESET.to_owned(),
     }))
 }
 
@@ -868,7 +1265,10 @@ pub async fn create_idea(
 
     let location = format!("/api/ideas/{}", idea.id);
     let folded = state_of(&state, &owner, &idea.id).await?;
-    Ok(created(location, idea_view(&state, &owner, folded).await?))
+    Ok(created(
+        location,
+        idea_view(&state, &owner, folded, Utc::now()).await?,
+    ))
 }
 
 /// One idea, with what it holds.
@@ -1234,4 +1634,58 @@ pub async fn dismiss_idea(
     .await?;
 
     answer_with_idea(&state, &owner, &idea).await
+}
+
+/// Why an idea is in the state it is in.
+///
+/// The components, the window boundaries they were measured against, and every
+/// capture and event that was counted with a flag saying which window it fell
+/// in. Nothing here is stored: the same files answer differently tomorrow, which
+/// is what `at` exists to demonstrate.
+///
+/// An idea whose captures have been deleted from underneath it comes back with
+/// `integrity: evidence_missing`, the ids it lost, and no state and no momentum
+/// at all. That is deliberate. There is nothing left to derive them from, and
+/// deriving them anyway is the one thing this feature must not do.
+#[utoipa::path(
+    get,
+    path = "/api/ideas/{id}/receipt",
+    tag = "ideas",
+    params(
+        ("id" = String, Path, description = "Idea id", example = "20260820T142000-234567890"),
+        ReceiptQuery,
+    ),
+    responses(
+        (status = 200, description = "The receipt", body = ReceiptResponse),
+        (status = 404, description = "No such idea", body = crate::error::ErrorResponse),
+    ),
+)]
+pub async fn read_idea_receipt(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(raw): Path<String>,
+    Query(query): Query<ReceiptQuery>,
+) -> AppResult<Json<ReceiptResponse>> {
+    let owner = viewer.owner()?;
+    let idea = idea_id(&raw)?;
+
+    let (summary, receipt) =
+        assess(&state, &owner, &idea, query.at.unwrap_or_else(Utc::now)).await?;
+
+    Ok(Json(ReceiptResponse {
+        idea: summary.id,
+        name: summary.name,
+        ruleset: receipt.ruleset.to_owned(),
+        computed_at: receipt.computed_at,
+        boundaries: receipt.boundaries,
+        integrity: receipt.integrity,
+        state: receipt.state,
+        momentum: receipt.momentum,
+        components: receipt.components,
+        last_signal: receipt.last_signal,
+        captures: receipt.captures,
+        affirmations: receipt.affirmations,
+        missing: receipt.missing,
+        explanation: receipt.explanation,
+    }))
 }

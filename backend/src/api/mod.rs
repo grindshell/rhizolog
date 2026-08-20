@@ -210,6 +210,7 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         ))
         .routes(routes!(ideas::archive_capture))
         .routes(routes!(ideas::restore_capture))
+        .routes(routes!(ideas::read_capture_candidates))
         .routes(routes!(
             ideas::reject_capture_pair,
             ideas::reconsider_capture_pair
@@ -228,6 +229,7 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         .routes(routes!(ideas::retire_idea))
         .routes(routes!(ideas::reopen_idea))
         .routes(routes!(ideas::dismiss_idea))
+        .routes(routes!(ideas::read_idea_receipt))
         .routes(routes!(auth::login))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::read_session))

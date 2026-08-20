@@ -231,6 +231,17 @@ pub enum AppError {
     #[error("{id} is not retired")]
     IdeaNotRetired { id: IdeaId },
 
+    /// Candidates were asked for and the derived half could not answer.
+    ///
+    /// Analysis is derived and retryable, so this never means anything is lost:
+    /// the capture's text is on disk and a reindex builds its terms again. It is
+    /// deliberately not folded into a generic failure, because the caller's next
+    /// move is specific and the response is the only place to say what it is.
+    #[error(
+        "the analyzer has no terms for {id}. Nothing is lost; run POST /api/reindex and ask again."
+    )]
+    IdeaAnalysisUnavailable { id: CaptureId },
+
     /// The authored file was written and the index would not take it.
     ///
     /// Says so plainly, because the two halves of a write have come apart and a
@@ -325,6 +336,10 @@ impl AppError {
             | Self::IdeaAlreadyRetired { .. }
             | Self::IdeaNotRetired { .. } => StatusCode::CONFLICT,
             Self::WrittenButNotIndexed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            // Not a 500: nothing is broken and nothing is lost. The derived half
+            // is behind the authored half, which a reindex fixes, and 503 is the
+            // status that means come back rather than something went wrong.
+            Self::IdeaAnalysisUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::RouteNotFound { .. } | Self::PinNotFound { .. } => StatusCode::NOT_FOUND,
             Self::TooManyPins { .. } | Self::TimeNotRunning { .. } => StatusCode::CONFLICT,
             Self::InvalidRecordId { .. }
@@ -391,6 +406,7 @@ impl AppError {
             Self::IdeaWouldBeEmpty { .. } => "idea_would_be_empty",
             Self::IdeaAlreadyRetired { .. } => "idea_already_retired",
             Self::IdeaNotRetired { .. } => "idea_not_retired",
+            Self::IdeaAnalysisUnavailable { .. } => "idea_analysis_unavailable",
             Self::WrittenButNotIndexed { .. } => "written_but_not_indexed",
             Self::InvalidTimeId { .. } => "invalid_time_id",
             Self::TimeNotRunning { .. } => "time_not_running",
@@ -496,6 +512,7 @@ impl AppError {
             Self::IdeaWouldBeEmpty { id }
             | Self::IdeaAlreadyRetired { id }
             | Self::IdeaNotRetired { id } => Some(json!({ "id": id })),
+            Self::IdeaAnalysisUnavailable { id } => Some(json!({ "id": id })),
             Self::WrittenButNotIndexed { what, .. } => Some(json!({ "written": what })),
             Self::InvalidTimeId { raw, source } => Some(json!({
                 "id": raw,
@@ -543,10 +560,14 @@ impl AppError {
             | Self::Ideas(IdeaServiceError::Store(IdeaStoreError::Io(_)))
             | Self::Index(_)
             | Self::Internal { .. } => "the server failed to handle the request".to_owned(),
-            // The exception to the rule above: this one is a server failure that
-            // the caller has to be told about, because the authored write did
-            // succeed and retrying would write the record a second time.
-            Self::WrittenButNotIndexed { .. } => self.to_string(),
+            // The exceptions to the rule above. Both are server-side failures
+            // the caller has to be told about, because in both cases the
+            // authored files are fine and the useful next move is a reindex
+            // rather than a retry: retrying the first would write the record a
+            // second time, and retrying the second would fail again.
+            Self::WrittenButNotIndexed { .. } | Self::IdeaAnalysisUnavailable { .. } => {
+                self.to_string()
+            }
             other => other.to_string(),
         }
     }

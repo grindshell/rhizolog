@@ -151,6 +151,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/captures/{id}/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What this capture might belong with, and why.
+         * @description Scored against every non-retired idea and every capture of yours that
+         *     belongs to none, over a corpus that is yours alone. A candidate carries the
+         *     shared terms that produced it and what each was worth, so the number can be
+         *     checked rather than believed.
+         *
+         *     This creates nothing. Every candidate is a question, and the answer is
+         *     `PUT .../captures/...` to connect, `POST /api/ideas` to name a new thread
+         *     from two loose captures, or `PUT .../rejections/...` to say no and not be
+         *     asked again.
+         *
+         *     A capture with no terms at all, such as one whose text is punctuation, comes
+         *     back with `terms: 0` and no candidates. That is a different answer from
+         *     nothing having matched and the response says which it is.
+         */
+        get: operations["read_capture_candidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/captures/{id}/rejections/{other_id}": {
         parameters: {
             query?: never;
@@ -253,7 +285,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Idea threads, most recently active first. */
+        /**
+         * Idea threads, most recently active first.
+         * @description `state` and `integrity` narrow the list by values that are computed rather
+         *     than stored, so `total` counts what matched and paging through it reaches
+         *     every one of them.
+         */
         get: operations["list_ideas"];
         put?: never;
         /**
@@ -348,6 +385,34 @@ export interface paths {
          *     which is what retiring says. This one only quietens it.
          */
         post: operations["dismiss_idea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas/{id}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Why an idea is in the state it is in.
+         * @description The components, the window boundaries they were measured against, and every
+         *     capture and event that was counted with a flag saying which window it fell
+         *     in. Nothing here is stored: the same files answer differently tomorrow, which
+         *     is what `at` exists to demonstrate.
+         *
+         *     An idea whose captures have been deleted from underneath it comes back with
+         *     `integrity: evidence_missing`, the ids it lost, and no state and no momentum
+         *     at all. That is deliberate. There is nothing left to derive them from, and
+         *     deriving them anyway is the one thing this feature must not do.
+         */
+        get: operations["read_idea_receipt"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -824,6 +889,27 @@ export interface components {
             /** @description Whether it is now short of the evidence it rests on. */
             needs_repair: boolean;
         };
+        /**
+         * @description Where each window starts, so every flag in a receipt can be checked against
+         *     the timestamps beside it.
+         */
+        Boundaries: {
+            /**
+             * Format: date-time
+             * @description `at - 60 days`. A `last_signal` at or before this is dormant.
+             */
+            dormant: string;
+            /**
+             * Format: date-time
+             * @description `at - 14 days`. A capture at or after this counts toward `recent_14`.
+             */
+            recent_14: string;
+            /**
+             * Format: date-time
+             * @description `at - 30 days`.
+             */
+            recent_30: string;
+        };
         BucketView: {
             /**
              * Format: int64
@@ -836,6 +922,67 @@ export interface components {
              *     calendar terms, not necessarily in length.
              */
             start: string;
+        };
+        /**
+         * @description What one capture might belong with, and why the analyzer thinks so.
+         *
+         *     Advisory and only advisory. Nothing here has created a connection, and
+         *     accepting one is a separate request the user makes.
+         */
+        CandidateResponse: {
+            /**
+             * @description The analyzer that produced these. Changing tokenization, weighting, the
+             *     threshold or how a centroid is built changes this string.
+             * @example tfidf/v1
+             */
+            analyzer: string;
+            /** @description At most three, highest first. */
+            candidates: components["schemas"]["CandidateView"][];
+            capture: components["schemas"]["CaptureId"];
+            /**
+             * @description How many of your captures the weights were computed over. This is the
+             *     `N` in the idf, and it is your corpus alone.
+             * @example 143
+             */
+            corpus: number;
+            /**
+             * @description How many distinct terms this capture has. Zero means there was nothing
+             *     to match on, which is not the same answer as nothing matched.
+             * @example 11
+             */
+            terms: number;
+            /**
+             * Format: double
+             * @description The similarity a candidate has to reach to be suggested at all.
+             * @example 0.35
+             */
+            threshold: number;
+        };
+        /** @description One suggestion. */
+        CandidateView: {
+            capture?: null | components["schemas"]["CaptureView"];
+            /**
+             * Format: double
+             * @description What the listed signals add up to. Below `similarity` when more than five
+             *     terms were shared, which is the honest way to show five of them.
+             * @example 0.44021
+             */
+            explained: number;
+            idea?: null | components["schemas"]["IdeaTargetView"];
+            kind: components["schemas"]["TargetKind"];
+            /**
+             * @description The shared terms that produced it, biggest contribution first, at most
+             *     five of them.
+             */
+            signals: components["schemas"]["SignalView"][];
+            /**
+             * Format: double
+             * @description Lexical similarity between 0 and 1, rounded to six decimal places. This
+             *     is how alike the words are, not a probability that the thoughts are
+             *     related, and the interface has to say so.
+             * @example 0.482913
+             */
+            similarity: number;
         };
         /**
          * @description A capture's identifier: the UTC instant it was recorded for, compacted, plus nanoseconds. `20260820T141530-123456789`.
@@ -888,6 +1035,58 @@ export interface components {
              * @description The file's modification time.
              */
             updated: string;
+        };
+        /** @description The arithmetic behind a momentum score. */
+        Components: {
+            /**
+             * Format: int32
+             * @description `1` for an affirmation or reopening inside the long window.
+             */
+            affirmation: number;
+            /**
+             * Format: int32
+             * @description `min(total, 4)`.
+             */
+            base: number;
+            /**
+             * Format: int32
+             * @description `min(base + recency + affirmation, 10)`.
+             */
+            momentum: number;
+            /**
+             * Format: int32
+             * @description `2` for a burst, `1` for any sign of life in the long window, else `0`.
+             */
+            recency: number;
+            /**
+             * @description How many of them were captured in the 14 days up to the instant asked
+             *     about.
+             */
+            recent_14: number;
+            /** @description How many in the 30 days up to it. */
+            recent_30: number;
+            /**
+             * @description Connected captures whose files are still there. Archived ones count:
+             *     archive means processed, not "this thought never happened". Deleted ones
+             *     do not, because there is no authored evidence left.
+             */
+            total: number;
+        };
+        /** @description One affirmation, and whether it was recent enough to count. */
+        CountedAffirmation: {
+            /** Format: date-time */
+            created: string;
+            id: components["schemas"]["EventId"];
+            kind: components["schemas"]["EventKind"];
+            within_30_days: boolean;
+        };
+        /** @description One capture, and which windows it fell in. */
+        CountedCapture: {
+            /** Format: date-time */
+            created: string;
+            id: components["schemas"]["CaptureId"];
+            within_14_days: boolean;
+            within_30_days: boolean;
         };
         CreateCapture: {
             /**
@@ -1027,6 +1226,22 @@ export interface components {
              */
             error: components["schemas"]["ErrorDetail"];
         };
+        /**
+         * @description A decision event's identifier: the UTC instant the decision was taken, compacted, plus nanoseconds. `20260820T142030-345678901`.
+         *
+         *     Event ids define the order decisions are folded in, so an event's `created` may not disagree with its id.
+         * @example 20260820T142030-345678901
+         */
+        EventId: string;
+        /**
+         * @description What somebody did.
+         *
+         *     Twelve words, spelled in the file exactly as they are here. Adding one is an
+         *     authored-format change: a reader that has not heard of a kind refuses the
+         *     file, so a writer for a new kind may not ship before the reader for it.
+         * @enum {string}
+         */
+        EventKind: "capture_connected" | "capture_disconnected" | "candidate_rejected" | "candidate_reconsidered" | "interest_affirmed" | "capture_archived" | "capture_restored" | "capture_deleted" | "idea_retired" | "idea_reopened" | "idea_promoted" | "rediscovery_dismissed";
         GraphEdgeView: {
             /**
              * @description `wiki`, `internal`, or both when the same page is linked twice over.
@@ -1200,16 +1415,36 @@ export interface components {
          */
         IdeaId: string;
         IdeaListResponse: {
+            /**
+             * Format: date-time
+             * @description The instant every state and momentum here was worked out for.
+             */
+            at: string;
             /** @description Most recently active first. */
             ideas: components["schemas"]["IdeaSummaryView"][];
             /** @example 50 */
             limit: number;
             /** @example 0 */
             offset: number;
-            /** @example 7 */
+            /**
+             * @description The rules that produced them.
+             * @example idea-momentum/v1
+             */
+            ruleset: string;
+            /**
+             * @description Matching ideas, not the number returned. Counted after the `state` and
+             *     `integrity` filters, so paging through it reaches every one of them.
+             * @example 7
+             */
             total: number;
         };
-        /** @description One idea thread, as a listing shows it. */
+        /**
+         * @description One idea thread, as a listing shows it.
+         *
+         *     `state` and `momentum` are worked out for the instant the listing was asked
+         *     about, which the response repeats. Neither is stored: the same files answer
+         *     differently tomorrow, and that is the feature rather than staleness.
+         */
         IdeaSummaryView: {
             /**
              * @description How many captures it currently holds and can still read.
@@ -1219,6 +1454,8 @@ export interface components {
             /** Format: date-time */
             created: string;
             id: components["schemas"]["IdeaId"];
+            /** @description Whether every connected capture is still readable. */
+            integrity: components["schemas"]["Integrity"];
             /**
              * Format: date-time
              * @description The last time anything happened to it: a capture connected, or an
@@ -1230,6 +1467,13 @@ export interface components {
              * @example 0
              */
             missing: number;
+            /**
+             * Format: int32
+             * @description How much is going on. Absent for the same reason. Never shown without a
+             *     way to open the receipt that explains it.
+             * @example 5
+             */
+            momentum?: number | null;
             /**
              * @description What the person called it. Never generated.
              * @example Dungeon seeds
@@ -1245,22 +1489,40 @@ export interface components {
             needs_repair: boolean;
             promoted_to?: null | components["schemas"]["Slug"];
             retired: boolean;
+            state?: null | components["schemas"]["Lifecycle"];
             /** Format: date-time */
             updated: string;
         };
+        /** @description The thread a candidate points at. */
+        IdeaTargetView: {
+            /**
+             * @description How many captures it currently holds.
+             * @example 3
+             */
+            captures: number;
+            id: components["schemas"]["IdeaId"];
+            /** @example Dungeon seeds */
+            name: string;
+        };
         /**
-         * @description One idea thread, with what it holds.
+         * @description One idea thread, with what it holds and where the rules put it.
          *
-         *     No lifecycle label and no momentum score: both are pure functions of this and
-         *     an explicit moment, and neither exists until the analyzer does. What is here
-         *     is the folded evidence either would be computed from.
+         *     The state and momentum here are worked out for the moment of the request.
+         *     `GET /api/ideas/{id}/receipt` is the same answer with every number and every
+         *     piece of evidence behind it, and takes an `at` for any other moment.
          */
         IdeaView: {
             /** @description The captures it currently holds, oldest first. */
             captures: components["schemas"]["CaptureView"][];
+            /**
+             * Format: date-time
+             * @description The instant the two above were worked out for.
+             */
+            computed_at: string;
             /** Format: date-time */
             created: string;
             id: components["schemas"]["IdeaId"];
+            integrity: components["schemas"]["Integrity"];
             /** Format: date-time */
             last_signal?: string | null;
             /**
@@ -1268,6 +1530,12 @@ export interface components {
              *     reader can see what the idea has lost instead of quietly losing nothing.
              */
             missing: components["schemas"]["CaptureId"][];
+            /**
+             * Format: int32
+             * @description Absent for the same reason. See the receipt for how it was arrived at.
+             * @example 5
+             */
+            momentum?: number | null;
             /** @example Dungeon seeds */
             name: string;
             needs_repair: boolean;
@@ -1277,6 +1545,7 @@ export interface components {
             /** @description Captures turned down as candidates, so they are not suggested again. */
             rejected: components["schemas"]["CaptureId"][];
             retired: boolean;
+            state?: null | components["schemas"]["Lifecycle"];
             /** Format: date-time */
             updated: string;
         };
@@ -1299,6 +1568,16 @@ export interface components {
              */
             title: string;
         };
+        /**
+         * @description Whether an idea still has the evidence it rests on.
+         * @enum {string}
+         */
+        Integrity: "sound" | "evidence_missing";
+        /**
+         * @description Where an idea is in its life.
+         * @enum {string}
+         */
+        Lifecycle: "retired" | "dormant" | "new" | "active" | "recurring";
         LinkTotalsView: {
             /**
              * @description Links leaving the wiki.
@@ -1781,6 +2060,51 @@ export interface components {
              */
             pins: components["schemas"]["PinView"][];
         };
+        /**
+         * @description Why an idea is in the state it is in.
+         *
+         *     Everything needed to recompute `momentum` is here: the components, the
+         *     boundaries they were measured against, and every capture and event that was
+         *     counted with a flag saying which window it fell in. A reader should never
+         *     have to take the number on trust.
+         */
+        ReceiptResponse: {
+            /**
+             * @description Every affirmation and reopening, in decision order. One that fell outside
+             *     the window is listed too, flagged as not counted.
+             */
+            affirmations: components["schemas"]["CountedAffirmation"][];
+            boundaries: components["schemas"]["Boundaries"];
+            /** @description Every connected capture still readable, oldest first. */
+            captures: components["schemas"]["CountedCapture"][];
+            components?: null | components["schemas"]["Components"];
+            /**
+             * Format: date-time
+             * @description The instant this is an answer about: your `at`, or the server's now.
+             */
+            computed_at: string;
+            /** @description One sentence per line, each from a fixed template. */
+            explanation: string[];
+            idea: components["schemas"]["IdeaId"];
+            integrity: components["schemas"]["Integrity"];
+            /** Format: date-time */
+            last_signal?: string | null;
+            /** @description Connected captures whose files are gone. */
+            missing: components["schemas"]["CaptureId"][];
+            /**
+             * Format: int32
+             * @example 5
+             */
+            momentum?: number | null;
+            /** @example Dungeon seeds */
+            name: string;
+            /**
+             * @description The rules that produced this, and the only thing that changes it.
+             * @example idea-momentum/v1
+             */
+            ruleset: string;
+            state?: null | components["schemas"]["Lifecycle"];
+        };
         ReindexResponse: {
             /** @description Idea Inbox captures under `.rhizolog/ideas/captures/`. */
             captures: components["schemas"]["SyncCountsView"];
@@ -1950,6 +2274,39 @@ export interface components {
             authentication_required: boolean;
             user?: null | components["schemas"]["UserView"];
         };
+        /** @description One term both records carry, and what it was worth. */
+        SignalView: {
+            /**
+             * Format: double
+             * @description Its weight in this capture, as a component of a unit vector.
+             * @example 0.51203
+             */
+            capture_weight: number;
+            /**
+             * Format: double
+             * @description `capture_weight * target_weight`. These sum to the similarity.
+             * @example 0.225837
+             */
+            contribution: number;
+            /**
+             * @description How many of your captures contain it. The input to its idf, and the
+             *     reason a word you use constantly counts for less.
+             * @example 4
+             */
+            documents: number;
+            /**
+             * Format: double
+             * @description Its weight in the target.
+             * @example 0.44107
+             */
+            target_weight: number;
+            /**
+             * @description A word, or two adjacent words, appearing literally in both. Never a stem
+             *     and never a synonym: every signal shown is text you wrote.
+             * @example dungeon seeds
+             */
+            term: string;
+        };
         /**
          * @description A page's identifier: its path under the wiki root, `/`-separated, without the `.md` extension. `notes/rust/async.md` is `notes/rust/async`.
          *
@@ -2042,6 +2399,11 @@ export interface components {
             /** @description Most-used first. */
             tags: components["schemas"]["TagCountView"][];
         };
+        /**
+         * @description Whether a candidate suggests a thread that exists or another loose capture.
+         * @enum {string}
+         */
+        TargetKind: "idea" | "capture";
         TimeGroupView: {
             /** @example 42 */
             entries: number;
@@ -2700,6 +3062,50 @@ export interface operations {
             };
         };
     };
+    read_capture_candidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Capture id
+                 * @example 20260820T141530-123456789
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What it might belong with */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateResponse"];
+                };
+            };
+            /** @description No such capture */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The analyzer has no terms for it; reindex */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     reject_capture_pair: {
         parameters: {
             query?: never;
@@ -2907,6 +3313,23 @@ export interface operations {
         parameters: {
             query?: {
                 /**
+                 * @description Only ideas in this state: `retired`, `dormant`, `new`, `active` or
+                 *     `recurring`. Absent means every state.
+                 * @example active
+                 */
+                state?: string;
+                /**
+                 * @description Only ideas whose evidence is `sound`, or only those with
+                 *     `evidence_missing`. The second is the Needs repair group.
+                 * @example sound
+                 */
+                integrity?: string;
+                /**
+                 * @description Work the states out for this instant instead of now. The files do not
+                 *     change; what they add up to does.
+                 */
+                at?: string;
+                /**
                  * @description Defaults to 50, capped at 200.
                  * @example 50
                  */
@@ -2927,6 +3350,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IdeaListResponse"];
+                };
+            };
+            /** @description No such state or integrity */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description This wiki requires authentication */
@@ -3211,6 +3643,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_idea_receipt: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Work the answer out for this instant instead of now. Nothing about the
+                 *     state is stored, so this is inspection rather than history.
+                 */
+                at?: string;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceiptResponse"];
                 };
             };
             /** @description No such idea */
