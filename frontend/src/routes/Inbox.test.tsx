@@ -408,6 +408,60 @@ describe('the listing', () => {
   })
 
   /**
+   * The endpoint names the ideas that held it, and nothing else about them,
+   * precisely so the consequence can be explained without going and reading
+   * threads the person was not looking at.
+   */
+  it('says which ideas a deleted capture was holding up', async () => {
+    const screen = await inbox('/inbox', [capture()])
+    api.deleteCapture.mockResolvedValue({
+      id: capture().id,
+      ideas: [
+        { id: '20260801T090000-000000001', name: 'Dungeon seeds', needs_repair: true },
+        { id: '20260801T090000-000000002', name: 'Seeded loot', needs_repair: false },
+      ],
+    })
+
+    fireEvent.click(screen.getByLabelText('Delete this capture'))
+    fireEvent.click(screen.getByText('Delete for good'))
+
+    await waitFor(() => expect(screen.getByText(/It was part of 2 ideas/)).toBeTruthy())
+    expect(screen.getByText('Dungeon seeds').getAttribute('href')).toBe(
+      '/ideas/20260801T090000-000000001',
+    )
+    expect(screen.getByText('needs repair')).toBeTruthy()
+  })
+
+  /** Most captures belong to nothing, and that needs no announcement. */
+  it('says nothing when the deleted capture was holding nothing up', async () => {
+    const screen = await inbox('/inbox', [capture()])
+    api.deleteCapture.mockResolvedValue({ id: capture().id, ideas: [] })
+
+    fireEvent.click(screen.getByLabelText('Delete this capture'))
+    fireEvent.click(screen.getByText('Delete for good'))
+
+    await waitFor(() => expect(api.deleteCapture).toHaveBeenCalled())
+    expect(screen.queryByText(/It was part of/)).toBeNull()
+  })
+
+  /**
+   * Two listings answering two questions. Archiving a capture cannot make a
+   * thread dormant, and re-reading two hundred ideas to find that out is a
+   * request nobody asked for.
+   */
+  it('does not re-read the ideas when only the inbox changed', async () => {
+    const screen = await inbox('/inbox', [capture()])
+    api.archiveCapture.mockResolvedValue(capture({ archived: true }))
+    api.listIdeas.mockClear()
+    api.listCaptures.mockClear()
+
+    fireEvent.click(screen.getByText('Archive'))
+
+    await waitFor(() => expect(api.listCaptures).toHaveBeenCalled())
+    expect(api.listIdeas).not.toHaveBeenCalled()
+  })
+
+  /**
    * A listing that will not load is a listing that will not load. The capture
    * field above it has nothing to do with the failure and must keep working.
    */

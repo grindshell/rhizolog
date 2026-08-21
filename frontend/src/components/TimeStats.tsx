@@ -66,6 +66,11 @@ export default function TimeStats(props: { stats: TimeStatsResponse }) {
                 <button
                   role="tab"
                   class="tab"
+                  // Required on `role="tab"`, and the only thing that tells a
+                  // screen reader which window is being shown. `tab-active` is
+                  // a class, which is to say it is visible and nothing else.
+                  aria-selected={selected() === entry.period}
+                  aria-controls="time-stats-panel"
                   classList={{ 'tab-active': selected() === entry.period }}
                   onClick={() => setSelected(entry.period)}
                 >
@@ -80,7 +85,11 @@ export default function TimeStats(props: { stats: TimeStatsResponse }) {
         </div>
       </div>
 
-      <div class="stats stats-vertical sm:stats-horizontal shadow">
+      <div
+        id="time-stats-panel"
+        role="tabpanel"
+        class="stats stats-vertical sm:stats-horizontal shadow"
+      >
         <div class="stat">
           <div class="stat-title">{label(period().period)}</div>
           <div class="stat-value text-2xl">{formatDuration(period().seconds)}</div>

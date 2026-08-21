@@ -1057,6 +1057,23 @@ would throw out of the panel and take the capture form above it down with it,
 which is precisely the coupling the two requests exist to prevent. The panel
 shows the error and an offer to try again, and the capture is on disk throughout.
 
+### The inbox and the ideas listing re-read for different reasons
+
+`/inbox` holds two resources answering two questions, and they are bumped by
+different things. Capturing, archiving, restoring and deleting change what the
+inbox holds; connecting a capture to a thread and deleting one out from under a
+thread change what an idea holds. Connecting does not take a capture out of the
+inbox, and archiving one cannot make a thread dormant, so a single counter behind
+both meant re-reading two hundred ideas every time somebody archived a note.
+
+Deleting is the one action that bumps both, which is the whole reason it is worth
+separating rather than picking one: it removes a capture from the inbox *and* can
+leave a thread with nothing live connected. What comes back names the ideas that
+held it, and the screen says so, with a badge on any that now need repair. That
+is what the response is shaped for: the ids and names and nothing else about
+them, so the consequence can be explained without reading threads the person was
+not looking at.
+
 ### The rediscovery card is chosen in the browser, and the server had to say one more thing
 
 Selection is `chooseRediscovery` in `components/Rediscovery.tsx`: a pure function

@@ -7,7 +7,7 @@ import {
   onCleanup,
   onMount,
 } from 'solid-js'
-import { useSearchParams } from '@solidjs/router'
+import { A, useSearchParams } from '@solidjs/router'
 import {
   affirmIdea,
   archiveCapture,
@@ -18,7 +18,8 @@ import {
   listIdeas,
   restoreCapture,
 } from '../api/client'
-import type { CaptureView } from '../api/client'
+import { ideaHref } from '../api/client'
+import type { CaptureView, DeletedCapture } from '../api/client'
 import { Async, ErrorNotice } from '../components/Async'
 import Candidates from '../components/Candidates'
 import Rediscovery, {
@@ -65,8 +66,14 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
   const [saving, setSaving] = createSignal(false)
   const [failure, setFailure] = createSignal<unknown>()
   const [reloads, setReloads] = createSignal(0)
+  // Bumped only by a decision that could change what an idea holds, which is a
+  // different question from what the inbox holds. Connecting a capture does not
+  // take it out of the inbox, and capturing or archiving cannot make a thread
+  // dormant, so the two listings have no business re-reading for each other.
+  const [decisions, setDecisions] = createSignal(0)
   const [captured, setCaptured] = createSignal<CaptureView>()
   const [opened, setOpened] = createSignal<string>()
+  const [deleted, setDeleted] = createSignal<DeletedCapture>()
   const [search, setSearch] = createSignal(first(searchParams.q) ?? '')
 
   // Fixed once, rather than read on every render: the rediscovery card is meant
@@ -118,7 +125,7 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
     tree, and because a rediscovery that failed to load must not be able to take
     the capture field down with it.
   */
-  const [dormant] = createResource(reloads, () =>
+  const [dormant] = createResource(decisions, () =>
     listIdeas({ state: 'dormant', limit: 200 }),
   )
 
@@ -132,6 +139,7 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
 
   const guard = async (work: () => Promise<unknown>) => {
     setFailure(undefined)
+    setDeleted(undefined)
     try {
       await work()
       reload()
@@ -139,6 +147,22 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
       setFailure(error)
     }
   }
+
+  /**
+   * Delete a capture, and say what it cost.
+   *
+   * The response names the ideas that held it, and nothing else about them, so
+   * that the consequence can be explained without going and reading threads the
+   * caller may not have been looking at. Worth saying only when it cost one
+   * something: most captures belong to nothing.
+   */
+  const remove = (id: string) =>
+    void guard(async () => {
+      const gone = await deleteCapture(id)
+      if (gone.ideas.length > 0) setDeleted(gone)
+      // An idea that just lost a member may have lost its last live one.
+      setDecisions((count) => count + 1)
+    })
 
   /**
    * Answer the rediscovery card, and put it away.
@@ -241,6 +265,47 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
         <ErrorNotice error={failure()} />
       </Show>
 
+      <Show when={deleted()}>
+        {(gone) => (
+          <div role="status" class="alert alert-warning">
+            <div class="flex min-w-0 flex-1 flex-col gap-1">
+              <span class="font-semibold">
+                Deleted. It was part of {gone().ideas.length}{' '}
+                {gone().ideas.length === 1 ? 'idea' : 'ideas'}.
+              </span>
+              <ul class="flex flex-col gap-1 text-sm">
+                <For each={gone().ideas}>
+                  {(idea) => (
+                    <li>
+                      <A class="link" href={ideaHref(idea.id)}>
+                        {idea.name}
+                      </A>
+                      <Show when={idea.needs_repair}>
+                        <span class="badge badge-warning badge-sm ml-2">
+                          needs repair
+                        </span>
+                      </Show>
+                    </li>
+                  )}
+                </For>
+              </ul>
+              <Show when={gone().ideas.some((idea) => idea.needs_repair)}>
+                <span class="text-xs opacity-80">
+                  A thread with nothing live connected has no lifecycle state
+                  until you connect a capture to it or retire it.
+                </span>
+              </Show>
+            </div>
+            <button
+              class="btn btn-ghost btn-xs"
+              onClick={() => setDeleted(undefined)}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+      </Show>
+
       {/*
         Suggestions for what was just written, fetched after it was saved and
         never before. Nothing here has connected anything.
@@ -261,12 +326,16 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
                   Dismiss
                 </button>
               </div>
+              {/*
+                A connection changes what an idea holds and not what the inbox
+                holds, so it re-reads the threads rather than the captures.
+              */}
               <Candidates
                 capture={saved()}
                 onChanged={() => {
                   setCaptured(undefined)
                   setOpened(undefined)
-                  reload()
+                  setDecisions((count) => count + 1)
                 }}
               />
             </div>
@@ -291,6 +360,11 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
               <button
                 role="tab"
                 class="tab"
+                // Required on `role="tab"`. Without it a screen reader is told
+                // these are tabs and never told which one it is looking at,
+                // because `tab-active` is a class and classes are for eyes.
+                aria-selected={view() === name}
+                aria-controls="inbox-captures"
                 classList={{ 'tab-active': view() === name }}
                 onClick={() =>
                   setSearchParams({ show: name === 'inbox' ? undefined : name })
@@ -305,7 +379,11 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
 
       <Async resource={captures}>
         {(data) => (
-          <section class="card bg-base-100 shadow">
+          <section
+            id="inbox-captures"
+            role="tabpanel"
+            class="card bg-base-100 shadow"
+          >
             <div class="card-body gap-3">
               <h2 class="card-title text-base">
                 {VIEWS[view()].label}
@@ -336,10 +414,10 @@ export default function Inbox(props: { rediscovery?: RediscoveryState }) {
                         }
                         onArchive={() => void guard(() => archiveCapture(entry.id))}
                         onRestore={() => void guard(() => restoreCapture(entry.id))}
-                        onDelete={() => void guard(() => deleteCapture(entry.id))}
+                        onDelete={() => remove(entry.id)}
                         onChanged={() => {
                           setOpened(undefined)
-                          reload()
+                          setDecisions((count) => count + 1)
                         }}
                       />
                     </li>

@@ -39,6 +39,34 @@ reason and one more: a capture is working material rather than a document, and
 the deliberate way to make one into something you would send somebody is to
 promote the idea holding it into a page.
 
+## A screen that has an answer keeps showing it
+
+`Async` is the loading / error / data switch every route reads a resource
+through, and it deliberately does **not** blank to a spinner on a refetch. Every
+screen that can change something re-reads after a decision, and a spinner in
+place of the idea you were reading, four times in a row as you retire and reopen
+it, makes the page look like it is falling over rather than working.
+
+It renders the last settled value with a quiet "Refreshing..." line above it, and
+that value is read through the same guard the timer store uses: `resource.latest`
+*rethrows* when the fetch failed, so reading it unguarded would throw out of the
+route rather than render the error. A failed refresh shows the failure rather
+than the value it used to have, because stale data with nothing saying so reads
+as though the thing you just did worked.
+
+`Async.test.tsx` covers all four states, and the one that matters is
+"keeps the answer it has while fetching the next one", which fails against the
+older component.
+
+## Tabs say which one they are
+
+Both tab strips, the inbox's Inbox / Archived / Everything and the time section's
+day / week / month / year, carry `aria-selected` and point at a panel with
+`aria-controls`. `tab-active` is a class, which is to say it is for eyes: without
+`aria-selected` a screen reader is told these are tabs and never told which one it
+is looking at. ARIA requires the attribute on `role="tab"` and both went without
+it until the Idea Inbox work put a second one on screen.
+
 ## The top bar renders its navigation twice
 
 `Layout.tsx` holds one `DESTINATIONS` array and draws it in two places: a
@@ -361,6 +389,12 @@ What is covered is the part where the bugs were, not the part that is easy:
   leaves the card where it was. Both halves fail without the flag, which is the
   point of them: the eligible pool shrinks when you answer, so the next name
   comes up on its own.
+- **That deleting a capture says what it cost**, naming the ideas that held it
+  and badging the ones that now need repair, and says nothing at all when it held
+  nothing up, which is the ordinary case.
+- **That the two listings on the inbox re-read separately**, so archiving a
+  capture does not go and fetch two hundred ideas to find out whether any of them
+  became dormant.
 - **That the shell offers every destination twice**, that Capture and New page
   are behind one control with no standalone New beside it, and that timers, pins
   and the account are all still reachable. It is the check that a navigation
