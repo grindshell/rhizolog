@@ -27,6 +27,7 @@ vi.mock('../api/client', async (importOriginal) => {
 })
 
 const { default: Inbox } = await import('./Inbox')
+const { createRediscoveryState } = await import('../components/Rediscovery')
 
 function capture(overrides: Partial<CaptureView> = {}): CaptureView {
   return {
@@ -111,9 +112,13 @@ function ideas(list: IdeaSummaryView[] = []) {
 function open(path = '/inbox') {
   const history = createMemoryHistory()
   history.set({ value: path })
+  // A fresh rediscovery state per case. The app's is module-wide on purpose, so
+  // that answering the card outlives one visit to the inbox, which would
+  // otherwise make the first case here decide every later one.
+  const state = createRediscoveryState()
   return render(() => (
     <MemoryRouter history={history}>
-      <Route path="/inbox" component={Inbox} />
+      <Route path="/inbox" component={() => <Inbox rediscovery={state} />} />
     </MemoryRouter>
   ))
 }
@@ -440,6 +445,64 @@ describe('rediscovery', () => {
     await waitFor(() =>
       expect(api.dismissIdea).toHaveBeenCalledWith('20260101T090000-000000001'),
     )
+  })
+
+  /**
+   * The reason this is here at all: dismissing removes an idea from the eligible
+   * pool, so without an answered flag the next name simply comes up, and saying
+   * "not now" hands you another thought for having said it.
+   */
+  it('offers no second card once one has been answered', async () => {
+    api.listCaptures.mockResolvedValue(list())
+    api.listIdeas.mockResolvedValue(
+      ideas([
+        dormant(),
+        dormant({ id: '20260102T090000-000000002', name: 'Seeded corridors' }),
+        dormant({ id: '20260103T090000-000000003', name: 'Seeded encounters' }),
+      ]),
+    )
+    api.dismissIdea.mockResolvedValue({})
+    const screen = open()
+
+    await waitFor(() => expect(screen.getByText('Not now')).toBeTruthy())
+    fireEvent.click(screen.getByText('Not now'))
+
+    await waitFor(() => expect(api.dismissIdea).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.queryByText('You were thinking about this')).toBeNull(),
+    )
+  })
+
+  it('puts the card away when it is affirmed too', async () => {
+    api.listCaptures.mockResolvedValue(list())
+    api.listIdeas.mockResolvedValue(ideas([dormant(), dormant({ id: '2' })]))
+    api.affirmIdea.mockResolvedValue({})
+    const screen = open()
+
+    await waitFor(() => expect(screen.getByText('Still interested')).toBeTruthy())
+    fireEvent.click(screen.getByText('Still interested'))
+
+    await waitFor(() => expect(api.affirmIdea).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.queryByText('You were thinking about this')).toBeNull(),
+    )
+  })
+
+  /**
+   * A dismissal that never reached the server has suppressed nothing, so taking
+   * the card away would leave nothing to press again.
+   */
+  it('keeps the card when the answer could not be written', async () => {
+    api.listCaptures.mockResolvedValue(list())
+    api.listIdeas.mockResolvedValue(ideas([dormant()]))
+    api.dismissIdea.mockRejectedValue(new Error('the disk is full'))
+    const screen = open()
+
+    await waitFor(() => expect(screen.getByText('Not now')).toBeTruthy())
+    fireEvent.click(screen.getByText('Not now'))
+
+    await waitFor(() => expect(screen.getByText(/the disk is full/)).toBeTruthy())
+    expect(screen.getByText('You were thinking about this')).toBeTruthy()
   })
 
   /** Nothing eligible is the ordinary case, and it shows no card at all. */

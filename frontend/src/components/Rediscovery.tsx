@@ -1,4 +1,4 @@
-import { Show } from 'solid-js'
+import { Show, createSignal } from 'solid-js'
 import { A } from '@solidjs/router'
 import { ideaHref } from '../api/client'
 import type { IdeaSummaryView } from '../api/client'
@@ -76,6 +76,41 @@ export function chooseRediscovery(
   if (candidates.length === 0) return undefined
   return candidates[hash(calendarDate(at)) % candidates.length]
 }
+
+/**
+ * Whether the card has been answered since the page loaded.
+ *
+ * One card, and one card is what answering it should leave: still interested and
+ * not now are both answers, and being handed another thought for having given
+ * one is the feed this feature is written not to be. Both answers change the
+ * eligible set as well, so without this the pool simply shrinks and the next
+ * name comes up.
+ *
+ * It deliberately does not survive a reload, and nothing about it is written
+ * down. Rediscovery is meant to be a thing that happens once when you open the
+ * inbox, not a quota with a ledger, and an authored record of having looked at a
+ * card would be exactly the engagement bookkeeping the plan rules out.
+ */
+export interface RediscoveryState {
+  answered: () => boolean
+  /** Record that the card was answered. Nothing undoes this; a reload does. */
+  answer: () => void
+}
+
+/**
+ * Build one. Exported for tests, which need a fresh one per case rather than the
+ * module-wide singleton below.
+ */
+export function createRediscoveryState(): RediscoveryState {
+  const [answered, setAnswered] = createSignal(false)
+  return { answered, answer: () => setAnswered(true) }
+}
+
+/**
+ * The app's, at module scope so that it lasts as long as the page rather than as
+ * long as one visit to the inbox. Walking to an idea and back is not a new day.
+ */
+export const rediscovery: RediscoveryState = createRediscoveryState()
 
 /**
  * One dormant idea, offered back.

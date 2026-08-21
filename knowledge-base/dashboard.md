@@ -356,6 +356,11 @@ What is covered is the part where the bugs were, not the part that is easy:
   takes only dormant threads with more than one capture, that a dismissal holds
   for exactly thirty days, that the same day gives the same card however the
   listing was ordered, and that the date it reads is the reader's local one.
+- **That answering the card is the end of it**, with three dormant threads
+  waiting and neither answer producing a second one, and that a refused answer
+  leaves the card where it was. Both halves fail without the flag, which is the
+  point of them: the eligible pool shrinks when you answer, so the next name
+  comes up on its own.
 - **That the shell offers every destination twice**, that Capture and New page
   are behind one control with no standalone New beside it, and that timers, pins
   and the account are all still reachable. It is the check that a navigation

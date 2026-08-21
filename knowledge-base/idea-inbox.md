@@ -1068,6 +1068,24 @@ feed, and this feature has spent its whole design avoiding being one. Nothing is
 written by rendering it: dismissing and affirming are requests, and closing the
 tab is neither.
 
+**Answering the card puts rediscovery away until the page is loaded again.** That
+is a second guard and it is not redundant, because both answers change the
+eligible set: a dismissal makes an idea ineligible and an affirmation makes it no
+longer dormant, so the pool shrinks by one and, with nothing else stopping it,
+the next name comes straight up. Saying "not now" and being handed another
+thought for having said it is the feed arriving by a different road. The flag
+lives at module scope rather than in the component, so walking to an idea and
+back is not a new day, and it is set only once the decision is written, because a
+dismissal that never reached the server has suppressed nothing and taking the
+card away would leave nothing to press again.
+
+It deliberately does not survive a reload and nothing about it is recorded. An
+authored note that somebody had been shown a card would be the engagement
+bookkeeping the goals rule out. What that leaves is small and worth stating: after
+a dismissal, a reload deals a different card. Closing it needs a memory of what
+was offered today, which is worth building when there is evidence anybody reloads
+to get one.
+
 Three of the four eligibility rules are on the listing already. The fourth,
 "not affirmed or dismissed in the last 30 days", turned out to be one rule and a
 half. Affirmation needs no check at all: an affirmation moves `last_signal`, and

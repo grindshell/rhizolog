@@ -21,7 +21,11 @@ import {
 import type { CaptureView } from '../api/client'
 import { Async, ErrorNotice } from '../components/Async'
 import Candidates from '../components/Candidates'
-import Rediscovery, { chooseRediscovery } from '../components/Rediscovery'
+import Rediscovery, {
+  chooseRediscovery,
+  rediscovery as sharedRediscovery,
+} from '../components/Rediscovery'
+import type { RediscoveryState } from '../components/Rediscovery'
 import { formatDate } from './PageDetail'
 
 /** How many captures one page of the inbox holds. */
@@ -51,7 +55,11 @@ type ViewName = keyof typeof VIEWS
  * before anything looks at it, so a slow or broken analyzer can annoy you but
  * cannot lose what you typed.
  */
-export default function Inbox() {
+export default function Inbox(props: { rediscovery?: RediscoveryState }) {
+  // Its store as an optional prop purely so tests get a fresh one; the app
+  // always uses the shared singleton, exactly as the timer and pin menus do.
+  const rediscovery = () => props.rediscovery ?? sharedRediscovery
+
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = createSignal('')
   const [saving, setSaving] = createSignal(false)
@@ -115,6 +123,7 @@ export default function Inbox() {
   )
 
   const card = () => {
+    if (rediscovery().answered()) return undefined
     const list = dormant.error ? undefined : dormant.latest
     return list ? chooseRediscovery(list.ideas, today) : undefined
   }
@@ -130,6 +139,19 @@ export default function Inbox() {
       setFailure(error)
     }
   }
+
+  /**
+   * Answer the rediscovery card, and put it away.
+   *
+   * Only once the decision is written. A dismissal that never reached the server
+   * has not suppressed anything, and taking the card away would leave nothing to
+   * press again.
+   */
+  const answerCard = (work: () => Promise<unknown>) =>
+    void guard(async () => {
+      await work()
+      rediscovery().answer()
+    })
 
   /**
    * Save what was typed, and only then clear the field.
@@ -256,8 +278,8 @@ export default function Inbox() {
         {(idea) => (
           <Rediscovery
             idea={idea()}
-            onAffirm={() => void guard(() => affirmIdea(idea().id))}
-            onDismiss={() => void guard(() => dismissIdea(idea().id))}
+            onAffirm={() => answerCard(() => affirmIdea(idea().id))}
+            onDismiss={() => answerCard(() => dismissIdea(idea().id))}
           />
         )}
       </Show>
