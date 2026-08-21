@@ -155,6 +155,19 @@ pieces that are known to be missing.
   state shared by every account. Their page *titles* are filtered, so a pin to a
   page you cannot read has none, but the slug stays, because it is the pin's own
   content.
+- **Creating a page says whether a slug is taken, whoever it is taken by.**
+  `POST /api/pages` never consults visibility: `409 page_already_exists` for a
+  slug holding somebody else's private page, `201` for a free one, which is the
+  existence bit that `404, never 403` exists to withhold everywhere else. The
+  destination of `POST /api/move` says the same. It is not a missing check: a
+  create has to answer, and any refusal is the oracle, so hiding it would mean
+  overwriting a page its author cannot see going or claiming to have written one
+  that was never written. One bit per guess, no title or content or owner with
+  it, an account needed to ask, and a wrong guess leaves a page to clean up.
+  The real fix is private pages not sharing one global slug space, which is a
+  design change and not one to make before somebody serves a wiki where it
+  matters. Reasoned through in
+  [Page visibility](knowledge-base/visibility.md).
 - **No rate limiting on sign-in.** Argon2 is a real natural throttle, roughly
   twenty attempts a second per core, and each costs the attacker what it costs
   the server. It is not a lockout, though, and a network instance wants one. Also

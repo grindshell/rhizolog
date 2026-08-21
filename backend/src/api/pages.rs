@@ -840,9 +840,19 @@ pub async fn move_page(
     viewer: Viewer,
     JsonBody(request): JsonBody<MovePage>,
 ) -> AppResult<Json<PageView>> {
-    // Both ends. The source for the obvious reason; the destination because a
-    // move onto an occupied slug is a `409`, and a `409` for a page you cannot
-    // see would say that something private is there.
+    // Both ends, for two different reasons.
+    //
+    // The source is the ordinary rule: a page you cannot read is a page that is
+    // not there, and it answers `404` rather than admitting the file exists.
+    //
+    // The destination is not that rule and cannot be. A move onto an occupied
+    // slug is a `409` whether or not the caller can see what is occupying it,
+    // and the store refuses it either way, so this check hides nothing and is
+    // not here to. What it does is make the refusal the API's own decision
+    // rather than a coincidence of `Store::move_page`'s existence test. That a
+    // write cannot keep the existence of a page quiet is worked through in
+    // `knowledge-base/visibility.md`; `POST /api/pages` has the same property
+    // and does not check at all.
     let source = state.store.read(&request.from).await?;
     if !readable(&source, &viewer) {
         return Err(AppError::Store(StoreError::NotFound { slug: request.from }));

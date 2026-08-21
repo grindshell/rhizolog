@@ -173,6 +173,11 @@ existence** — everything behind the slug. `a_slug_written_in_a_readable_body_i
 in `backend/tests/visibility.rs` states that as a test, so nobody later mistakes
 it for a bug.
 
+**Existence** has one exception of its own, under `404, never 403` below. A read
+can pretend an unreadable page is absent; a write cannot, so `POST /api/pages`
+and the destination of `POST /api/move` do tell a signed-in caller whether a
+slug is taken.
+
 ### Everything is computed within the subgraph you can see
 
 One consequence looks like a defect and is not. A page linked only from a page
@@ -193,8 +198,9 @@ A `403` would confirm that something exists at a slug somebody guessed, and for
 a private page the slug is usually the title. `secret/acquisition` returning
 "forbidden" rather than "not found" is most of what was being protected.
 
-The same applies to every write. `PUT`, `PATCH`, `DELETE` and `POST /api/move`
-all check first and answer `404`, because a write that failed differently would
+Most writes do the same. `PUT`, `PATCH`, `DELETE` and the *source* of
+`POST /api/move` all check first and answer `404`, because a write that failed
+differently would
 be the same oracle with extra steps — and a `PUT` that succeeded would overwrite
 a page its author could not see going.
 
@@ -206,6 +212,39 @@ inbound links it lists are only ever from pages the caller can already read.
 `404` for a page that is not there — so left alone it would answer `200` for a
 page that is there and unreadable, which is the oracle in one request. It reads
 the page and checks before pinning.
+
+### Creating a page is the exception, and it cannot be otherwise
+
+`POST /api/pages` does not check. It goes straight to `Store::create`, which
+refuses an occupied slug on a file-existence test that has never heard of
+visibility. So a signed-in account gets `409 page_already_exists` for a slug
+holding somebody else's private page and `201` for a free one, and that pair of
+answers is the existence bit this whole section is about.
+
+It is not a check somebody forgot. A create has nowhere to hide. A read can
+pretend an unreadable page is absent because absent and forbidden have the same
+useful answer, which is nothing; a create's answers are `201` for a free slug
+and a refusal for an occupied one, and *any* refusal is the oracle. Making the
+unreadable case look like the free one means either overwriting a page its
+author cannot see going, or returning `201` for a page that was never written.
+Both are worse than what they would be hiding.
+
+The destination of `POST /api/move` discloses the same thing for the same
+reason: a move onto an occupied slug is a `409` whether or not the caller can
+see what is occupying it. The handler reads the destination and checks it, which
+makes the refusal the API's own decision rather than a coincidence of the
+store's, but it cannot make the two cases answer differently and does not try
+to.
+
+What leaks is one bit per guess, and the guess is not free: a wrong one creates
+a page the prober then has to delete. No title, no content, no owner, no
+visibility, and none of it reachable without an account, because a wiki with no
+accounts has nothing private in it and anonymous callers cannot write at all.
+
+Closing it properly means private pages not sharing one global slug space, which
+is a design change rather than a patch, and not one worth making before somebody
+serves a wiki where it matters. Recorded in `TODO.md` under Accounts and
+visibility so that it stays a known limit rather than a surprise.
 
 ## Two spellings of one rule, and the test that keeps them honest
 
