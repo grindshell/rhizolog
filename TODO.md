@@ -209,17 +209,14 @@ What is not done, in the order it is likely to matter:
   somebody else is the thing promotion is for.
 - **Candidates are scored against the whole corpus every request.** Every vector
   is rebuilt per call and every thread's centroid with it, which is fine for an
-  inbox of hundreds and unmeasured beyond that. The plan's performance gate is
-  1,000, 5,000 and 10,000 scratch captures, and the numbers should exist before
-  anybody adds a centroid cache, let alone approximate search.
+  inbox of hundreds and unmeasured beyond that. It is the one item here with a
+  number attached and the number is unmet: the plan's gate is 1,000, 5,000 and
+  10,000 scratch captures, three runs each, and those figures should exist
+  before anybody adds a centroid cache, let alone approximate search.
 - **`tfidf/v1` has no stemming and no stop-word list, on purpose.** So `dungeon`
   does not match `dungeons`. That is the explainability trade: every signal
   shown appears literally in text the user wrote. Revisit only after real false
   negatives, and only with a version bump.
-
-The performance gate is the one of these with a number attached, and it is
-unmet: 1,000, 5,000 and 10,000 scratch captures, three runs each, before anybody
-decides whether a centroid cache is needed.
 
 Do not add LLM summaries, embeddings, automatic membership, notifications, tasks
 or a native mobile app. Those are gated on observed use of what is now built,

@@ -209,9 +209,13 @@ counted. An idea whose captures you deleted gets no state and no score at all,
 and says so, because there is nothing left to derive one from.
 
 Opening the inbox may offer **one** rediscovery card: a dormant thread with more
-than one capture, chosen from the day's date so refreshing does not deal another.
-Say you are still interested or dismiss it for thirty days. There are no
-notifications, no streaks, and nothing is written down about having shown it.
+than one capture, chosen from the day's date, so refreshing hands back the same
+card rather than dealing another. Say you are still interested or dismiss it for
+thirty days, and rediscovery stays away until the page is loaded again. One gap
+is left, and it is written down rather than papered over: answering changes which
+ideas are eligible, so a reload after a dismissal does deal a different card.
+There are no notifications, no streaks, and nothing is written down about having
+shown it.
 
 When a thread is ready, promote it. That is three steps on purpose:
 `GET /api/ideas/{id}/draft` assembles the markdown from every capture it holds,
