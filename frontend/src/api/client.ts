@@ -90,6 +90,9 @@ export type IdeaListResponse = Schemas['IdeaListResponse']
 export type CreateIdea = Schemas['CreateIdea']
 export type PatchIdea = Schemas['PatchIdea']
 export type ReceiptResponse = Schemas['ReceiptResponse']
+export type DraftResponse = Schemas['DraftResponse']
+export type DraftSource = Schemas['DraftSource']
+export type RecordPromotion = Schemas['RecordPromotion']
 export type Components = Schemas['Components']
 export type Boundaries = Schemas['Boundaries']
 export type CountedCapture = Schemas['CountedCapture']
@@ -919,6 +922,34 @@ export function ideaReceipt(
   signal?: AbortSignal,
 ): Promise<ReceiptResponse> {
   return request<ReceiptResponse>(ideaPath(id, '/receipt'), { query, signal })
+}
+
+/**
+ * `GET /api/ideas/{id}/draft`: the page this idea would make, assembled and not
+ * written.
+ *
+ * Reading it creates nothing and records nothing. The markdown is the thread's
+ * note and every capture it holds, oldest first and word for word, which is
+ * what makes it a starting point rather than a summary.
+ */
+export function ideaDraft(id: string, signal?: AbortSignal): Promise<DraftResponse> {
+  return request<DraftResponse>(ideaPath(id, '/draft'), { signal })
+}
+
+/**
+ * `PUT /api/ideas/{id}/promotion`: record the page an idea produced.
+ *
+ * The page has to exist first, which is why this is the third step and not the
+ * only one. Idempotent, and that is what makes the sequence recoverable: if the
+ * page was created and this failed, sending it again finishes the job rather
+ * than writing a second page.
+ */
+export function recordPromotion(
+  id: string,
+  body: RecordPromotion,
+  signal?: AbortSignal,
+): Promise<IdeaView> {
+  return request<IdeaView>(ideaPath(id, '/promotion'), { method: 'PUT', body, signal })
 }
 
 /* ----------------------------------------------------------------- meta -- */

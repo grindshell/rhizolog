@@ -1,16 +1,23 @@
 import { For, Show, createResource, createSignal } from 'solid-js'
 import { A, useParams } from '@solidjs/router'
 import {
+  ApiError,
   affirmIdea,
+  createPage,
   disconnectCapture,
+  editHref,
   getIdea,
+  ideaDraft,
   ideaReceipt,
+  pageHref,
   patchIdea,
   reconsiderCandidate,
+  recordPromotion,
   reopenIdea,
   retireIdea,
 } from '../api/client'
 import type { CaptureView, IdeaView, ReceiptResponse } from '../api/client'
+import { sessionState } from '../api/session'
 import { Async, ErrorNotice } from '../components/Async'
 import { formatDate } from './PageDetail'
 
@@ -95,6 +102,8 @@ export default function IdeaDetail() {
                 void guard(() => disconnectCapture(thread.id, capture))
               }
             />
+
+            <Promotion idea={thread} onPromoted={reload} />
 
             <Show when={thread.rejected.length > 0}>
               <section class="card bg-base-100 shadow">
@@ -541,6 +550,223 @@ function Captures(props: { idea: IdeaView; onDisconnect: (capture: string) => vo
             {props.idea.missing.length === 1 ? 'capture is' : 'captures are'} named in
             this thread but no longer on disk. They are listed in the receipt.
           </p>
+        </Show>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * A slug worth offering for a page called `name`.
+ *
+ * Lowercased, with runs of anything that is not a letter or a digit collapsed to
+ * a hyphen. Slugs may hold a great deal more than that, which is why this is a
+ * suggestion in a field somebody can overwrite rather than a rule: the
+ * conventional shape is the one worth offering, and the server is what decides
+ * whether a slug is legal.
+ */
+export function suggestSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/**
+ * The way out into the wiki, in the three steps the API takes.
+ *
+ * Read the draft, create an ordinary page, record what the idea became. They are
+ * three because two authored writes and two index updates are not one
+ * transaction, and an API that pretended otherwise would one day lose a page to
+ * make its own bookkeeping look tidy.
+ *
+ * What that costs is a failure in the middle, and this is where it is paid for:
+ * when the page has been written and the association has not, the button stops
+ * offering to write a page and offers to finish. Recording is idempotent, so
+ * pressing it again is safe; creating is not, so it is not repeated.
+ */
+function Promotion(props: { idea: IdeaView; onPromoted: () => void }) {
+  const [open, setOpen] = createSignal(false)
+  // `open` as the source, so nothing is fetched until somebody asks. A draft is
+  // assembled from every capture in the thread and most visits to this screen
+  // are not about promoting it.
+  const [draft] = createResource(open, () => ideaDraft(props.idea.id))
+
+  const [slug, setSlug] = createSignal<string>()
+  const [title, setTitle] = createSignal<string>()
+  const [body, setBody] = createSignal<string>()
+  const [written, setWritten] = createSignal<string>()
+  const [saving, setSaving] = createSignal(false)
+  const [failure, setFailure] = createSignal<unknown>()
+
+  // Reading a resource that failed rethrows, and the fields below read it while
+  // the error is on screen.
+  const assembled = () => (draft.error ? undefined : draft.latest)
+
+  // The typed value, or what the draft suggests. Written this way rather than
+  // with an effect that fills the fields in, because there is no moment at which
+  // the two could disagree: an untouched field is the suggestion by definition.
+  const slugField = () => slug() ?? suggestSlug(assembled()?.title ?? '')
+  const titleField = () => title() ?? assembled()?.title ?? ''
+  const bodyField = () => body() ?? assembled()?.markdown ?? ''
+  const exists = () => written() !== undefined && written() === slugField().trim()
+
+  const close = () => {
+    setOpen(false)
+    setSlug(undefined)
+    setTitle(undefined)
+    setBody(undefined)
+    setWritten(undefined)
+    setFailure(undefined)
+  }
+
+  const promote = async () => {
+    const target = slugField().trim()
+    if (!target || saving()) return
+    setSaving(true)
+    setFailure(undefined)
+
+    try {
+      if (!exists()) {
+        const heading = titleField().trim()
+        await createPage({
+          slug: target,
+          content: bodyField(),
+          ...(heading ? { title: heading } : {}),
+        })
+        setWritten(target)
+      }
+      await recordPromotion(props.idea.id, { page: target })
+      close()
+      props.onPromoted()
+    } catch (error) {
+      // A page already at that slug is the same situation as one this form
+      // wrote a moment ago: the page exists, and only the association is left.
+      if (error instanceof ApiError && error.code === 'page_already_exists') {
+        setWritten(target)
+      }
+      setFailure(error)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section class="card bg-base-100 shadow">
+      <div class="card-body gap-3">
+        <h2 class="card-title text-base">Promotion</h2>
+
+        <Show when={props.idea.promoted_to}>
+          {(became) => (
+            <p class="text-sm">
+              This became{' '}
+              <A class="link" href={pageHref(became())}>
+                {became()}
+              </A>
+              , and kept every capture it was made from.{' '}
+              <A class="link opacity-70" href={editHref(became())}>
+                Edit the page
+              </A>
+            </p>
+          )}
+        </Show>
+
+        <Show
+          when={open()}
+          fallback={
+            <button class="btn btn-sm self-start" onClick={() => setOpen(true)}>
+              {props.idea.promoted_to ? 'Record a different page' : 'Promote it to a page'}
+            </button>
+          }
+        >
+          <Async resource={draft}>
+            {(page) => (
+              <form
+                class="flex flex-col gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void promote()
+                }}
+              >
+                <p class="text-xs opacity-60">
+                  {page.sources.length}{' '}
+                  {page.sources.length === 1 ? 'capture' : 'captures'}, oldest first,
+                  word for word. Edit anything here before it becomes a page: this is a
+                  copy, and the thread keeps what it holds.
+                </p>
+
+                <Show when={page.missing.length > 0}>
+                  <p class="text-xs text-warning">
+                    {page.missing.length} connected{' '}
+                    {page.missing.length === 1 ? 'capture' : 'captures'} could not be
+                    read, so nothing of {page.missing.length === 1 ? 'it' : 'them'} is
+                    here.
+                  </p>
+                </Show>
+
+                <div class="grid gap-3 *:min-w-0 sm:grid-cols-2">
+                  <label class="flex flex-col gap-1">
+                    <span class="text-xs opacity-70">Slug</span>
+                    <input
+                      class="input input-bordered"
+                      aria-label="Page slug"
+                      value={slugField()}
+                      onInput={(event) => setSlug(event.currentTarget.value)}
+                    />
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span class="text-xs opacity-70">
+                      Title, or nothing for the heading below
+                    </span>
+                    <input
+                      class="input input-bordered"
+                      aria-label="Page title"
+                      value={titleField()}
+                      onInput={(event) => setTitle(event.currentTarget.value)}
+                    />
+                  </label>
+                </div>
+
+                <textarea
+                  class="textarea textarea-bordered min-h-64 font-mono text-sm"
+                  aria-label="Page content"
+                  value={bodyField()}
+                  onInput={(event) => setBody(event.currentTarget.value)}
+                />
+
+                <Show when={sessionState()?.authentication_required}>
+                  <p class="text-xs opacity-60">
+                    It becomes an ordinary page, internal to this wiki, until you say
+                    otherwise in the editor. Captures are yours alone; pages are not.
+                  </p>
+                </Show>
+
+                <Show when={failure()}>
+                  <ErrorNotice error={failure()} />
+                </Show>
+
+                <Show when={exists()}>
+                  <p class="text-xs opacity-70">
+                    The page at {written()} exists. Only the link back to this idea is
+                    left to record, and asking again will not write a second page.
+                  </p>
+                </Show>
+
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    class="btn btn-primary btn-sm"
+                    type="submit"
+                    disabled={saving() || !slugField().trim()}
+                  >
+                    {exists() ? 'Record the page' : 'Create the page and record it'}
+                  </button>
+                  <button class="btn btn-ghost btn-sm" type="button" onClick={close}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+          </Async>
         </Show>
       </div>
     </section>

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router'
 import { cleanup, fireEvent, render, waitFor } from '@solidjs/testing-library'
-import type { CaptureView, IdeaView, ReceiptResponse } from '../api/client'
+import { ApiError } from '../api/client'
+import type { CaptureView, DraftResponse, IdeaView, ReceiptResponse } from '../api/client'
 
 const api = vi.hoisted(() => ({
   getIdea: vi.fn(),
@@ -12,6 +13,17 @@ const api = vi.hoisted(() => ({
   reopenIdea: vi.fn(),
   disconnectCapture: vi.fn(),
   reconsiderCandidate: vi.fn(),
+  ideaDraft: vi.fn(),
+  createPage: vi.fn(),
+  recordPromotion: vi.fn(),
+  // The promotion form reads the session to decide whether to say anything
+  // about visibility. Left real it would fire a `fetch` at module load, which
+  // in jsdom has no origin to resolve `/api/auth/session` against.
+  session: vi.fn(async () => ({
+    authentication_required: false,
+    authenticated: true,
+    user: null,
+  })),
 }))
 
 vi.mock('../api/client', async (importOriginal) => {
@@ -19,7 +31,7 @@ vi.mock('../api/client', async (importOriginal) => {
   return { ...actual, ...api }
 })
 
-const { default: IdeaDetail } = await import('./IdeaDetail')
+const { default: IdeaDetail, suggestSlug } = await import('./IdeaDetail')
 
 const IDEA = '20260801T090000-000000001'
 const FIRST = '20260801T090000-000000010'
@@ -300,5 +312,182 @@ describe('deciding', () => {
     await waitFor(() =>
       expect(api.patchIdea).toHaveBeenCalledWith(IDEA, { name: 'Seeded dungeons' }),
     )
+  })
+})
+
+const MARKDOWN =
+  '# Dungeon seeds\n\nDungeon seeds decide the loot.\n\nDungeon seeds decide the rooms.\n'
+
+function draft(overrides: Partial<DraftResponse> = {}): DraftResponse {
+  return {
+    idea: IDEA,
+    title: 'Dungeon seeds',
+    markdown: MARKDOWN,
+    sources: [
+      { id: FIRST, created: '2026-08-01T09:00:00Z', archived: false },
+      { id: SECOND, created: '2026-08-18T09:00:00Z', archived: false },
+    ],
+    missing: [],
+    promoted_to: null,
+    ...overrides,
+  }
+}
+
+/** Open the thread, then the promotion form, and wait for the draft. */
+async function promoting(thread = idea(), assembled = draft()) {
+  api.ideaDraft.mockResolvedValue(assembled)
+  const screen = await open(thread)
+
+  fireEvent.click(screen.getByText('Promote it to a page'))
+  await waitFor(() => expect(screen.getByLabelText('Page content')).toBeTruthy())
+
+  return screen
+}
+
+describe('promotion', () => {
+  /**
+   * A draft is assembled from every capture in the thread, and most visits to
+   * this screen are not about promoting it.
+   */
+  it('asks for a draft only when somebody opens the form', async () => {
+    const screen = await open()
+    expect(api.ideaDraft).not.toHaveBeenCalled()
+
+    api.ideaDraft.mockResolvedValue(draft())
+    fireEvent.click(screen.getByText('Promote it to a page'))
+
+    await waitFor(() => expect(api.ideaDraft).toHaveBeenCalledWith(IDEA))
+  })
+
+  /**
+   * The whole sequence: an ordinary page through the ordinary page API, then
+   * the association. Two requests, in that order, because that is what makes
+   * the second one safe to repeat.
+   */
+  it('creates the page and then records what the idea became', async () => {
+    const screen = await promoting()
+    api.createPage.mockResolvedValue({ slug: 'dungeon-seeds' })
+    api.recordPromotion.mockResolvedValue(idea({ promoted_to: 'dungeon-seeds' }))
+
+    expect((screen.getByLabelText('Page content') as HTMLTextAreaElement).value).toBe(
+      MARKDOWN,
+    )
+    expect((screen.getByLabelText('Page slug') as HTMLInputElement).value).toBe(
+      'dungeon-seeds',
+    )
+
+    fireEvent.click(screen.getByText('Create the page and record it'))
+
+    await waitFor(() =>
+      expect(api.createPage).toHaveBeenCalledWith({
+        slug: 'dungeon-seeds',
+        title: 'Dungeon seeds',
+        content: MARKDOWN,
+      }),
+    )
+    await waitFor(() =>
+      expect(api.recordPromotion).toHaveBeenCalledWith(IDEA, { page: 'dungeon-seeds' }),
+    )
+  })
+
+  /**
+   * The failure the three-step shape exists to survive. The page is written and
+   * the association is not, so the only thing left to do is the association: a
+   * second attempt that created a second page would be the bug this shape is
+   * meant to make impossible.
+   */
+  it('retries only the association when the page has already been written', async () => {
+    const screen = await promoting()
+    api.createPage.mockResolvedValue({ slug: 'dungeon-seeds' })
+    api.recordPromotion.mockRejectedValueOnce(new Error('the index would not take it'))
+
+    fireEvent.click(screen.getByText('Create the page and record it'))
+    await waitFor(() =>
+      expect(screen.getByText(/the index would not take it/)).toBeTruthy(),
+    )
+    expect(screen.getByText(/The page at dungeon-seeds exists/)).toBeTruthy()
+
+    api.recordPromotion.mockResolvedValue(idea({ promoted_to: 'dungeon-seeds' }))
+    fireEvent.click(screen.getByText('Record the page'))
+
+    await waitFor(() => expect(api.recordPromotion).toHaveBeenCalledTimes(2))
+    expect(api.createPage).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * A page somebody made earlier is the same situation as one this form made a
+   * moment ago: it exists, and only the association is left.
+   */
+  it('offers to record a page that was already there', async () => {
+    const screen = await promoting()
+    api.createPage.mockRejectedValue(
+      new ApiError('page_already_exists', 'a page is already at dungeon-seeds', 409),
+    )
+
+    fireEvent.click(screen.getByText('Create the page and record it'))
+
+    await waitFor(() => expect(screen.getByText('Record the page')).toBeTruthy())
+    expect(api.recordPromotion).not.toHaveBeenCalled()
+
+    api.recordPromotion.mockResolvedValue(idea({ promoted_to: 'dungeon-seeds' }))
+    fireEvent.click(screen.getByText('Record the page'))
+
+    await waitFor(() =>
+      expect(api.recordPromotion).toHaveBeenCalledWith(IDEA, { page: 'dungeon-seeds' }),
+    )
+    expect(api.createPage).toHaveBeenCalledTimes(1)
+  })
+
+  /** An edited draft is the only copy of that edit, exactly as a capture is. */
+  it('keeps what was typed when the page could not be created', async () => {
+    const screen = await promoting()
+    api.createPage.mockRejectedValue(new Error('that slug is not allowed'))
+
+    fireEvent.input(screen.getByLabelText('Page content'), {
+      target: { value: '# Dungeon seeds\n\nRewritten by hand.\n' },
+    })
+    fireEvent.input(screen.getByLabelText('Page slug'), {
+      target: { value: 'notes/dungeon-seeds' },
+    })
+    fireEvent.click(screen.getByText('Create the page and record it'))
+
+    await waitFor(() => expect(screen.getByText(/that slug is not allowed/)).toBeTruthy())
+    expect((screen.getByLabelText('Page content') as HTMLTextAreaElement).value).toBe(
+      '# Dungeon seeds\n\nRewritten by hand.\n',
+    )
+    expect(api.recordPromotion).not.toHaveBeenCalled()
+  })
+
+  /** Nothing is consumed by promoting, and the screen says where it went. */
+  it('shows the page an idea already became, and keeps its captures', async () => {
+    const screen = await open(idea({ promoted_to: 'notes/dungeon-seeds' }))
+
+    const link = screen.getAllByText('notes/dungeon-seeds')[0]!
+    expect(link.getAttribute('href')).toBe('/pages/notes/dungeon-seeds')
+    expect(screen.getByText(/kept every capture/)).toBeTruthy()
+    // Twice over: once in the receipt's evidence, once in the thread itself.
+    expect(screen.getAllByText('Dungeon seeds decide the loot.')).toHaveLength(2)
+    expect(screen.getByText('Record a different page')).toBeTruthy()
+  })
+
+  /** A draft short of its evidence says so rather than coming back quieter. */
+  it('says when a capture could not be read into the draft', async () => {
+    const screen = await promoting(idea(), draft({ missing: [FIRST] }))
+
+    expect(screen.getByText(/could not be read/)).toBeTruthy()
+  })
+
+  /**
+   * The suggestion, not a rule: slugs may hold far more than this, and the
+   * field is editable. Letters outside ASCII are letters, though, which a
+   * `[^a-z0-9]` spelling would quietly turn into hyphens.
+   */
+  it('suggests a conventional slug without insisting on one', () => {
+    expect(suggestSlug('Dungeon seeds')).toBe('dungeon-seeds')
+    expect(suggestSlug('  Seeds, corridors & doors!  ')).toBe(
+      'seeds-corridors-doors',
+    )
+    expect(suggestSlug('Café notes')).toBe('café-notes')
+    expect(suggestSlug('!!!')).toBe('')
   })
 })
