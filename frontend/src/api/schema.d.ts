@@ -391,6 +391,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/ideas/{id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The page this idea would make, assembled and not written.
+         * @description Promotion is deliberately three steps and this is the first: read the draft,
+         *     create an ordinary page with `POST /api/pages`, then record the association
+         *     with `PUT /api/ideas/{id}/promotion`. Two authored writes and two index
+         *     updates are not one transaction and this API does not pretend otherwise. The
+         *     good news is what that buys: if the third step fails, the page still exists
+         *     and the association can be recorded again without losing anything.
+         *
+         *     Every capture the idea still holds is here, and the ones whose files are gone
+         *     are named in `missing` so that a short draft says it is short.
+         */
+        get: operations["read_idea_draft"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ideas/{id}/promotion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Record the page an idea produced.
+         * @description The page has to exist and be one you can read. A slug that is neither gets
+         *     `404 idea_promotion_page_not_found`, and it is the same answer either way:
+         *     telling a caller that a page exists but is not theirs would answer questions
+         *     about somebody else's wiki for the price of guessing a slug.
+         *
+         *     Idempotent. Recording the slug an idea is already promoted to writes no
+         *     second event, which is what makes this safe to retry when the page was
+         *     created and the association was not. Recording a *different* slug writes a
+         *     new event and makes that the current answer, while the earlier association
+         *     stays in the event log: an idea that became one page and then another has
+         *     done both of those things.
+         *
+         *     Nothing about the captures changes. Promotion is a thing that happened to an
+         *     idea, not a way of consuming one, and the thread keeps every capture it held
+         *     so that the page's sources can still be read.
+         */
+        put: operations["record_idea_promotion"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ideas/{id}/receipt": {
         parameters: {
             query?: never;
@@ -1200,6 +1262,51 @@ export interface components {
              *     before refreshing them. Deliberately no other capture's text.
              */
             ideas: components["schemas"]["AffectedIdea"][];
+        };
+        /**
+         * @description The page an idea would make, assembled and not written.
+         *
+         *     Nothing here creates anything. Promotion is three steps and this is the
+         *     first: take the markdown, create an ordinary page with the ordinary page
+         *     API, then record the association with `PUT /api/ideas/{id}/promotion`.
+         */
+        DraftResponse: {
+            idea: components["schemas"]["IdeaId"];
+            /**
+             * @description A heading, the idea's note, and every capture it still holds, oldest
+             *     first, with the text exactly as it was typed.
+             * @example # Dungeon seeds
+             *
+             *     Maybe dungeon quests should require seeds.
+             */
+            markdown: string;
+            /**
+             * @description Connected captures whose files are gone, and which therefore contributed
+             *     nothing. Named rather than quietly left out, so a draft that is short of
+             *     something says so.
+             */
+            missing: components["schemas"]["CaptureId"][];
+            promoted_to?: null | components["schemas"]["Slug"];
+            /** @description The captures that went into it, in the order they appear. */
+            sources: components["schemas"]["DraftSource"][];
+            /**
+             * @description What the page is proposed to be called: the idea's name, unchanged.
+             *     Rhizolog does not generate one here any more than it does anywhere else.
+             * @example Dungeon seeds
+             */
+            title: string;
+        };
+        /** @description One capture the draft was assembled from. */
+        DraftSource: {
+            /**
+             * @description Whether it has been archived out of the inbox. It is still evidence and
+             *     still in the draft; this is here so a caller can say where a paragraph
+             *     came from.
+             */
+            archived: boolean;
+            /** Format: date-time */
+            created: string;
+            id: components["schemas"]["CaptureId"];
         };
         ErrorDetail: {
             /**
@@ -2119,6 +2226,15 @@ export interface components {
              */
             ruleset: string;
             state?: null | components["schemas"]["Lifecycle"];
+        };
+        RecordPromotion: {
+            /**
+             * @description The page this idea produced.
+             *
+             *     It has to exist already and be one you can read. This records what
+             *     happened; it does not write a page, and it does not move or copy one.
+             */
+            page: components["schemas"]["Slug"];
         };
         ReindexResponse: {
             /** @description Idea Inbox captures under `.rhizolog/ideas/captures/`. */
@@ -3661,6 +3777,89 @@ export interface operations {
                 };
             };
             /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_idea_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The draft */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftResponse"];
+                };
+            };
+            /** @description No such idea */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    record_idea_promotion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Idea id
+                 * @example 20260820T142000-234567890
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordPromotion"];
+            };
+        };
+        responses: {
+            /** @description The idea, with the page recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaView"];
+                };
+            };
+            /** @description That is not a slug */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such idea, or no such page */
             404: {
                 headers: {
                     [name: string]: unknown;

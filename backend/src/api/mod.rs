@@ -230,6 +230,8 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         .routes(routes!(ideas::reopen_idea))
         .routes(routes!(ideas::dismiss_idea))
         .routes(routes!(ideas::read_idea_receipt))
+        .routes(routes!(ideas::read_idea_draft))
+        .routes(routes!(ideas::record_idea_promotion))
         .routes(routes!(auth::login))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::read_session))

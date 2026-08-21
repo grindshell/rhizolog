@@ -231,6 +231,16 @@ pub enum AppError {
     #[error("{id} is not retired")]
     IdeaNotRetired { id: IdeaId },
 
+    /// A promotion naming a page that is not there, or is not this caller's to
+    /// read.
+    ///
+    /// One answer for both, deliberately, and it is the rule that sends a
+    /// private page's read to `404` rather than `403`: an error that told the
+    /// two apart would answer questions about somebody else's pages for the
+    /// price of guessing a slug.
+    #[error("there is no page {slug} to promote to. Create it first, then record the promotion.")]
+    IdeaPromotionPageNotFound { slug: Slug },
+
     /// Candidates were asked for and the derived half could not answer.
     ///
     /// Analysis is derived and retryable, so this never means anything is lost:
@@ -340,7 +350,9 @@ impl AppError {
             // is behind the authored half, which a reindex fixes, and 503 is the
             // status that means come back rather than something went wrong.
             Self::IdeaAnalysisUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            Self::RouteNotFound { .. } | Self::PinNotFound { .. } => StatusCode::NOT_FOUND,
+            Self::RouteNotFound { .. }
+            | Self::PinNotFound { .. }
+            | Self::IdeaPromotionPageNotFound { .. } => StatusCode::NOT_FOUND,
             Self::TooManyPins { .. } | Self::TimeNotRunning { .. } => StatusCode::CONFLICT,
             Self::InvalidRecordId { .. }
             | Self::InvalidTimeId { .. }
@@ -406,6 +418,7 @@ impl AppError {
             Self::IdeaWouldBeEmpty { .. } => "idea_would_be_empty",
             Self::IdeaAlreadyRetired { .. } => "idea_already_retired",
             Self::IdeaNotRetired { .. } => "idea_not_retired",
+            Self::IdeaPromotionPageNotFound { .. } => "idea_promotion_page_not_found",
             Self::IdeaAnalysisUnavailable { .. } => "idea_analysis_unavailable",
             Self::WrittenButNotIndexed { .. } => "written_but_not_indexed",
             Self::InvalidTimeId { .. } => "invalid_time_id",
@@ -513,6 +526,10 @@ impl AppError {
             | Self::IdeaAlreadyRetired { id }
             | Self::IdeaNotRetired { id } => Some(json!({ "id": id })),
             Self::IdeaAnalysisUnavailable { id } => Some(json!({ "id": id })),
+            // The slug that was asked for, and nothing about why it could not be
+            // used. Saying "it exists but is not yours" is the disclosure this
+            // one error covers two cases to avoid.
+            Self::IdeaPromotionPageNotFound { slug } => Some(json!({ "slug": slug })),
             Self::WrittenButNotIndexed { what, .. } => Some(json!({ "written": what })),
             Self::InvalidTimeId { raw, source } => Some(json!({
                 "id": raw,

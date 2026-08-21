@@ -94,6 +94,36 @@ impl App {
         self.send(Method::POST, path, body).await
     }
 
+    async fn put(&self, path: &str, body: Option<Value>) -> Res {
+        self.send(Method::PUT, path, body).await
+    }
+
+    /// How many decision events are on disk.
+    ///
+    /// What proves an idempotent route is idempotent: a repeated request has to
+    /// leave the authored tree exactly as it found it, and only the files can
+    /// say so. A response that looks the same would look the same either way.
+    fn events(&self) -> usize {
+        let mut count = 0;
+        let mut pending = vec![self.root().join(".rhizolog/ideas/events")];
+
+        while let Some(directory) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|suffix| suffix == "md") {
+                    count += 1;
+                }
+            }
+        }
+
+        count
+    }
+
     async fn capture(&self, text: &str) -> String {
         let res = self
             .post("/api/captures", Some(json!({ "text": text })))
@@ -1089,6 +1119,173 @@ async fn a_filtered_total_counts_only_what_matched() {
     );
 }
 
+// ---------------------------------------------------------------- promotion
+
+/// The draft is the idea's own material in the order it was thought, and
+/// nothing else. Every capture is in it: promoting is not a way of losing one,
+/// and nothing is summarised, rewritten or annotated on the way out.
+#[tokio::test]
+async fn a_draft_is_every_capture_the_idea_holds_oldest_first() {
+    let app = App::open().await;
+    let first = app.capture("Seeds should decide the loot.\n").await;
+    let second = app.capture("And the corridors.\n").await;
+    let idea = app.start_idea("Dungeon seeds", &[&first]).await;
+    app.put(&format!("/api/ideas/{idea}/captures/{second}"), None)
+        .await;
+    app.send(
+        Method::PATCH,
+        &format!("/api/ideas/{idea}"),
+        Some(json!({ "note": "Worth writing up.\n" })),
+    )
+    .await;
+
+    let res = app.get(&format!("/api/ideas/{idea}/draft")).await;
+
+    assert_eq!(res.status, StatusCode::OK, "{:?}", res.body);
+    assert_eq!(res.body["idea"], idea);
+    assert_eq!(res.body["title"], "Dungeon seeds");
+    assert_eq!(
+        res.body["markdown"],
+        "# Dungeon seeds\n\nWorth writing up.\n\nSeeds should decide the loot.\n\nAnd the \
+         corridors.\n"
+    );
+
+    // Provenance is in the response rather than in the page, so the person
+    // promoting is not handed prose of ours to delete.
+    let sources = res.body["sources"].as_array().expect("sources");
+    assert_eq!(sources.len(), 2);
+    assert_eq!(sources[0]["id"], first);
+    assert_eq!(sources[1]["id"], second);
+    assert!(sources[0]["created"].is_string());
+    assert_eq!(sources[0]["archived"], false);
+    assert!(res.body["missing"].as_array().expect("missing").is_empty());
+    assert!(res.body["promoted_to"].is_null());
+
+    // Reading a draft writes nothing. It is a suggestion about a page that does
+    // not exist yet, and there is nothing about it to record.
+    assert_eq!(app.events(), 1, "the connect above, and nothing else");
+}
+
+/// An archived capture is still in the draft. Archiving means processed, not
+/// "this thought never happened", and a promotion that quietly dropped the
+/// older half of a thread would be the wrong reading of both.
+#[tokio::test]
+async fn a_draft_keeps_the_archived_captures_and_names_the_ones_that_are_gone() {
+    let app = App::open().await;
+    let older = app.capture("The first version of the thought.\n").await;
+    let newer = app.capture("The second version.\n").await;
+    let idea = app.start_idea("Dungeon seeds", &[&older, &newer]).await;
+    app.post(&format!("/api/captures/{older}/archive"), None)
+        .await;
+
+    let res = app.get(&format!("/api/ideas/{idea}/draft")).await;
+    assert!(
+        res.body["markdown"]
+            .as_str()
+            .expect("markdown")
+            .contains("The first version of the thought."),
+        "{:?}",
+        res.body["markdown"]
+    );
+    assert_eq!(res.body["sources"][0]["archived"], true);
+
+    // Delete the newer one out from under the thread, and the draft says what it
+    // is short of rather than coming back quietly shorter.
+    app.send(Method::DELETE, &format!("/api/captures/{newer}"), None)
+        .await;
+
+    let after = app.get(&format!("/api/ideas/{idea}/draft")).await;
+    assert_eq!(after.body["sources"].as_array().expect("sources").len(), 1);
+    assert_eq!(after.body["missing"][0], newer);
+    assert!(
+        !after.body["markdown"]
+            .as_str()
+            .expect("markdown")
+            .contains("The second version."),
+    );
+}
+
+/// Recording the association is the third step and the only one that is safe to
+/// repeat, which is what makes the whole two-write sequence recoverable: if this
+/// fails after the page was created, the caller sends it again.
+#[tokio::test]
+async fn recording_a_promotion_repeats_without_writing_a_second_decision() {
+    let app = App::open().await;
+    let capture = app.capture("Seeds should decide the loot.\n").await;
+    let idea = app.start_idea("Dungeon seeds", &[&capture]).await;
+    for slug in ["notes/dungeon-seeds", "notes/seeded-dungeons"] {
+        let page = app
+            .post(
+                "/api/pages",
+                Some(json!({ "slug": slug, "content": "# Dungeon seeds\n" })),
+            )
+            .await;
+        assert_eq!(page.status, StatusCode::CREATED, "{:?}", page.body);
+    }
+    let promotion = format!("/api/ideas/{idea}/promotion");
+
+    let promoted = app
+        .put(&promotion, Some(json!({ "page": "notes/dungeon-seeds" })))
+        .await;
+    assert_eq!(promoted.status, StatusCode::OK, "{:?}", promoted.body);
+    assert_eq!(promoted.body["promoted_to"], "notes/dungeon-seeds");
+    assert_eq!(app.events(), 1);
+
+    // The same slug again is the same fact, so there is nothing to write down.
+    let again = app
+        .put(&promotion, Some(json!({ "page": "notes/dungeon-seeds" })))
+        .await;
+    assert_eq!(again.body["promoted_to"], "notes/dungeon-seeds");
+    assert_eq!(app.events(), 1, "a repeat wrote a second event");
+
+    // A different slug is a different decision. It becomes the current answer
+    // and the earlier one stays in the log, because both of them happened.
+    let moved = app
+        .put(&promotion, Some(json!({ "page": "notes/seeded-dungeons" })))
+        .await;
+    assert_eq!(moved.body["promoted_to"], "notes/seeded-dungeons");
+    assert_eq!(app.events(), 2);
+
+    // Nothing was consumed. The thread still holds what the page was made from,
+    // so the sources of a promoted page can still be read.
+    assert_eq!(
+        moved.body["captures"].as_array().expect("captures").len(),
+        1
+    );
+    assert_eq!(moved.body["captures"][0]["id"], capture);
+
+    let listed = app.get("/api/ideas").await;
+    assert_eq!(
+        listed.body["ideas"][0]["promoted_to"],
+        "notes/seeded-dungeons"
+    );
+    let draft = app.get(&format!("/api/ideas/{idea}/draft")).await;
+    assert_eq!(draft.body["promoted_to"], "notes/seeded-dungeons");
+}
+
+/// The promotion endpoint creates nothing. A slug with no page behind it is
+/// refused, and the idea is left exactly as it was.
+#[tokio::test]
+async fn a_promotion_refuses_a_page_that_does_not_exist() {
+    let app = App::open().await;
+    let capture = app.capture("Seeds should decide the loot.\n").await;
+    let idea = app.start_idea("Dungeon seeds", &[&capture]).await;
+
+    let res = app
+        .put(
+            &format!("/api/ideas/{idea}/promotion"),
+            Some(json!({ "page": "notes/dungeon-seeds" })),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    assert_eq!(res.code(), "idea_promotion_page_not_found");
+    assert_eq!(res.body["error"]["details"]["slug"], "notes/dungeon-seeds");
+    assert_eq!(app.events(), 0);
+    assert!(app.get(&format!("/api/ideas/{idea}")).await.body["promoted_to"].is_null());
+    assert_eq!(app.get("/api/pages").await.body["total"], 0);
+}
+
 // -------------------------------------------------- wikis that have accounts
 
 /// A wiki with two accounts, and a session token for each.
@@ -1258,6 +1455,102 @@ async fn one_account_never_sees_another_owners_candidates() {
     assert_eq!(hers.code(), "capture_not_found");
 }
 
+/// A page that is not there and a page that is not yours are one answer, word
+/// for word.
+///
+/// Promotion takes a slug somebody typed, so an error that told those apart
+/// would answer questions about another account's wiki for the price of guessing
+/// one. It is the same rule that sends a private page's read to `404`.
+#[tokio::test]
+async fn a_promotion_refuses_a_missing_page_and_an_unreadable_one_identically() {
+    let (app, tim, alice) = with_two_accounts().await;
+
+    let capture = app
+        .send_as(
+            Some(&tim),
+            Method::POST,
+            "/api/captures",
+            Some(json!({ "text": "Seeds should decide the loot.\n" })),
+        )
+        .await;
+    let capture = capture.body["id"].as_str().expect("id").to_owned();
+    let idea = app
+        .send_as(
+            Some(&tim),
+            Method::POST,
+            "/api/ideas",
+            Some(json!({ "name": "Dungeon seeds", "captures": [capture] })),
+        )
+        .await;
+    let idea = idea.body["id"].as_str().expect("id").to_owned();
+    let promotion = format!("/api/ideas/{idea}/promotion");
+    let hers = json!({ "page": "notes/hers" });
+
+    let missing = app
+        .send_as(Some(&tim), Method::PUT, &promotion, Some(hers.clone()))
+        .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    assert_eq!(missing.code(), "idea_promotion_page_not_found");
+
+    // Alice writes a private page at exactly that slug. Tim's answer does not
+    // move, which is the whole point: he cannot tell that anything appeared.
+    let created = app
+        .send_as(
+            Some(&alice),
+            Method::POST,
+            "/api/pages",
+            Some(json!({
+                "slug": "notes/hers",
+                "content": "Hers.\n",
+                "visibility": "private",
+            })),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.body);
+
+    let refused = app
+        .send_as(Some(&tim), Method::PUT, &promotion, Some(hers))
+        .await;
+    assert_eq!(refused.status, missing.status);
+    assert_eq!(refused.body, missing.body);
+
+    // His own private page is one he can read, so it can be recorded. The rule
+    // is "a page you can read", not "a page everybody can".
+    app.send_as(
+        Some(&tim),
+        Method::POST,
+        "/api/pages",
+        Some(json!({
+            "slug": "notes/his",
+            "content": "Mine.\n",
+            "visibility": "private",
+        })),
+    )
+    .await;
+    let recorded = app
+        .send_as(
+            Some(&tim),
+            Method::PUT,
+            &promotion,
+            Some(json!({ "page": "notes/his" })),
+        )
+        .await;
+    assert_eq!(recorded.status, StatusCode::OK, "{:?}", recorded.body);
+    assert_eq!(recorded.body["promoted_to"], "notes/his");
+
+    // And alice cannot read the draft of a thread that is not hers.
+    let draft = app
+        .send_as(
+            Some(&alice),
+            Method::GET,
+            &format!("/api/ideas/{idea}/draft"),
+            None,
+        )
+        .await;
+    assert_eq!(draft.status, StatusCode::NOT_FOUND);
+    assert_eq!(draft.code(), "idea_not_found");
+}
+
 /// Not one idea route is reachable without an account, and that has to hold
 /// however the instance is configured.
 #[tokio::test]
@@ -1277,6 +1570,11 @@ async fn no_idea_route_answers_an_anonymous_caller() {
             "/api/captures/20200101T000000-000000000/candidates",
         ),
         (Method::GET, "/api/ideas/20200101T000000-000000000/receipt"),
+        (Method::GET, "/api/ideas/20200101T000000-000000000/draft"),
+        (
+            Method::PUT,
+            "/api/ideas/20200101T000000-000000000/promotion",
+        ),
     ] {
         let res = app.send_as(None, method.clone(), path, None).await;
         assert_eq!(

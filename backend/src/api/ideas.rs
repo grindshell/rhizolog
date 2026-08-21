@@ -63,6 +63,7 @@ use crate::index::{
     CaptureListOptions, CaptureRecord, IdeaListOptions, IdeaStanding, IdeaState, IdeaSummary,
 };
 use crate::slug::Slug;
+use crate::store::StoreError;
 
 const DEFAULT_LIMIT: usize = 50;
 
@@ -419,6 +420,43 @@ pub struct ReceiptResponse {
     pub explanation: Vec<String>,
 }
 
+/// The page an idea would make, assembled and not written.
+///
+/// Nothing here creates anything. Promotion is three steps and this is the
+/// first: take the markdown, create an ordinary page with the ordinary page
+/// API, then record the association with `PUT /api/ideas/{id}/promotion`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DraftResponse {
+    pub idea: IdeaId,
+    /// What the page is proposed to be called: the idea's name, unchanged.
+    /// Rhizolog does not generate one here any more than it does anywhere else.
+    #[schema(example = "Dungeon seeds")]
+    pub title: String,
+    /// A heading, the idea's note, and every capture it still holds, oldest
+    /// first, with the text exactly as it was typed.
+    #[schema(example = "# Dungeon seeds\n\nMaybe dungeon quests should require seeds.\n")]
+    pub markdown: String,
+    /// The captures that went into it, in the order they appear.
+    pub sources: Vec<DraftSource>,
+    /// Connected captures whose files are gone, and which therefore contributed
+    /// nothing. Named rather than quietly left out, so a draft that is short of
+    /// something says so.
+    pub missing: Vec<CaptureId>,
+    /// The page this idea has already produced, if it has been promoted before.
+    pub promoted_to: Option<Slug>,
+}
+
+/// One capture the draft was assembled from.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DraftSource {
+    pub id: CaptureId,
+    pub created: DateTime<Utc>,
+    /// Whether it has been archived out of the inbox. It is still evidence and
+    /// still in the draft; this is here so a caller can say where a paragraph
+    /// came from.
+    pub archived: bool,
+}
+
 // ----------------------------------------------------------------- requests
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -506,6 +544,16 @@ pub struct IdeaListQuery {
     pub limit: Option<usize>,
     #[param(example = 0)]
     pub offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RecordPromotion {
+    /// The page this idea produced.
+    ///
+    /// It has to exist already and be one you can read. This records what
+    /// happened; it does not write a page, and it does not move or copy one.
+    #[schema(example = "notes/dungeon-seeds")]
+    pub page: Slug,
 }
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -660,12 +708,27 @@ async fn assess(
     Ok((found.summary, receipt))
 }
 
+/// The working note from a thread's own file, or nothing if it will not read.
+///
+/// The one thing about an idea the index does not hold, so the two responses
+/// that carry it pay for a file read. A file that cannot be read at this instant
+/// costs the note rather than the request: everything else in the response came
+/// from the index and is still true.
+async fn note_of(state: &AppState, owner: &Owner, id: &IdeaId) -> String {
+    match state.ideas.read_idea(owner, id).await {
+        Ok(idea) => idea.note,
+        Err(error) => {
+            tracing::debug!(%id, %error, "could not read an idea's note");
+            String::new()
+        }
+    }
+}
+
 /// Assemble the full view of one idea.
 ///
 /// The folded state comes from the index, which is the read path everywhere in
-/// Rhizolog. The note comes from the thread's own file, because it is the one
-/// thing about an idea the index does not hold; a file that cannot be read at
-/// this instant costs the note rather than the request.
+/// Rhizolog. The note comes from the thread's own file, for the reason
+/// [`note_of`] gives.
 async fn idea_view(
     state: &AppState,
     owner: &Owner,
@@ -674,14 +737,7 @@ async fn idea_view(
 ) -> AppResult<IdeaView> {
     let captures = state.index.idea_captures(owner, &folded.id).await?;
     let (summary, receipt) = assess(state, owner, &folded.id, at).await?;
-
-    let note = match state.ideas.read_idea(owner, &folded.id).await {
-        Ok(idea) => idea.note,
-        Err(error) => {
-            tracing::debug!(id = %folded.id, %error, "could not read an idea's note");
-            String::new()
-        }
-    };
+    let note = note_of(state, owner, &folded.id).await;
 
     Ok(IdeaView {
         needs_repair: receipt.needs_repair(),
@@ -1699,4 +1755,228 @@ pub async fn read_idea_receipt(
         missing: receipt.missing,
         explanation: receipt.explanation,
     }))
+}
+
+// ---------------------------------------------------------------- promotion
+
+/// Assemble the page an idea would make.
+///
+/// A heading, the thread's note, then every capture it holds, oldest first,
+/// separated by blank lines. The text is copied and never rewritten,
+/// summarised, reordered or interpreted: what comes out is what somebody wrote,
+/// and a draft that improved on it would be the first place that stopped being
+/// true.
+///
+/// Nothing is added to say where a paragraph came from. Provenance belongs in
+/// the response, which carries the ids and the timestamps, rather than in prose
+/// somebody would have to delete out of their own page.
+fn draft_markdown(name: &str, note: &str, captures: &[CaptureRecord]) -> String {
+    let mut blocks: Vec<&str> = Vec::with_capacity(captures.len() + 1);
+
+    let note = note.trim();
+    if !note.is_empty() {
+        blocks.push(note);
+    }
+    for capture in captures {
+        let text = capture.body.trim();
+        if !text.is_empty() {
+            blocks.push(text);
+        }
+    }
+
+    let heading = format!("# {}\n", name.trim());
+    if blocks.is_empty() {
+        heading
+    } else {
+        format!("{heading}\n{}\n", blocks.join("\n\n"))
+    }
+}
+
+/// The page this idea would make, assembled and not written.
+///
+/// Promotion is deliberately three steps and this is the first: read the draft,
+/// create an ordinary page with `POST /api/pages`, then record the association
+/// with `PUT /api/ideas/{id}/promotion`. Two authored writes and two index
+/// updates are not one transaction and this API does not pretend otherwise. The
+/// good news is what that buys: if the third step fails, the page still exists
+/// and the association can be recorded again without losing anything.
+///
+/// Every capture the idea still holds is here, and the ones whose files are gone
+/// are named in `missing` so that a short draft says it is short.
+#[utoipa::path(
+    get,
+    path = "/api/ideas/{id}/draft",
+    tag = "ideas",
+    params(("id" = String, Path, description = "Idea id", example = "20260820T142000-234567890")),
+    responses(
+        (status = 200, description = "The draft", body = DraftResponse),
+        (status = 404, description = "No such idea", body = crate::error::ErrorResponse),
+    ),
+)]
+pub async fn read_idea_draft(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(raw): Path<String>,
+) -> AppResult<Json<DraftResponse>> {
+    let owner = viewer.owner()?;
+    let id = idea_id(&raw)?;
+
+    let folded = state_of(&state, &owner, &id).await?;
+    let captures = state.index.idea_captures(&owner, &id).await?;
+    let note = note_of(&state, &owner, &id).await;
+
+    Ok(Json(DraftResponse {
+        markdown: draft_markdown(&folded.name, &note, &captures),
+        title: folded.name,
+        sources: captures
+            .into_iter()
+            .map(|capture| DraftSource {
+                id: capture.id,
+                created: capture.created,
+                archived: capture.archived,
+            })
+            .collect(),
+        missing: folded.missing,
+        promoted_to: folded.promoted_to,
+        idea: folded.id,
+    }))
+}
+
+/// Record the page an idea produced.
+///
+/// The page has to exist and be one you can read. A slug that is neither gets
+/// `404 idea_promotion_page_not_found`, and it is the same answer either way:
+/// telling a caller that a page exists but is not theirs would answer questions
+/// about somebody else's wiki for the price of guessing a slug.
+///
+/// Idempotent. Recording the slug an idea is already promoted to writes no
+/// second event, which is what makes this safe to retry when the page was
+/// created and the association was not. Recording a *different* slug writes a
+/// new event and makes that the current answer, while the earlier association
+/// stays in the event log: an idea that became one page and then another has
+/// done both of those things.
+///
+/// Nothing about the captures changes. Promotion is a thing that happened to an
+/// idea, not a way of consuming one, and the thread keeps every capture it held
+/// so that the page's sources can still be read.
+#[utoipa::path(
+    put,
+    path = "/api/ideas/{id}/promotion",
+    tag = "ideas",
+    params(("id" = String, Path, description = "Idea id", example = "20260820T142000-234567890")),
+    request_body = RecordPromotion,
+    responses(
+        (status = 200, description = "The idea, with the page recorded", body = IdeaView),
+        (status = 400, description = "That is not a slug", body = crate::error::ErrorResponse),
+        (status = 404, description = "No such idea, or no such page", body = crate::error::ErrorResponse),
+    ),
+)]
+pub async fn record_idea_promotion(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(raw): Path<String>,
+    JsonBody(request): JsonBody<RecordPromotion>,
+) -> AppResult<Json<IdeaView>> {
+    let owner = viewer.owner()?;
+    let idea = idea_id(&raw)?;
+    let folded = state_of(&state, &owner, &idea).await?;
+
+    // Read from the file rather than asked of the index, which is what
+    // `GET /api/pages/{slug}` does and for the same reason: a page whose
+    // frontmatter changed a moment ago must not be judged by what it used to
+    // say. A page that is missing and a page that is not this caller's are one
+    // answer here.
+    let page = match state.store.read(&request.page).await {
+        Ok(page) => page,
+        Err(StoreError::NotFound { .. }) => {
+            return Err(AppError::IdeaPromotionPageNotFound { slug: request.page });
+        }
+        // A page that will not parse is a different problem and says so, which
+        // discloses nothing `GET /api/pages/{slug}` does not already: that read
+        // reports a malformed page before it ever consults its visibility.
+        Err(error) => return Err(error.into()),
+    };
+    if !crate::api::pages::readable(&page, &viewer) {
+        return Err(AppError::IdeaPromotionPageNotFound { slug: request.page });
+    }
+
+    if folded.promoted_to.as_ref() != Some(&request.page) {
+        decide(
+            &state,
+            &owner,
+            EventKind::IdeaPromoted,
+            Subject::Promotion {
+                idea: idea.clone(),
+                page: request.page,
+            },
+        )
+        .await?;
+    }
+
+    answer_with_idea(&state, &owner, &idea).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capture(body: &str) -> CaptureRecord {
+        CaptureRecord {
+            id: CaptureId::parse("20260820T141530-123456789").expect("valid id"),
+            owner: Owner::open(),
+            body: body.to_owned(),
+            archived: false,
+            created: DateTime::UNIX_EPOCH,
+            updated: DateTime::UNIX_EPOCH,
+            size: body.len() as u64,
+        }
+    }
+
+    /// A capture's body arrives with the blank line the frontmatter left behind
+    /// and whatever trailing newline the file had, and neither belongs in a page.
+    /// What is between them is untouched.
+    #[test]
+    fn a_draft_is_a_heading_and_the_captures_verbatim() {
+        let markdown = draft_markdown(
+            "Dungeon seeds",
+            "",
+            &[
+                capture("\nSeeds should decide the loot.\n"),
+                capture("\nAnd the corridors.\n\nEven the doors.\n"),
+            ],
+        );
+
+        assert_eq!(
+            markdown,
+            "# Dungeon seeds\n\nSeeds should decide the loot.\n\nAnd the corridors.\n\nEven the \
+             doors.\n"
+        );
+    }
+
+    #[test]
+    fn a_note_goes_above_the_captures_and_an_empty_one_leaves_no_gap() {
+        assert_eq!(
+            draft_markdown(
+                "Dungeon seeds",
+                "\nWhat this is about.\n",
+                &[capture("A thought.\n")]
+            ),
+            "# Dungeon seeds\n\nWhat this is about.\n\nA thought.\n"
+        );
+        assert_eq!(
+            draft_markdown("Dungeon seeds", "   \n", &[capture("A thought.\n")]),
+            "# Dungeon seeds\n\nA thought.\n"
+        );
+    }
+
+    /// An idea whose captures have all been deleted still drafts, because the
+    /// name is authored too. It comes back as a heading and nothing else rather
+    /// than as prose apologising for itself.
+    #[test]
+    fn a_draft_with_nothing_left_to_say_is_just_the_heading() {
+        assert_eq!(
+            draft_markdown("Dungeon seeds", "", &[]),
+            "# Dungeon seeds\n"
+        );
+    }
 }
