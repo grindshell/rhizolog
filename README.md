@@ -378,7 +378,7 @@ Backend, from `backend/`:
 
 ```
 cargo run        # start the server
-cargo test       # 688 tests
+cargo test       # 690 tests
 cargo fmt
 cargo clippy
 ```
@@ -389,7 +389,7 @@ the executable, so it can be run anywhere without a `dist/` beside it. It needs
 
 ```
 cargo build --features embed-assets
-cargo test --features embed-assets    # 694 tests
+cargo test --features embed-assets    # 696 tests
 ```
 
 A directory that exists still wins, so this changes nothing when you are working
@@ -463,7 +463,7 @@ Frontend, from `frontend/`:
 ```
 pnpm dev         # dev server with HMR, proxying /api to the backend
 pnpm build       # production build, which the backend serves
-pnpm test        # 125 tests
+pnpm test        # 227 tests
 pnpm typecheck
 ```
 

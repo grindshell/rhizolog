@@ -436,7 +436,9 @@ pub struct DraftResponse {
     /// first, with the text exactly as it was typed.
     #[schema(example = "# Dungeon seeds\n\nMaybe dungeon quests should require seeds.\n")]
     pub markdown: String,
-    /// The captures that went into it, in the order they appear.
+    /// The captures that went into it, in the order they appear. A connected
+    /// capture whose text is blank is not one of them: it put no paragraph in
+    /// the markdown, so there is nothing here for it to be the source of.
     pub sources: Vec<DraftSource>,
     /// Connected captures whose files are gone, and which therefore contributed
     /// nothing. Named rather than quietly left out, so a draft that is short of
@@ -1759,6 +1761,24 @@ pub async fn read_idea_receipt(
 
 // ---------------------------------------------------------------- promotion
 
+/// Whether a capture has anything to put in a draft.
+///
+/// A capture whose text is entirely whitespace contributes no paragraph, and it
+/// must not be named as the source of one either. `sources` says what the
+/// markdown was assembled from, in the order it appears, so a client walking the
+/// two together to find out where a paragraph came from would be off by one for
+/// every blank left in the list. One predicate, asked by both, rather than two
+/// places that happen to agree today.
+///
+/// Only a hand-written file gets here: creating and correcting a capture both
+/// refuse blank text. That is why a blank is quietly left out rather than
+/// reported. `missing` is for evidence that cannot be read at all, which is a
+/// different thing and worth saying out loud; this one is readable and simply
+/// says nothing.
+fn contributes(capture: &CaptureRecord) -> bool {
+    !capture.body.trim().is_empty()
+}
+
 /// Assemble the page an idea would make.
 ///
 /// A heading, the thread's note, then every capture it holds, oldest first,
@@ -1778,9 +1798,8 @@ fn draft_markdown(name: &str, note: &str, captures: &[CaptureRecord]) -> String 
         blocks.push(note);
     }
     for capture in captures {
-        let text = capture.body.trim();
-        if !text.is_empty() {
-            blocks.push(text);
+        if contributes(capture) {
+            blocks.push(capture.body.trim());
         }
     }
 
@@ -1802,7 +1821,9 @@ fn draft_markdown(name: &str, note: &str, captures: &[CaptureRecord]) -> String 
 /// and the association can be recorded again without losing anything.
 ///
 /// Every capture the idea still holds is here, and the ones whose files are gone
-/// are named in `missing` so that a short draft says it is short.
+/// are named in `missing` so that a short draft says it is short. A capture that
+/// is readable and blank is in neither list: it put nothing in the markdown, and
+/// `sources` names what the markdown was made of.
 #[utoipa::path(
     get,
     path = "/api/ideas/{id}/draft",
@@ -1822,7 +1843,15 @@ pub async fn read_idea_draft(
     let id = idea_id(&raw)?;
 
     let folded = state_of(&state, &owner, &id).await?;
-    let captures = state.index.idea_captures(&owner, &id).await?;
+    // Filtered once and used for both, so the markdown and the list of what it
+    // was made from cannot disagree about what a capture contributed.
+    let captures: Vec<CaptureRecord> = state
+        .index
+        .idea_captures(&owner, &id)
+        .await?
+        .into_iter()
+        .filter(contributes)
+        .collect();
     let note = note_of(&state, &owner, &id).await;
 
     Ok(Json(DraftResponse {
@@ -1977,6 +2006,30 @@ mod tests {
         assert_eq!(
             draft_markdown("Dungeon seeds", "", &[]),
             "# Dungeon seeds\n"
+        );
+    }
+
+    /// The predicate the markdown and `sources` are both filtered by. A blank
+    /// capture leaves no paragraph and no gap where one would have been, and
+    /// the handler drops it from the list of what the draft was made of for
+    /// the same reason and by the same test.
+    #[test]
+    fn a_capture_that_says_nothing_contributes_nothing() {
+        assert!(contributes(&capture("A thought.\n")));
+        assert!(!contributes(&capture("\n   \n")));
+        assert!(!contributes(&capture("")));
+
+        assert_eq!(
+            draft_markdown(
+                "Dungeon seeds",
+                "",
+                &[
+                    capture("Seeds should decide the loot.\n"),
+                    capture("\n   \n"),
+                    capture("And the corridors.\n"),
+                ]
+            ),
+            "# Dungeon seeds\n\nSeeds should decide the loot.\n\nAnd the corridors.\n"
         );
     }
 }

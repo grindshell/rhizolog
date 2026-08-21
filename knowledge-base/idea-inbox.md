@@ -1186,6 +1186,20 @@ says so rather than coming back quietly shorter. Archived captures are in it:
 archived means processed, and dropping the older half of a thread would be the
 wrong reading of both words.
 
+Which makes `sources` a claim about the markdown rather than about the thread,
+and one predicate decides both. A capture whose text is entirely whitespace puts
+no paragraph in the draft and is not named as the source of one either, because
+a client walking the two lists together to find out where a paragraph came from
+would be off by one for every blank left in. It is not in `missing` either: that
+list is for evidence nobody can read, which is worth saying out loud, and this
+file is perfectly readable and simply says nothing. The thread still holds it,
+and `GET /api/ideas/{id}` still lists it.
+
+Only a hand-written file gets into that state, since creating and correcting a
+capture both refuse blank text. That is the reason for one predicate rather than
+two that agree: nothing an API client can do would ever make two of them
+disagree where anybody could see it.
+
 **There is no capture selection, which the plan's endpoint table implies there
 would be.** The caller creates the page themselves from markdown they can edit,
 so any subset is a text edit away, and a server-side selector would be a second
@@ -1259,6 +1273,8 @@ another has done both of those things.
 - An accountless wiki remains open for idea writes
 - Anonymous-read mode still refuses every idea endpoint
 - Promotion refuses a missing or unreadable page without revealing which
+- A promotion survives a rebuild, along with every other decision in the loop
+- A blank capture is in no draft and is named as the source of nothing
 - Every error uses the standard envelope
 - Every OpenAPI operation id is unique and every new schema is documented
 

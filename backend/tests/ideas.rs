@@ -124,6 +124,30 @@ impl App {
         count
     }
 
+    /// The file behind a capture, wherever its month bucket put it.
+    ///
+    /// For the tests that have to write one by hand, which is the only way to
+    /// reach a state the API refuses to create.
+    fn capture_file(&self, id: &str) -> std::path::PathBuf {
+        let mut pending = vec![self.root().join(".rhizolog/ideas/captures")];
+
+        while let Some(directory) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.file_stem().is_some_and(|stem| stem == id) {
+                    return path;
+                }
+            }
+        }
+
+        panic!("no file on disk for capture {id}");
+    }
+
     async fn capture(&self, text: &str) -> String {
         let res = self
             .post("/api/captures", Some(json!({ "text": text })))
@@ -530,6 +554,11 @@ async fn a_capture_an_idea_depends_on_cannot_be_deleted() {
 
 /// The gate on phase I2: everything an API client does has to survive the
 /// derived half being thrown away and rebuilt from the files.
+///
+/// Every phase since has added its decision to this loop rather than starting a
+/// second one, promotion included. The point is that the list is exhaustive: a
+/// decision that is written but never folded back looks perfectly healthy until
+/// somebody reindexes, and then quietly is not.
 #[tokio::test]
 async fn the_whole_loop_survives_a_rebuild() {
     let app = App::open().await;
@@ -555,8 +584,29 @@ async fn the_whole_loop_survives_a_rebuild() {
     app.post(&format!("/api/ideas/{idea}/retire"), None).await;
     app.post(&format!("/api/ideas/{idea}/reopen"), None).await;
 
+    // And the way out into the wiki. An ordinary page through the ordinary page
+    // API, then the association, which is the shape promotion has.
+    let written = app
+        .post(
+            "/api/pages",
+            Some(json!({ "slug": "notes/dungeon-seeds", "content": "# Dungeon seeds\n" })),
+        )
+        .await;
+    assert_eq!(written.status, StatusCode::CREATED, "{:?}", written.body);
+    let promoted = app
+        .put(
+            &format!("/api/ideas/{idea}/promotion"),
+            Some(json!({ "page": "notes/dungeon-seeds" })),
+        )
+        .await;
+    assert_eq!(promoted.status, StatusCode::OK, "{:?}", promoted.body);
+
     let before = timeless(app.get(&format!("/api/ideas/{idea}")).await.body);
     let captures_before = app.get("/api/captures").await.body;
+    // Named rather than left to the comparison below, so that dropping the
+    // promotion from this loop fails here instead of weakening the test in
+    // silence.
+    assert_eq!(before["promoted_to"], "notes/dungeon-seeds");
 
     let rebuilt = app.post("/api/reindex", None).await;
     assert_eq!(rebuilt.status, StatusCode::OK);
@@ -1202,6 +1252,56 @@ async fn a_draft_keeps_the_archived_captures_and_names_the_ones_that_are_gone() 
             .as_str()
             .expect("markdown")
             .contains("The second version."),
+    );
+}
+
+/// A capture that says nothing puts no paragraph in a draft, and is not named
+/// as the source of the paragraph it did not put there.
+///
+/// Only a hand-written file reaches this: creating and correcting a capture both
+/// refuse blank text. Which is exactly why the markdown and `sources` are
+/// filtered by one predicate rather than two that agree, since nothing an API
+/// client can do would ever make two disagree in front of anybody.
+#[tokio::test]
+async fn a_blank_capture_is_in_no_draft_and_is_not_claimed_as_a_source() {
+    let app = App::open().await;
+    let said = app.capture("Seeds should decide the loot.\n").await;
+    let blank = app.capture("Placeholder.\n").await;
+    let idea = app.start_idea("Dungeon seeds", &[&said, &blank]).await;
+
+    // Empty it on disk and rebuild, so what follows is read from the file
+    // rather than from what the API was willing to write.
+    let path = app.capture_file(&blank);
+    let text = std::fs::read_to_string(&path).expect("read the capture");
+    std::fs::write(&path, text.replace("Placeholder.", "   ")).expect("write the capture");
+    assert_eq!(app.post("/api/reindex", None).await.status, StatusCode::OK);
+
+    let draft = app.get(&format!("/api/ideas/{idea}/draft")).await;
+    assert_eq!(draft.status, StatusCode::OK);
+    assert_eq!(
+        draft.body["markdown"],
+        "# Dungeon seeds\n\nSeeds should decide the loot.\n"
+    );
+
+    let sources = draft.body["sources"].as_array().expect("sources");
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    assert_eq!(sources[0]["id"], said);
+
+    // And not in `missing` either. That list is for evidence nobody can read,
+    // which is worth saying out loud; this file is perfectly readable and simply
+    // has nothing in it. The thread still holds it.
+    assert!(
+        draft.body["missing"]
+            .as_array()
+            .expect("missing")
+            .is_empty()
+    );
+    assert_eq!(
+        app.get(&format!("/api/ideas/{idea}")).await.body["captures"]
+            .as_array()
+            .expect("captures")
+            .len(),
+        2
     );
 }
 

@@ -408,7 +408,9 @@ export interface paths {
          *     and the association can be recorded again without losing anything.
          *
          *     Every capture the idea still holds is here, and the ones whose files are gone
-         *     are named in `missing` so that a short draft says it is short.
+         *     are named in `missing` so that a short draft says it is short. A capture that
+         *     is readable and blank is in neither list: it put nothing in the markdown, and
+         *     `sources` names what the markdown was made of.
          */
         get: operations["read_idea_draft"];
         put?: never;
@@ -1287,7 +1289,11 @@ export interface components {
              */
             missing: components["schemas"]["CaptureId"][];
             promoted_to?: null | components["schemas"]["Slug"];
-            /** @description The captures that went into it, in the order they appear. */
+            /**
+             * @description The captures that went into it, in the order they appear. A connected
+             *     capture whose text is blank is not one of them: it put no paragraph in
+             *     the markdown, so there is nothing here for it to be the source of.
+             */
             sources: components["schemas"]["DraftSource"][];
             /**
              * @description What the page is proposed to be called: the idea's name, unchanged.
