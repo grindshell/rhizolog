@@ -17,7 +17,7 @@ Setup and versions live in [Tech stack](tech-stack.md).
 | `/times` | The time log: running timers, entries, groups; narrowed by `?q=`, `?name=`, `?page=` |
 | `/inbox` | Idea Inbox: the capture field, the chronological inbox, candidate suggestions and one rediscovery card; narrowed by `?q=` and `?show=` |
 | `/ideas` | Idea threads grouped by lifecycle state; narrowed by `?state=` and `?integrity=` |
-| `/ideas/:id` | One thread: its receipt, its captures, and every decision that can be taken about it |
+| `/ideas/:id` | One thread: its receipt, its captures, every decision that can be taken about it, and the way out into the wiki |
 | `/accounts` | Accounts, and — on a wiki that has none — the form that creates the first |
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
@@ -38,6 +38,34 @@ contains no slashes. There is no `/captures/:id` beside it for the `/times/:id`
 reason and one more: a capture is working material rather than a document, and
 the deliberate way to make one into something you would send somebody is to
 promote the idea holding it into a page.
+
+## Promoting is three requests, and the button says which one is left
+
+The promotion panel on `/ideas/:id` is the API's three steps with a form around
+them: read the draft, create an ordinary page, record what the idea became. It
+does not hide that it is three, because the interesting case is the one where the
+second succeeds and the third does not, and a UI that presented the whole thing
+as one action would have nothing useful to say when that happened.
+
+So it keeps one piece of state: the slug of a page it knows exists. Until then
+the button reads **Create the page and record it**; afterwards it reads **Record
+the page**, and pressing it does the association alone. That covers the failure
+and one more case for free: a `409 page_already_exists` sets the same flag, so
+somebody who wrote the page by hand first gets a form offering to record it
+rather than a refusal to work around. Recording is idempotent at the server, so
+pressing the button twice is safe; creating is not, so it is never repeated.
+
+The draft is fetched only when the panel is opened, with `open` as the resource's
+source. It is assembled from every capture in the thread and most visits to this
+screen are about reading the receipt.
+
+Three fields, and no more: slug, title, and the markdown. The slug is suggested
+from the idea's name and everything is editable, because the draft is a starting
+point rather than an output. Tags and visibility are deliberately absent: the
+page is an ordinary page from the moment it exists, the editor already has both
+controls, and a second set here would be a second place for them to disagree. On
+a wiki with accounts the form says what it is about to do, because a capture is
+private working material and a page is not.
 
 ## A screen that has an answer keeps showing it
 
@@ -399,6 +427,14 @@ What is covered is the part where the bugs were, not the part that is easy:
   are behind one control with no standalone New beside it, and that timers, pins
   and the account are all still reachable. It is the check that a navigation
   rewritten for a phone did not quietly drop a route on the way.
+- **That promoting retries only what is missing.** The page is created, the
+  association fails, and the second attempt makes exactly one request: the
+  association. A page that already exists takes the same path from the other end,
+  from a `409` rather than from a success. Both fail without the one condition
+  that skips the create, which is the whole reason promotion is three steps.
+- **That an edited draft survives a refused page.** It is the same rule the
+  capture field lives by: what somebody typed is the only copy of it, and a form
+  that emptied itself on a failure would have thrown the edit away.
 
 Modified clicks are covered too, because intercepting one would break opening a
 page in a new tab, and nothing about the code makes that obvious.

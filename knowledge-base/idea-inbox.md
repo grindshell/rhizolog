@@ -1,14 +1,19 @@
-# Idea Inbox implementation plan
+# Idea Inbox
 
-Status: in progress. **Phases I0 through I4 are built**: the authored model and
+Status: **built**. Phases I0 through I5 are complete: the authored model and
 store, the derived index that folds decisions into current state, the
 owner-scoped HTTP API over both, the explainable half (`tfidf/v1` candidates and
-`idea-momentum/v1` lifecycle receipts), and the dashboard over the lot. The whole
-loop can be walked in a browser at 375 pixels wide: capture, connect, see why,
-reject a wrong suggestion, retire, reopen and rediscover. What is left is the way
-out into the wiki. The phases and completion gates below remain the handoff for
-the rest, and [What is built so far](#what-is-built-so-far) records where the
-code has departed from this page.
+`idea-momentum/v1` lifecycle receipts), the dashboard over the lot, and the way
+out into the wiki. The whole loop can be walked in a browser at 375 pixels wide:
+capture, connect, see why, reject a wrong suggestion, retire, reopen, rediscover
+and promote.
+
+This page began as the implementation plan and is now the record of one. The
+phases and their completion gates are kept rather than deleted, because they say
+what each slice had to prove and a later change still has to keep proving it;
+[What is built so far](#what-is-built-so-far) names every place the code
+departed from the plan above it. Where the two disagree, the code is what runs
+and this page is why.
 
 Idea Inbox gives Rhizolog a low-friction place to capture unfinished thoughts,
 notice which ones recur, and turn a mature idea into a wiki page. A capture is
@@ -739,6 +744,8 @@ reopen and rediscover.
 
 ### I5: promotion and documentation closure
 
+**Built.** See [What is built so far](#what-is-built-so-far).
+
 - Add the draft and promotion endpoints.
 - Create a page through the existing page contract and record the association.
 - Update Architecture, API design, The dashboard, Product vision, `AGENTS.md`
@@ -760,12 +767,12 @@ functions of stated inputs with no access to the index or the disk.
 the two pure modules read and hands it over whole. `index/schema.rs`,
 `index/sync.rs`, `watcher.rs` and `server.rs` carry all of it into startup,
 reconciliation and live pickup of external edits, and `api/ideas.rs` is the
-twenty-three endpoints over the lot.
+twenty-five endpoints over the lot.
 
 In `frontend/`, `routes/{Inbox,Ideas,IdeaDetail}.tsx` are the three screens,
 `components/Candidates.tsx` is the suggestion panel both of the first two use,
 `components/Rediscovery.tsx` is the card and the pure function that chooses it,
-and `api/client.ts` grew the twenty-three typed calls. `components/Layout.tsx`
+and `api/client.ts` grew the twenty-five typed calls. `components/Layout.tsx`
 is the shell, rebuilt for a phone.
 
 ### Nothing is created until something is written
@@ -1159,6 +1166,74 @@ stat, the heat map inside its own `overflow-x-auto`, and the account form's
 username hint each set the width of the page they were on. Three classes fixed
 all three, and they are recorded here rather than in a commit message because
 the next component to use `grid` will hit it again.
+
+### The draft is a copy, and it says what it could not copy
+
+`GET /api/ideas/{id}/draft` assembles a heading from the idea's name, the
+thread's note if it has one, and every capture it still holds, oldest first,
+separated by blank lines. Each block is trimmed at its ends and untouched
+between them: the blank line a frontmatter block leaves behind and the file's
+trailing newline are not part of what anybody wrote, and everything else is.
+Nothing is summarised, reordered, deduplicated or interpreted. A draft that
+improved on its sources would be the first place this product stopped keeping
+its promise.
+
+**Nothing in the markdown says where a paragraph came from.** Provenance is in
+the response instead, as ids and timestamps, because the alternative is handing
+somebody prose of ours to delete out of their own page. Connected captures whose
+files are gone are listed in `missing`, so a draft that is short of something
+says so rather than coming back quietly shorter. Archived captures are in it:
+archived means processed, and dropping the older half of a thread would be the
+wrong reading of both words.
+
+**There is no capture selection, which the plan's endpoint table implies there
+would be.** The caller creates the page themselves from markdown they can edit,
+so any subset is a text edit away, and a server-side selector would be a second
+way to do the same thing with its own error cases and its own answer to "what if
+you name a capture the idea does not hold". The gate is stronger without it:
+every source capture is in the draft, always.
+
+Reading a draft writes nothing. It is a suggestion about a page that does not
+exist, and there is nothing about it to record.
+
+### Promotion is three steps, and only the last one is safe to repeat
+
+The API refuses to pretend that creating a page and recording the association are
+one operation, because they are two authored writes and two index updates and no
+amount of API design makes them a transaction. What the three-step shape buys is
+the failure it can recover from: if the page is written and the association is
+not, the page still exists and `PUT /api/ideas/{id}/promotion` is idempotent, so
+sending it again finishes the job rather than writing a second page.
+
+The dashboard's panel is that sequence with a form around it, and it keeps
+exactly one piece of state: the slug of a page it knows exists. The button reads
+**Create the page and record it** until then and **Record the page** afterwards.
+A `409 page_already_exists` sets the same flag, which gets the other case free:
+somebody who wrote the page by hand first is offered a form that records it
+rather than a refusal to work around.
+
+**The page has to exist and be readable by the caller**, and a page that is
+neither gets one answer, `404 idea_promotion_page_not_found`. Distinguishing them
+would answer questions about another account's wiki for the price of guessing a
+slug, which is the rule that already sends a private page's read to `404` rather
+than `403`. It is checked against the file that was just read rather than against
+the index, exactly as `GET /api/pages/{slug}` does, so a page whose frontmatter
+changed a moment ago is not judged by what it used to say. A page that will not
+*parse* is the one thing reported as itself: that read already reports a
+malformed page to anybody before it consults visibility, so saying so here
+discloses nothing new and hiding it would swallow a real fault.
+
+**Nothing is consumed.** No capture is archived, disconnected or deleted, and the
+idea is not retired: promotion is something that happened to a thread, not a way
+of spending one, and the sources of a promoted page have to stay readable. What
+does move is `last_signal`, because `idea_promoted` is one of the four events the
+fold counts as a signal. That is the ruleset's decision and it is the right one:
+writing the page up is the strongest evidence there is that the idea is live.
+
+Recording the same slug twice writes no second event. Recording a different one
+writes a new event, makes that slug the current `promoted_to`, and leaves the
+earlier association in the log, because an idea that became one page and then
+another has done both of those things.
 
 ## Test strategy
 

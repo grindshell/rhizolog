@@ -39,6 +39,10 @@ harmless and needs no suppression logic.
     times/
       2026-08/
         20260806T142530-123456789.md      # NOT derived; the only copy
+    ideas/
+      captures/2026-08/                   # NOT derived; the only copy
+      threads/
+      events/2026-08/
     users/
       tim.md                              # NOT derived, and secret
 ```
@@ -47,10 +51,10 @@ The walker skips any directory beginning with `.`, which keeps `.rhizolog/`
 and `.git/` out of the wiki.
 
 `.rhizolog/` is therefore **not all disposable**, despite what its name
-suggests. The database is; the time log beside it is authored data with no
-other copy. See [Time tracking](time-tracking.md) for why it sits under a
-dot-directory rather than in plain sight, and ignore the derived files by
-name rather than the whole directory in a wiki kept in git.
+suggests. The database is; the time log and the idea inbox beside it are
+authored data with no other copy. See [Time tracking](time-tracking.md) for why
+they sit under a dot-directory rather than in plain sight, and ignore the
+derived files by name rather than the whole directory in a wiki kept in git.
 
 Four kinds of thing live there, and they want different treatment:
 
@@ -58,8 +62,14 @@ Four kinds of thing live there, and they want different treatment:
 |---|---|
 | `index.db` | **derived** — rebuilt from the wiki; deleting it costs one scan |
 | `times/` | **authored** — the only copy; back it up, commit it |
+| `ideas/` | **authored** as well: captures, threads and decisions, and the only copy of them |
 | `users/` | **authored, and secret** — the only copy; back it up, do *not* commit it |
 | `server.json` | **volatile** — where a running server is; meaningless once it stops |
+
+`ideas/` appears on the first capture rather than when the store is opened, and
+that is not tidiness: `server::start` opens the stores and then watches the wiki,
+so a store that created directories would be the server writing into the tree it
+is about to watch. See [Idea Inbox](idea-inbox.md).
 
 `users/` is the odd one: authored data, so it belongs with `times/`, and every
 file in it carries an Argon2 hash of a real password, so it is the one authored
@@ -301,6 +311,18 @@ pages_fts                               -- FTS5 over (slug unindexed, title, bod
 times(id PK, name, started, ended, has_note, updated, size)
 time_pages(time_id, target)             -- the pages an entry was spent on
 times_fts                               -- FTS5 over (id unindexed, name, note)
+idea_captures(id PK, owner, created, updated, size)
+idea_captures_fts                       -- FTS5 over (id unindexed, body)
+idea_terms(capture_id, term, occurrences)      -- the analyzer's unigrams and bigrams
+idea_threads(id PK, owner, name, created, updated, size)
+idea_seed_captures(idea_id, capture_id)        -- what a thread was started from
+idea_events(id PK, owner, kind, idea_id, capture_id, other_capture_id,
+            page_slug, created, updated, size)
+idea_membership(idea_id, capture_id)           -- folded from the events
+idea_rejections(idea_id, capture_id)           -- folded
+idea_capture_rejections(capture_id, other_capture_id)   -- folded
+idea_capture_state(capture_id, archived)       -- folded
+idea_thread_state(idea_id, retired, promoted_to, last_signal)  -- folded
 ```
 
 `times` is derived from the files under `.rhizolog/times/`, exactly as `pages`
@@ -315,6 +337,18 @@ would drown its backlinks and make it the most-linked page in the wiki. See
 `ended` and `started`, not `end` and `start`: `end` closes a `case` in SQLite,
 and a column that must be quoted in every query it appears in is a column that
 eventually will not be.
+
+Five of the `idea_*` tables are **folds**: membership, the two kinds of
+rejection, capture state and thread state. Every one of them is recomputed by a
+single statement over `idea_seed_captures` and `idea_events`,
+keyed on whatever just changed, and each ends in `order by id desc limit 1`,
+which is latest-decision-wins spelled in SQL. There is no separate rebuild path,
+so a rebuild and an incremental update cannot disagree about what an idea holds.
+What is deliberately *not* here is any lifecycle state or momentum: those are
+computed when read, from these rows and an instant, so the same files answer
+differently tomorrow. `idea_membership` carries no foreign key to
+`idea_captures` on purpose, which is what makes a thread able to say what
+evidence it has lost. See [Idea Inbox](idea-inbox.md).
 
 `visibility`, `owner` and `page_readers` are what every page-returning query
 filters on, and they are derived like everything else here — the frontmatter is
@@ -501,9 +535,12 @@ src/
   markdown.rs    comrak render, link extraction, wikilink rewriting
   store.rs       filesystem read/write/list/delete/move
   times/         TimeId, TimeEntry, the time log on disk, statistics
+  ideas/         captures, threads and decisions: the store, the rules, and the
+                 two pure halves (analysis.rs, lifecycle.rs) that explain them
   users/         Username, User, the accounts on disk, password hashing
   auth.rs        who a request is: sessions, the Viewer, the gate in front of /api
-  index/         SQLite: schema, upsert, search, links, tags, pins, times, sessions, stats
+  index/         SQLite: schema, upsert, search, links, tags, pins, times, ideas,
+                 sessions, stats
                  audience.rs: the one visibility predicate every page query pastes in
   watcher.rs     notify -> reindex queue
   assets.rs      the built dashboard: Dir | Embedded | None
@@ -518,7 +555,7 @@ second copy is where they quietly diverge, and the third would be the one
 holding password hashes.
 
 `server.rs` holds everything between "here is a config" and "it is serving":
-opening the three stores, reconciling the index, binding, starting the watcher
+opening the four stores, reconciling the index, binding, starting the watcher
 and the usage flusher, and stopping all of them again afterwards. It is not in
 `main.rs` because that sequence has more than one driver, and they differ only
 in the last step — a console binary stops on Ctrl-C, a desktop shell stops when

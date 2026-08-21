@@ -19,6 +19,15 @@ What sets it apart:
   dashboard for searching and authoring pages and checking meta-stats (links
   between pages, tags, API usage, etc.). See `knowledge-base/accounts.md` and
   `knowledge-base/visibility.md`.
+- **It keeps unfinished thoughts too.** Idea Inbox is built: capture takes one
+  text field and one action, a local `tfidf/v1` analyzer proposes which captures
+  belong together without ever connecting them, `idea-momentum/v1` derives a
+  lifecycle state and a momentum with a receipt showing the arithmetic, and a
+  mature idea is **promoted** into an ordinary page through the ordinary page
+  API. Every automatic claim it makes comes with the authored captures it was
+  derived from, and nothing about it is a feed: one rediscovery card at most, no
+  notifications, no record that anybody was shown one. See
+  `knowledge-base/idea-inbox.md`.
 
 ## Repository layout
 

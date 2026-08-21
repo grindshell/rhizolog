@@ -45,6 +45,50 @@ storage model it sits on.
 | `GET` | `/api-docs/openapi.json` | Generated OpenAPI document |
 | `GET` | `/swagger-ui` | Swagger UI |
 
+### Idea Inbox is twenty-five more, and none of them answers a stranger
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`, `POST` | `/api/captures` | The inbox, newest first; save one thought |
+| `GET`, `PATCH`, `DELETE` | `/api/captures/{id}` | Read it, correct it, delete it for good |
+| `POST` | `/api/captures/{id}/archive`, `/restore` | Out of the inbox, and back |
+| `GET` | `/api/captures/{id}/candidates` | What it might belong with, and the arithmetic |
+| `PUT`, `DELETE` | `/api/captures/{id}/rejections/{other_id}` | Never suggest this pair; reconsider it |
+| `GET`, `POST` | `/api/ideas` | Threads, by `state` and `integrity` at an `at`; start one |
+| `GET`, `PATCH` | `/api/ideas/{id}` | One thread; rename it or edit its note |
+| `PUT`, `DELETE` | `/api/ideas/{id}/captures/{capture_id}` | Connect a capture; disconnect it |
+| `PUT`, `DELETE` | `/api/ideas/{id}/rejections/{capture_id}` | Reject a candidate; reconsider it |
+| `POST` | `/api/ideas/{id}/affirm`, `/retire`, `/reopen`, `/dismiss` | The four acts |
+| `GET` | `/api/ideas/{id}/receipt` | Every number behind the state, at an optional `at` |
+| `GET` | `/api/ideas/{id}/draft` | The page this idea would make |
+| `PUT` | `/api/ideas/{id}/promotion` | Record the page it produced |
+
+Three things about that surface are decisions rather than shape.
+
+**Deciding is `PUT` and `DELETE`; acting is `POST`.** The state a client is
+asking for is in the URL, so connecting a capture twice writes one event and the
+plan's "duplicate idempotent API actions do not write duplicate events" is
+enforced by the route rather than by a check somebody has to remember. The four
+`POST`s are the ones that mean something every time they happen: affirming twice
+is two affirmations at two moments and both are real.
+
+**Every idea route needs an account once one exists, and
+`RHIZOLOG_ANONYMOUS_READ` does not widen that.** A record belonging to another
+account is reported **missing**, not forbidden, for the reason page visibility
+answers `404`: a caller able to tell the two apart would have an existence oracle
+for somebody else's notes, and a similarity score would be a much better one.
+
+**Promotion is three steps and refuses to pretend otherwise.** `GET .../draft`
+assembles the markdown, the caller creates an ordinary page through
+`POST /api/pages`, and `PUT .../promotion` records the slug. Two authored writes
+and two index updates are not one transaction, so the API does not offer them as
+one; what that buys is a failure it can recover from, because recording is
+idempotent and creating is not repeated. Recording the same slug twice writes no
+second event; recording a different one makes that the current answer and leaves
+the earlier association in the log. The page has to exist and be readable by the
+caller, and `idea_promotion_page_not_found` is the same answer either way. See
+[Idea Inbox](idea-inbox.md).
+
 ### `?prefix=` and `?segment=` are two different questions
 
 Both filter on a slug's path, and the difference is the point. For

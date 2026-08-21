@@ -105,6 +105,11 @@ what is outstanding.
   `?at=2026-08-06T18:00:00Z&offset=0`, because the committed entries are pinned
   to 30 July to 6 August 2026 and a request without it returns an empty week and
   renders blank.
+- **The landing page does not know Idea Inbox exists.** It sells files on disk,
+  the API and the link graph, all of which predate it. Capture, explainable
+  recurrence and promotion are the part of this product that nothing else does,
+  and the page that argues for it says nothing about them. Needs its own section
+  and probably its own figure, which is a writing job rather than a code one.
 - **`/docs` does not exist.** The nav's Docs entry points at the mirror's
   README, which is genuinely the documentation until there is something here.
   This is half of why Astro was chosen: the docs are markdown, and content
@@ -173,19 +178,21 @@ pieces that are known to be missing.
 
 ## Idea Inbox
 
-The implementation direction is settled and recorded in
-[Idea Inbox implementation plan](knowledge-base/idea-inbox.md). **Phases I0
-through I4 are built**: the authored model and store, the derived index that
-folds decisions into current state, the owner-scoped HTTP API over both, the
-explainable half (`tfidf/v1` candidates and `idea-momentum/v1` lifecycle
-receipts), and the dashboard over the lot. **The whole loop can now be walked in
-a browser, on a phone**: capture, connect, see why, reject a wrong suggestion,
-retire, reopen and rediscover. What it does not have is a way out into the wiki.
+**Built**, phases I0 through I5, and recorded in
+[Idea Inbox](knowledge-base/idea-inbox.md): the authored model and store, the
+derived index that folds decisions into current state, the owner-scoped HTTP API
+over both, the explainable half (`tfidf/v1` candidates and `idea-momentum/v1`
+lifecycle receipts), the dashboard over the lot, and promotion into an ordinary
+page. **The whole loop can be walked in a browser, on a phone**: capture,
+connect, see why, reject a wrong suggestion, retire, reopen, rediscover and
+promote.
 
-- **No promotion path.** `GET /api/ideas/{id}/draft` and
-  `PUT /api/ideas/{id}/promotion` are the last two endpoints in the plan. The
-  event kind, the fold and the `promoted_to` field all exist and are exercised;
-  what is missing is assembling the draft and recording the association. I5.
+What is not done, in the order it is likely to matter:
+
+- **The draft takes no capture selection.** Every capture the idea holds is in
+  it, and choosing a subset is an edit in the form. The plan's endpoint table
+  implies a selector; the reasoning for not building one is on the Idea Inbox
+  page, and it is the kind of thing use will settle.
 - **The ideas screen reads the whole listing and groups it in the browser.** It
   asks for 200, which is the API's ceiling, and there is no paging control. The
   states are grouped on that screen, and a page boundary in the middle of Dormant
@@ -210,9 +217,13 @@ retire, reopen and rediscover. What it does not have is a way out into the wiki.
   shown appears literally in text the user wrote. Revisit only after real false
   negatives, and only with a version bump.
 
-Do not add LLM summaries, embeddings, automatic membership, notifications,
-tasks or a native mobile app while this slice is in progress. Those are later
-questions gated on observed use, not missing pieces of the MVP.
+The performance gate is the one of these with a number attached, and it is
+unmet: 1,000, 5,000 and 10,000 scratch captures, three runs each, before anybody
+decides whether a centroid cache is needed.
+
+Do not add LLM summaries, embeddings, automatic membership, notifications, tasks
+or a native mobile app. Those are gated on observed use of what is now built,
+not missing pieces of it.
 
 ## Rough edges
 

@@ -31,12 +31,33 @@ disk. [Page visibility](visibility.md) is the other half: which of those named
 accounts a given page is for, and the one rule that has to be applied to every
 query rather than to the page read alone.
 
+## It keeps unfinished thoughts too, and says why it thinks they recur
+
+A wiki page is something you have decided. Most of what a knowledge base is made
+of arrives long before that, and the promise Idea Inbox makes is deliberately
+one sentence:
+
+> Rhizolog notices which ideas keep coming back, and shows why it thinks so.
+
+Capture takes one text field and one action: no title, no slug, no tag, no
+interpretation. The analysis that follows is local, deterministic and advisory,
+and it never connects anything by itself. Every claim it makes, every lifecycle
+label and every momentum score comes with the arithmetic that produced it and the
+captures the arithmetic counted, so a number can be checked rather than believed.
+
+Nothing about it is an engagement product. There is one rediscovery card at most,
+no feed, no streaks, no notifications, and no record that anybody was shown
+anything. A mature idea leaves by being **promoted**: an ordinary page, written
+through the ordinary page API, with the captures still where they were. See
+[Idea Inbox](idea-inbox.md).
+
 ## Interface
 
 An admin dashboard-style UI (reflecting the single-user focus) that supports:
 
 - searching wiki pages
 - authoring wiki pages
+- capturing unfinished thoughts, and promoting one into a page when it is ready
 - viewing the wiki's meta-stats: links between pages, tags, API usage, etc.
 
 ## The licence is AGPL-3.0-or-later, because this is a server

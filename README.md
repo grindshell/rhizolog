@@ -29,6 +29,11 @@ What makes it different from the wikis you already know:
   was spent on and the dashboard will tell you where the hours went. Entries
   are files as well, so `git log` gives you a history of your time nobody had
   to build.
+- **It keeps unfinished thoughts.** Idea Inbox takes a thought in one text field
+  and one action, notices which ones keep coming back, and shows the arithmetic
+  behind every word it says about them. When one is ready it becomes an ordinary
+  page. No LLM, no embeddings, no network request, and nothing is ever connected
+  without you saying so.
 
 ## Quick start
 
@@ -167,6 +172,53 @@ as backlinks. That is deliberate: a page you actually work on collects an entry
 every time you start a timer, and folding hundreds of them into the link graph
 would bury the links.
 
+## Idea Inbox
+
+Most of what a knowledge base is made of arrives before you have decided
+anything, and a page is a decision. The inbox is where the rest goes.
+
+A capture is one piece of text and nothing else. No title, no slug, no tag, no
+folder:
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:3000/api/captures -Method Post -ContentType application/json -Body '{"text":"Dungeon quests should require finding particular seeds."}'
+```
+
+Captures live in `<root>/.rhizolog/ideas/`, with the threads you name and every
+decision you take about them. Like the time log it is authored data with no other
+copy, and unlike the accounts it holds no secrets, so commit it with the wiki if
+the wiki is in git. Captures are not pages: they stay out of search, the link
+graph, tags, orphans and wanted pages until you promote one.
+
+Ask what a capture might belong with and you get up to three suggestions, each
+with the words the two share and what each word was worth:
+
+```
+GET /api/captures/{id}/candidates
+```
+
+That is `tfidf/v1`: term frequency over your own captures and nobody else's,
+computed locally, with no model and no network. It is advisory and it stays
+advisory. **Nothing is ever connected for you**, however alike two thoughts look.
+
+Connect a few and the thread gets a lifecycle state and a momentum score, worked
+out when you read it rather than stored, so the same files answer differently
+tomorrow. `GET /api/ideas/{id}/receipt` shows the whole sum: every component,
+the window each was measured against, and every capture and decision that was
+counted. An idea whose captures you deleted gets no state and no score at all,
+and says so, because there is nothing left to derive one from.
+
+Opening the inbox may offer **one** rediscovery card: a dormant thread with more
+than one capture, chosen from the day's date so refreshing does not deal another.
+Say you are still interested or dismiss it for thirty days. There are no
+notifications, no streaks, and nothing is written down about having shown it.
+
+When a thread is ready, promote it. That is three steps on purpose:
+`GET /api/ideas/{id}/draft` assembles the markdown from every capture it holds,
+you create an ordinary page with the ordinary page API, and
+`PUT /api/ideas/{id}/promotion` records what it became. The dashboard does all
+three from one form. The captures stay exactly where they were.
+
 ## Configuration
 
 All optional, all environment variables.
@@ -176,6 +228,7 @@ All optional, all environment variables.
 | `RHIZOLOG_ROOT` | `./wiki` | The wiki directory. Created if missing. |
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | The derived index. Safe to delete. |
 | none | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
+| none | `<root>/.rhizolog/ideas/` | Captures, threads and decisions. **Not** derived; back it up. |
 | none | `<root>/.rhizolog/users/` | Accounts. **Not** derived, and secret; back it up, don't commit it. |
 | none | `<root>/.rhizolog/server.json` | Where the running server is. Gone when it stops. |
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Where to listen. |
@@ -321,7 +374,7 @@ Backend, from `backend/`:
 
 ```
 cargo run        # start the server
-cargo test       # 376 tests
+cargo test       # 688 tests
 cargo fmt
 cargo clippy
 ```
@@ -332,7 +385,7 @@ the executable, so it can be run anywhere without a `dist/` beside it. It needs
 
 ```
 cargo build --features embed-assets
-cargo test --features embed-assets    # 382 tests
+cargo test --features embed-assets    # 694 tests
 ```
 
 A directory that exists still wins, so this changes nothing when you are working
@@ -478,7 +531,9 @@ The MVP is complete: pages, search, tags, the link graph, meta-stats, live
 pickup of outside edits, and a dashboard you can write in. Since then: pinned
 pages, time tracking end to end (timers, manual entries, notes, groups, search
 over the log, and the statistics section), the drawn graph, the desktop app
-described above, and accounts with per-page visibility.
+described above, accounts with per-page visibility, and Idea Inbox end to end
+(capture, local candidates, lifecycle receipts, rediscovery and promotion into a
+page).
 
 What is still thin about serving one over a network is the operational half:
 there is no TLS of its own, no rate limiting on sign-in, and no audit log.
