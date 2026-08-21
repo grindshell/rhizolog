@@ -375,13 +375,16 @@ describe('promotion', () => {
     expect((screen.getByLabelText('Page slug') as HTMLInputElement).value).toBe(
       'dungeon-seeds',
     )
+    // Empty on purpose: the markdown opens with the name as a heading, and a
+    // page with no `title` takes its title from there. Filling this in would
+    // freeze a title the wiki is perfectly able to derive.
+    expect((screen.getByLabelText('Page title') as HTMLInputElement).value).toBe('')
 
     fireEvent.click(screen.getByText('Create the page and record it'))
 
     await waitFor(() =>
       expect(api.createPage).toHaveBeenCalledWith({
         slug: 'dungeon-seeds',
-        title: 'Dungeon seeds',
         content: MARKDOWN,
       }),
     )
@@ -416,7 +419,10 @@ describe('promotion', () => {
 
   /**
    * A page somebody made earlier is the same situation as one this form made a
-   * moment ago: it exists, and only the association is left.
+   * moment ago: it exists, and only the association is left. So it is not a
+   * failure, and showing it as one alongside the line saying what to do next
+   * was two contradictory answers to the same press. It does have to say that
+   * the page is somebody else's writing, since the draft was not saved.
    */
   it('offers to record a page that was already there', async () => {
     const screen = await promoting()
@@ -427,6 +433,8 @@ describe('promotion', () => {
     fireEvent.click(screen.getByText('Create the page and record it'))
 
     await waitFor(() => expect(screen.getByText('Record the page')).toBeTruthy())
+    expect(screen.queryByText(/a page is already at dungeon-seeds/)).toBeNull()
+    expect(screen.getByText(/was not saved/)).toBeTruthy()
     expect(api.recordPromotion).not.toHaveBeenCalled()
 
     api.recordPromotion.mockResolvedValue(idea({ promoted_to: 'dungeon-seeds' }))

@@ -596,6 +596,7 @@ function Promotion(props: { idea: IdeaView; onPromoted: () => void }) {
   const [title, setTitle] = createSignal<string>()
   const [body, setBody] = createSignal<string>()
   const [written, setWritten] = createSignal<string>()
+  const [alreadyThere, setAlreadyThere] = createSignal<string>()
   const [saving, setSaving] = createSignal(false)
   const [failure, setFailure] = createSignal<unknown>()
 
@@ -607,9 +608,19 @@ function Promotion(props: { idea: IdeaView; onPromoted: () => void }) {
   // with an effect that fills the fields in, because there is no moment at which
   // the two could disagree: an untouched field is the suggestion by definition.
   const slugField = () => slug() ?? suggestSlug(assembled()?.title ?? '')
-  const titleField = () => title() ?? assembled()?.title ?? ''
+  // Empty, and deliberately not the idea's name. The draft already opens with
+  // that name as its heading, and a page with no `title` in its frontmatter
+  // takes its title from the heading, so suggesting one here would write the
+  // same words down twice and let the copies disagree the first time somebody
+  // edits the heading. The editor leaves its own title field empty for exactly
+  // this reason.
+  const titleField = () => title() ?? ''
   const bodyField = () => body() ?? assembled()?.markdown ?? ''
   const exists = () => written() !== undefined && written() === slugField().trim()
+  // Of the two ways a page can be at that slug, this is the one where somebody
+  // else put it there and what is in the form was never saved.
+  const untouched = () =>
+    alreadyThere() !== undefined && alreadyThere() === slugField().trim()
 
   const close = () => {
     setOpen(false)
@@ -617,6 +628,7 @@ function Promotion(props: { idea: IdeaView; onPromoted: () => void }) {
     setTitle(undefined)
     setBody(undefined)
     setWritten(undefined)
+    setAlreadyThere(undefined)
     setFailure(undefined)
   }
 
@@ -642,8 +654,15 @@ function Promotion(props: { idea: IdeaView; onPromoted: () => void }) {
     } catch (error) {
       // A page already at that slug is the same situation as one this form
       // wrote a moment ago: the page exists, and only the association is left.
+      // So it is a step rather than a failure, and it is not reported as one;
+      // showing a red alert above a line explaining what to do next was two
+      // contradictory answers to the same press. The line below the form says
+      // which of the two happened, since a page this did not write is one whose
+      // contents it must not claim to have saved.
       if (error instanceof ApiError && error.code === 'page_already_exists') {
         setWritten(target)
+        setAlreadyThere(target)
+        return
       }
       setFailure(error)
     } finally {
@@ -715,15 +734,23 @@ function Promotion(props: { idea: IdeaView; onPromoted: () => void }) {
                     />
                   </label>
                   <label class="flex flex-col gap-1">
-                    <span class="text-xs opacity-70">
-                      Title, or nothing for the heading below
-                    </span>
+                    <span class="text-xs opacity-70">Title</span>
                     <input
                       class="input input-bordered"
                       aria-label="Page title"
+                      aria-describedby="promotion-title-hint"
                       value={titleField()}
                       onInput={(event) => setTitle(event.currentTarget.value)}
                     />
+                    {/*
+                      Described rather than labelled. Folding the sentence into
+                      the label would make the accessible name a sentence too,
+                      and a visible label has to be part of the name somebody
+                      hears, which "Title" inside "Page title" is.
+                    */}
+                    <span id="promotion-title-hint" class="text-xs opacity-50">
+                      Empty, and the heading below names the page.
+                    </span>
                   </label>
                 </div>
 
@@ -747,8 +774,21 @@ function Promotion(props: { idea: IdeaView; onPromoted: () => void }) {
 
                 <Show when={exists()}>
                   <p class="text-xs opacity-70">
-                    The page at {written()} exists. Only the link back to this idea is
-                    left to record, and asking again will not write a second page.
+                    <Show
+                      when={untouched()}
+                      fallback={
+                        <>
+                          The page at {written()} exists. Only the link back to this
+                          idea is left to record, and asking again will not write a
+                          second page.
+                        </>
+                      }
+                    >
+                      There is already a page at {written()}, and nothing here has
+                      changed it: what is in the box above was not saved. Recording
+                      links this idea to the page that is there. Change the slug to
+                      write a new one instead.
+                    </Show>
                   </p>
                 </Show>
 

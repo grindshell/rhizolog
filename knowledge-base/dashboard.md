@@ -55,17 +55,35 @@ somebody who wrote the page by hand first gets a form offering to record it
 rather than a refusal to work around. Recording is idempotent at the server, so
 pressing the button twice is safe; creating is not, so it is never repeated.
 
+A `409` handled that way is a step and not a failure, so it is not shown as one.
+An error panel above a line explaining what to do next is two contradictory
+answers to the same press. What the line has to add in that case is whose
+writing the page is: this form did not save the box above into it, and it says
+so, because the alternative is a screen that looks like the draft went
+somewhere.
+
 The draft is fetched only when the panel is opened, with `open` as the resource's
 source. It is assembled from every capture in the thread and most visits to this
 screen are about reading the receipt.
 
 Three fields, and no more: slug, title, and the markdown. The slug is suggested
 from the idea's name and everything is editable, because the draft is a starting
-point rather than an output. Tags and visibility are deliberately absent: the
-page is an ordinary page from the moment it exists, the editor already has both
-controls, and a second set here would be a second place for them to disagree. On
-a wiki with accounts the form says what it is about to do, because a capture is
-private working material and a page is not.
+point rather than an output. The title is the one field that starts empty, and
+that is not an oversight: the markdown opens with the idea's name as a heading,
+and a page whose frontmatter has no `title` takes its title from the heading.
+Suggesting one would write the same words down twice and let the copies drift
+apart the first time somebody edits the heading, which is the reason the editor
+leaves its own title field empty too. Tags and visibility are deliberately
+absent: the page is an ordinary page from the moment it exists, the editor
+already has both controls, and a second set here would be a second place for
+them to disagree. On a wiki with accounts the form says what it is about to do,
+because a capture is private working material and a page is not.
+
+The title field's hint is `aria-describedby` rather than part of its label. A
+sentence folded into a label becomes the accessible name, and a name that reads
+out a whole sentence is worse than one that reads out "Page title"; the visible
+"Title" is inside that name, which is what somebody using both eyes and a screen
+reader needs it to be.
 
 ## A screen that has an answer keeps showing it
 
