@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SectionView } from '../api/client'
-import { bounds, moved, spines } from './spine'
+import { bounds, entry, lands, moved, sameEntry, spines } from './spine'
 
 function section(over: Partial<SectionView> = {}): SectionView {
   return {
@@ -142,5 +142,48 @@ describe('where an entry sits in its list', () => {
   it('says nothing about a list it could not rebuild', () => {
     expect(bounds(lists, section({ parent: 'book/missing', ordinal: 0 }))).toBeUndefined()
     expect(bounds(lists, section({ parent: 'book', ordinal: 99 }))).toBeUndefined()
+  })
+})
+
+describe('where a drop can land', () => {
+  const chapter = entry(section({ parent: 'book', ordinal: 1 }))
+
+  it('is another entry in the same list', () => {
+    expect(lands(chapter, section({ parent: 'book', ordinal: 3 }))).toBe(true)
+    expect(lands(chapter, section({ parent: 'book', ordinal: 0 }))).toBe(true)
+  })
+
+  /**
+   * The rule the buttons are already on, and the one a drag makes it possible to
+   * break. The panel draws a flat, recursive manifest, so a chapter's own scenes
+   * sit between it and the next chapter and are most of what a dragged row passes
+   * over. A drop on one of those reads as both "before the part" and "into the
+   * part", and answering it would be picking one on somebody's behalf.
+   */
+  it('is never a row in another list, however near it is drawn', () => {
+    expect(lands(chapter, section({ parent: 'book/one', ordinal: 0 }))).toBe(false)
+    expect(lands(chapter, section({ parent: 'other', ordinal: 1 }))).toBe(false)
+  })
+
+  /** Nothing named the root, so there is no position of its to take. */
+  it('is not a row nothing named', () => {
+    expect(lands(chapter, section({ parent: undefined, ordinal: undefined }))).toBe(false)
+  })
+
+  it('is not the entry being dragged', () => {
+    expect(lands(chapter, section({ parent: 'book', ordinal: 1 }))).toBe(false)
+    expect(lands(undefined, section({ parent: 'book', ordinal: 1 }))).toBe(false)
+  })
+
+  /**
+   * Two rows can be one entry: a page under one excluded part and one included
+   * part is walked down both. Neither of them is a place the other can go, and
+   * both light up together when it is the one in hand.
+   */
+  it('reads two rows for one entry as that entry', () => {
+    const twice = entry(section({ parent: 'book/shared', ordinal: 0 }))
+    expect(sameEntry(chapter, entry(section({ parent: 'book', ordinal: 1 })))).toBe(true)
+    expect(sameEntry(chapter, twice)).toBe(false)
+    expect(sameEntry(chapter, undefined)).toBe(false)
   })
 })

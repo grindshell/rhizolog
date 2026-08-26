@@ -464,20 +464,36 @@ contents list that names it, which is a `PATCH` of that list and no new endpoint
 `GET /api/compile` gained the two fields that made it possible: `parent` and
 `ordinal` per section, saying which list named the entry and where in it.
 
+A row moves by being dragged onto another or by pressing one of its two buttons,
+and both are the same write, because the move takes a **position** rather than a
+direction. The buttons came first and the drag was laid over them, which is the
+order rather than the delay: a drag has no keyboard and none on a phone, so it can
+only ever be the second way in.
+
 The one rule worth carrying: **`ordinal` is an identity, not a row number.** A
 page reached down both an excluded path and an included one is walked twice, so
 its children appear in the manifest twice with the same ordinals. Rebuilding a
 contents list by counting rows would double it and write a book with every
 chapter in it twice.
 
+The one a drag added: the manifest the panel draws is **flat and recursive**, so
+a chapter's own scenes sit between it and the next chapter and are most of what a
+dragged row passes over. A drop on one of those reads as both "before the part"
+and "into the part", so it is refused, and every row a drop cannot land on dims
+while one is in hand.
+
 What is not done:
 
-- **A drag.** `TODO.md` called it the shape and it is a pair of buttons per row,
-  because the keyboard alternative a drag needs is a pair of buttons and this way
-  works on a phone. A drag can be laid over it and would end in the same write.
+- **A drag on a phone.** HTML5 drag and drop is a mouse gesture with no touch
+  equivalent. A pointer-events drag would be one and would need a threshold, its
+  own autoscroll and a hit test this gets from the browser for nothing. The
+  buttons are the answer there and were built to be.
+- **Dropping between two rows rather than onto one.** An insertion line needs a
+  geometry a flat, recursive manifest does not have: as often as not the gap
+  between two rows is a gap between two different lists.
 - **Moving a chapter between parts.** Two lists change, which is two writes and a
   question about the second failing. The panel says so rather than leaving
-  somebody to find out that the buttons will not do it.
+  somebody to find out that neither gesture will do it.
 - **The list written back is as old as the compile on screen.** A chapter added
   in your own editor since then is written out of the spine. Re-reading after the
   move makes it visible rather than silent; closing it properly means conditional

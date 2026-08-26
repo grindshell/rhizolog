@@ -2,8 +2,9 @@
 
 Status: **built**. A record rather than a plan: this was one of the three gaps
 [Drafting](drafting.md) named and left, and `TODO.md` had already settled the
-shape as "a drag that ends in a `PATCH` of `contents`". Half of that is what got
-built; the other half is argued below.
+shape as "a drag that ends in a `PATCH` of `contents`". The buttons came first
+and the drag was laid over them afterwards, which is argued below and is the
+order rather than the delay.
 
 [Long-form writing](long-form.md) made a decision and named its price:
 
@@ -18,7 +19,8 @@ book. That is worse than the thing the decision was protecting against.
 
 ## Goals
 
-- Move an entry within the list that names it, from the panel that draws it.
+- Move an entry within the list that names it, from the panel that draws it, by
+  dragging it or by pressing a button.
 - Never lose an entry a compile could not resolve. A gap, a repeat and a typo are
   all things somebody wrote.
 - No new endpoint, and no new frontmatter.
@@ -29,10 +31,12 @@ book. That is worse than the thing the decision was protecting against.
   question about what happens if the second fails. Editing the lists by hand is
   the way to do it and the panel says so out loud rather than leaving somebody to
   discover that the buttons will not do it.
-- **Freeform arrangement.** Refused once already, on the card view, and the
-  argument has not changed: order lives in frontmatter precisely so that nothing
-  about a display can reorder a book, and an x and a y per card would be exactly
-  that in a different coat.
+- **Freeform arrangement.** Refused once already, on the card view, and a drag
+  existing has not changed the argument: order lives in frontmatter precisely so
+  that nothing about a display can reorder a book, and an x and a y per card
+  would be exactly that in a different coat. What this drag moves is an entry in
+  a list, and where it lands is a position in that list rather than a place on
+  the screen.
 - **Adding or removing entries.** That is writing a book rather than arranging
   one, and the editor already does it.
 
@@ -100,20 +104,83 @@ after every move, which makes that visible rather than silent. Closing it proper
 means conditional writes, which is a thing this API does not have anywhere and
 should not grow in one corner.
 
-## Buttons, not a drag
+## Buttons first, and then a drag over them
 
-`TODO.md` said "a drag that ends in a `PATCH` of `contents` is the shape", and the
-shape is a pair of buttons per row.
+`TODO.md` said "a drag that ends in a `PATCH` of `contents` is the shape". The
+buttons were built first and the drag was laid over them afterwards, which is the
+order that mattered rather than a delay.
 
-A drag needs a keyboard alternative to be usable at all, and that alternative is a
-pair of buttons, so the real choice was between buttons and buttons plus a second
-way in. Buttons also work on a phone, where an HTML5 drag does not, and they are
-testable in jsdom, where drag events are mocked into something that proves very
-little. A drag can be laid over this later and would end in the same write.
+A drag has no keyboard and none on a phone, so whatever else it is, it can only
+ever be the second way in. Building it first would have meant building the
+buttons anyway and calling them the fallback; building them first meant the
+gesture had nothing to prove and could be refused outright if it did not work.
+Both end in the same `PATCH`, because `move` takes a **position** rather than a
+direction: a button asks for the place next door and a drop asks for the place it
+landed on, and neither of them is a different write.
 
-They are labelled by the entry rather than by the direction: a column of "Move up"
-buttons read out one after another says nothing about which chapter each one
-moves.
+The buttons are labelled by the entry rather than by the direction: a column of
+"Move up" buttons read out one after another says nothing about which chapter each
+one moves.
+
+### The row is what gets picked up, not the grip
+
+There is a grip beside the buttons and it is a **cue rather than a control**. The
+row carries `draggable`, so the drag starts anywhere on it. A grip is a small
+target and the drag image a browser makes of one is the glyph rather than the
+chapter, so the thing under the pointer during the drag would not be the thing
+being moved.
+
+It is hidden from assistive technology on purpose. A handle nothing can grab from
+a keyboard is a control that does not work, and the two buttons beside it are the
+ones that do.
+
+The link in a row is `draggable="false"` inside this view and untouched outside
+it. A link drags itself by default and that drag is of the link, not of the row
+under it. The price of the whole arrangement is that a row here cannot have its
+text selected, which is what being a mode is for.
+
+### A drop takes a position, and most rows have none to give
+
+Dropping onto a row means taking that row's place, which is `moved(list, from,
+to)` and is exactly what the buttons do one step at a time.
+
+The rule is the same one too, and a drag is what makes it possible to break: an
+entry moves within the list that names it. The panel draws a **flat, recursive**
+manifest, so a chapter's own scenes sit between it and the next chapter and are
+most of what a dragged row passes over. A drop on one of those reads as both
+"before the part" and "into the part", and answering it would be picking one on
+somebody's behalf. So it is refused, by the row simply not cancelling the
+`dragover`: the browser then draws the refusal itself, in the pointer, without
+anything here having to say it.
+
+Every row is dimmed while a drag is on unless the drop could land there, which
+teaches the rule rather than stating it. **The dimming is on the row and not on
+its controls**, and that is the difference that matters for the rows that have
+none: a section in a list this panel could not rebuild gets no buttons and cannot
+be dragged, and it is still nowhere a drop can go. Left bright beside eight rows
+that are dimmed, it would be the one row on screen claiming to accept what it
+will not.
+
+What is being dragged is held in a signal rather than in the drag's own
+`dataTransfer`. The payload is an entry in a list this panel is holding, so a drag
+arriving from another tab carrying the same slug would mean nothing here and must
+not be treated as though it did. The transfer is still filled in, because a drag
+with nothing in it is one some browsers decline to start, and because a row
+dropped into a text field somewhere else may as well type its slug.
+
+### What the tests can and cannot say about it
+
+jsdom has no `DragEvent` and no `DataTransfer`, so the tests dispatch cancelable
+events with a stub stapled on. What that proves is the wiring: which rows accept a
+drop, that a refused row leaves `defaultPrevented` false, and that the write a
+drop ends in is the write the buttons make. Whether a browser picks the row up,
+what the pointer shows and where the drop actually lands are the browser's, and
+none of it is visible from a fake DOM. That is the honest limit, and it is why the
+buttons are still what the rest of that block checks.
+
+The gesture was checked against a running server on `example-wiki/`, whose book
+has ten rows in three lists and is the shape the flat manifest makes awkward. A
+part picked up there dims eight of the other nine; the ninth is its only sibling.
 
 ## Reorder is a view, not a mode switch beside the views
 
@@ -141,9 +208,17 @@ accounts landed.
 
 ## What is not done
 
-- **A drag.** See above. The write it would end in exists.
+- **A drag on a phone.** HTML5 drag and drop is a mouse gesture and there is no
+  touch equivalent of it. A pointer-events drag would be one, and would need a
+  threshold, its own autoscroll and a hit test this gets from the browser for
+  nothing. The buttons are the answer there and were built to be.
+- **Dropping between two rows rather than onto one.** An insertion line is the
+  clearer affordance and it needs a geometry this list does not have: the gaps in
+  a flat, recursive manifest are between entries of different lists as often as
+  not, so half of them would mean nothing. Taking a row's place is unambiguous
+  everywhere.
 - **Moving between parts.** Two lists, two writes, and a question about the second
-  failing.
+  failing. A drag makes the gesture obvious and it is still the two writes.
 - **Undo.** A wiki directory is very likely a git repository, which is the answer
   [Architecture](architecture.md) already gives for history.
 - **Reordering from the card view.** Deliberate rather than pending.

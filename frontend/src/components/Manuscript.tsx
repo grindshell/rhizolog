@@ -5,8 +5,8 @@ import type { CompiledView, PageView, SectionView } from '../api/client'
 import { Async, ErrorNotice } from './Async'
 import Pace, { formatDay } from './Pace'
 import StageSummary, { StageBadge } from './Stages'
-import { bounds, moved, spines } from './spine'
-import type { Bounds } from './spine'
+import { bounds, entry, lands, moved, sameEntry, spines } from './spine'
+import type { Bounds, Entry } from './spine'
 
 /**
  * How the sections are shown, and whether they can be moved.
@@ -30,10 +30,18 @@ const VIEWS: { value: View; label: string; title: string }[] = [
   },
 ]
 
-/** What a row needs to offer its two buttons. */
+/** What a row needs to offer its two buttons and be dragged. */
 interface Reorder extends Bounds {
   busy: boolean
   move: (by: -1 | 1) => void
+  /** This row is the one being dragged. */
+  lifted: boolean
+  /** A drop here would put the dragged entry in this position. */
+  landing: boolean
+  lift: (event: DragEvent) => void
+  over: (event: DragEvent) => void
+  drop: (event: DragEvent) => void
+  release: () => void
 }
 
 /**
@@ -74,7 +82,8 @@ export default function Manuscript(props: { page: PageView }) {
   const [failure, setFailure] = createSignal<unknown>()
 
   /**
-   * Move one entry within the list that names it, and read the book back.
+   * Move one entry to a position within the list that names it, and read the
+   * book back.
    *
    * A `PATCH` of the parent's `contents:` and nothing else. There is no reorder
    * endpoint, deliberately: `contents` is already patchable, a second way to say
@@ -82,20 +91,23 @@ export default function Manuscript(props: { page: PageView }) {
    * is read-modify-write already, since saving in the editor replaces a page with
    * what was on screen when it opened.
    *
+   * `to` is a position rather than a direction, which is what lets one function
+   * serve both gestures: a button asks for the place next door and a drop asks
+   * for the place it landed on, and neither of them is a different write.
+   *
    * The list written back is rebuilt from the manifest this panel is showing, so
    * it is as old as the compile above it. A chapter added in your own editor
    * since then would be written back out of the spine. Refetching after the write
    * is what makes that visible rather than silent, and the honest fix is the same
    * one the editor wants and does not have.
    */
-  const move = async (section: SectionView, by: -1 | 1) => {
+  const move = async (section: SectionView, to: number) => {
     const document = compiled.error ? undefined : compiled.latest
     const parent = section.parent
     const ordinal = section.ordinal
     if (moving() || !document || parent == null || ordinal == null) return
 
     const list = spines(document.sections).get(parent)
-    const to = ordinal + by
     if (!list || to < 0 || to >= list.length) return
 
     setMoving(true)
@@ -167,7 +179,7 @@ function Assembly(props: {
   compiled: CompiledView
   view: View
   moving: boolean
-  onMove: (section: SectionView, by: -1 | 1) => void
+  onMove: (section: SectionView, to: number) => void
 }) {
   /**
    * Everything but the root's own body, which compile emits first.
@@ -199,16 +211,109 @@ function Assembly(props: {
    */
   const lists = createMemo(() => spines(props.compiled.sections))
 
+  /**
+   * The drag, which is two signals and nothing else.
+   *
+   * What is being moved lives here rather than in the drag's own `dataTransfer`,
+   * and that is the decision worth stating: the payload is an entry in a list
+   * this panel is holding, so a drag arriving from another tab carrying the same
+   * slug would mean nothing here and must not be treated as though it did. The
+   * transfer is still filled in, because a drag with nothing in it is one some
+   * browsers decline to start.
+   */
+  const [lifted, setLifted] = createSignal<SectionView>()
+  // Compared by what it is rather than by identity, because `dragover` fires
+  // every few tens of milliseconds over a stationary pointer and a fresh object
+  // each time would redraw every row in the book for a mark that has not moved.
+  const [landing, setLanding] = createSignal<Entry | undefined>(undefined, {
+    equals: (before, after) => before === after || sameEntry(before, after),
+  })
+
+  const lift = (section: SectionView, event: DragEvent) => {
+    if (props.moving) return
+    setLifted(section)
+    setLanding(undefined)
+    const transfer = event.dataTransfer
+    if (!transfer) return
+    transfer.effectAllowed = 'move'
+    transfer.setData('text/plain', section.slug)
+  }
+
+  /**
+   * Over a row, which is where the rule is enforced rather than at the drop.
+   *
+   * A `dragover` refuses the drop unless it is cancelled, so not calling
+   * `preventDefault` is how a row says no, and the pointer says so too without
+   * anything here having to draw it. Every row gets this handler, including the
+   * ones that refuse, so that passing over a chapter in another part clears the
+   * mark left on the last one it could have used.
+   */
+  const over = (section: SectionView, event: DragEvent) => {
+    const what = lifted()
+    if (!what || !lands(entry(what), section)) {
+      setLanding(undefined)
+      return
+    }
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    setLanding(entry(section))
+  }
+
+  const drop = (section: SectionView, event: DragEvent) => {
+    const what = lifted()
+    const there = entry(section)
+    setLifted(undefined)
+    setLanding(undefined)
+    if (!what || !there || !lands(entry(what), section)) return
+    event.preventDefault()
+    props.onMove(what, there.ordinal)
+  }
+
+  /** The end of a drag, whether it was dropped anywhere or given up on. */
+  const release = () => {
+    setLifted(undefined)
+    setLanding(undefined)
+  }
+
+  /**
+   * Whether a drag is on and this row is nowhere it could end.
+   *
+   * On the row rather than on its controls, which is the difference that matters
+   * for the rows that have none. A section in a list this panel could not rebuild
+   * gets no buttons and cannot be dragged, and it is still somewhere a drop
+   * cannot go: left undimmed beside eight rows that are, it would be the one row
+   * on screen claiming to accept what it will not.
+   */
+  const inert = (section: SectionView) => {
+    const what = lifted()
+    if (!what) return false
+    const here = entry(section)
+    return !sameEntry(here, entry(what)) && !lands(entry(what), section)
+  }
+
   /** What a row needs to move itself, or nothing outside the reorder view. */
   const reorderable = (section: SectionView): Reorder | undefined => {
     if (props.view !== 'reorder') return undefined
     const ends = bounds(lists(), section)
-    if (!ends) return undefined
+    const here = entry(section)
+    // `bounds` is already undefined wherever `entry` is, so the second check
+    // never fires on its own. Asking it anyway is what tells the compiler the
+    // ordinal is a number, without anything here asserting that it is.
+    if (!ends || !here) return undefined
+
+    const what = lifted()
+    const mine = sameEntry(here, what && entry(what))
 
     return {
       ...ends,
       busy: props.moving,
-      move: (by) => props.onMove(section, by),
+      move: (by) => props.onMove(section, here.ordinal + by),
+      lifted: mine,
+      landing: sameEntry(here, landing()),
+      lift: (event) => lift(section, event),
+      over: (event) => over(section, event),
+      drop: (event) => drop(section, event),
+      release,
     }
   }
 
@@ -256,9 +361,10 @@ function Assembly(props: {
       */}
       <Show when={props.view === 'reorder'}>
         <p class="text-xs opacity-60">
-          Each entry moves within the contents list that names it, so a chapter
-          cannot leave its part. Editing that list by hand is the other way, and
-          the only way to move one between parts.
+          Drag a row onto another, or use its arrows. Each entry moves within the
+          contents list that names it, so a chapter cannot leave its part and the
+          rows it cannot land on dim while you drag. Editing that list by hand is
+          the other way, and the only way to move one between parts.
         </p>
       </Show>
 
@@ -266,13 +372,28 @@ function Assembly(props: {
         <Show
           when={props.view === 'cards'}
           fallback={
-            <ul class="flex flex-col gap-1 text-sm">
+            <ul
+              class="flex flex-col gap-1 text-sm"
+              /*
+                Rows mark and unmark themselves as the pointer crosses them, so
+                the only place a mark can be left behind is off the end of the
+                list, where no row's handler runs at all. `relatedTarget` is the
+                element being entered, so this fires once on the way out and not
+                on every hop between two rows.
+              */
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                  setLanding(undefined)
+                }
+              }}
+            >
               <For each={parts()}>
                 {(section, position) => (
                   <Part
                     section={section}
                     position={position()}
                     reorder={reorderable(section)}
+                    dimmed={inert(section)}
                   />
                 )}
               </For>
@@ -314,12 +435,40 @@ function Part(props: {
   section: SectionView
   position: number
   reorder?: Reorder
+  /** A drag is on and nothing about this row is part of it. */
+  dimmed?: boolean
 }) {
   const status = () => props.section.status
   const included = () => status() === 'included'
 
+  /**
+   * The whole row is what gets picked up, rather than the grip beside the
+   * buttons.
+   *
+   * A grip is a small target, and the drag image a browser makes of one is the
+   * glyph rather than the chapter. Carrying `draggable` on the row means the
+   * thing under the pointer during the drag is the row, which is the thing being
+   * moved. The price is that a row in this view cannot have its text selected,
+   * which is what a mode is for.
+   */
+  const liftable = () =>
+    props.reorder !== undefined && !props.reorder.busy
+
   return (
-    <li class="flex flex-col gap-0.5">
+    <li
+      class="flex flex-col gap-0.5 px-1 transition-opacity"
+      classList={{
+        'cursor-grab select-none active:cursor-grabbing': liftable(),
+        'opacity-40': props.reorder?.lifted,
+        'opacity-30': props.dimmed,
+        'ring-primary rounded-sm ring-1': props.reorder?.landing,
+      }}
+      draggable={liftable()}
+      onDragStart={(event) => props.reorder?.lift(event)}
+      onDragOver={(event) => props.reorder?.over(event)}
+      onDrop={(event) => props.reorder?.drop(event)}
+      onDragEnd={() => props.reorder?.release()}
+    >
       <div class="flex flex-wrap items-baseline justify-between gap-2">
         <span class="flex min-w-0 items-baseline gap-2">
           <Show when={props.reorder}>
@@ -343,7 +492,17 @@ function Part(props: {
                 </span>
               }
             >
-              <A class="link" href={pageHref(props.section.slug)}>
+              {/*
+                A link is draggable of its own accord, and a drag started on one
+                is a drag of the link rather than of the row. Refusing it in this
+                view hands the gesture to the row underneath; outside it the
+                attribute is absent and a link is a link.
+              */}
+              <A
+                class="link"
+                href={pageHref(props.section.slug)}
+                draggable={props.reorder ? false : undefined}
+              >
                 {props.section.title ?? props.section.slug}
               </A>
             </Show>
@@ -392,14 +551,11 @@ function Part(props: {
 }
 
 /**
- * Two buttons, rather than a drag.
+ * Two buttons, and a grip saying the row can also be dragged.
  *
- * A drag is the obvious gesture and it is not the one built. It needs a keyboard
- * alternative to be usable at all, and that alternative is a pair of buttons, so
- * the choice was between buttons and buttons plus a second way in. These also
- * work on a phone, where an HTML5 drag does not, and they are the same size on a
- * row that has wrapped. A drag can be laid over this later; it would end in the
- * same `PATCH`.
+ * The buttons came first and are still the ones that have to work. A drag has no
+ * keyboard and none on a phone, so it can only ever be the second way in; these
+ * are the first, and they are the same size on a row that has wrapped.
  *
  * The label names the entry rather than the direction, because a row of "Move up"
  * buttons read out one after another says nothing about which chapter each one
@@ -409,26 +565,41 @@ function Handles(props: { section: SectionView; reorder: Reorder }) {
   const name = () => props.section.title ?? props.section.slug
 
   return (
-    <span class="join shrink-0">
-      <button
-        class="btn join-item btn-xs"
-        disabled={props.reorder.first || props.reorder.busy}
-        title="Move up"
-        aria-label={`Move ${name()} up`}
-        onClick={() => props.reorder.move(-1)}
+    <span class="flex shrink-0 items-baseline gap-1">
+      {/*
+        A cue, not a control. The row carries `draggable`, so the drag starts
+        anywhere on it and this only says so. Hidden from assistive technology
+        deliberately: a handle nothing can grab from a keyboard would be a
+        control that does not work, and the two buttons beside it are the ones
+        that do.
+      */}
+      <span
+        class="w-3 shrink-0 text-center text-xs opacity-30"
+        aria-hidden="true"
       >
-        {/* A character rather than an icon set this project does not have. */}
-        <span aria-hidden="true">↑</span>
-      </button>
-      <button
-        class="btn join-item btn-xs"
-        disabled={props.reorder.last || props.reorder.busy}
-        title="Move down"
-        aria-label={`Move ${name()} down`}
-        onClick={() => props.reorder.move(1)}
-      >
-        <span aria-hidden="true">↓</span>
-      </button>
+        ⠿
+      </span>
+      <span class="join shrink-0">
+        <button
+          class="btn join-item btn-xs"
+          disabled={props.reorder.first || props.reorder.busy}
+          title="Move up"
+          aria-label={`Move ${name()} up`}
+          onClick={() => props.reorder.move(-1)}
+        >
+          {/* A character rather than an icon set this project does not have. */}
+          <span aria-hidden="true">↑</span>
+        </button>
+        <button
+          class="btn join-item btn-xs"
+          disabled={props.reorder.last || props.reorder.busy}
+          title="Move down"
+          aria-label={`Move ${name()} down`}
+          onClick={() => props.reorder.move(1)}
+        >
+          <span aria-hidden="true">↓</span>
+        </button>
+      </span>
     </span>
   )
 }

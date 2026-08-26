@@ -497,6 +497,197 @@ describe('reordering the spine', () => {
   })
 
   /**
+   * A book whose second part has scenes under it, which is what makes the flat
+   * manifest interesting: the rows between Part One and Part Two are in a list of
+   * their own and are most of what a dragged row passes over.
+   */
+  function nested(): CompiledView {
+    return compiled({
+      sections: [
+        section({ slug: 'book', title: 'The Long Way Round', depth: 0, words: 40 }),
+        section({ slug: 'book/one', title: 'Part One', parent: 'book', ordinal: 0 }),
+        section({
+          slug: 'book/one/opening',
+          title: 'The Opening',
+          depth: 2,
+          parent: 'book/one',
+          ordinal: 0,
+        }),
+        section({
+          slug: 'book/one/the-ferry',
+          title: 'The Ferry',
+          depth: 2,
+          parent: 'book/one',
+          ordinal: 1,
+        }),
+        section({ slug: 'book/two', title: 'Part Two', parent: 'book', ordinal: 1 }),
+      ],
+    })
+  }
+
+  /**
+   * A drag event, as far as jsdom has one.
+   *
+   * There is no `DragEvent` and no `DataTransfer` in jsdom, so this is a
+   * cancelable event with a stub stapled to it. What it proves is the wiring:
+   * which rows accept a drop, and that the write a drop ends in is the write the
+   * buttons make. Whether a browser picks the row up, what the pointer shows and
+   * where the drop actually lands are the browser's, and none of it is visible
+   * from here. That is the honest limit of testing a drag in a fake DOM, and it
+   * is why the buttons are still the ones the rest of this block checks.
+   */
+  function drag(type: string): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { effectAllowed: '', dropEffect: '', setData: () => {} },
+    })
+    return event
+  }
+
+  /** The rows, in the order the panel drew them. */
+  const rows = (container: HTMLElement) => [...container.querySelectorAll('li')]
+
+  it('writes the same list back for a drop as for a button', async () => {
+    const { container } = await reordering()
+    const [one, , two] = rows(container)
+
+    two?.dispatchEvent(drag('dragstart'))
+    one?.dispatchEvent(drag('dragover'))
+    one?.dispatchEvent(drag('drop'))
+
+    await waitFor(() => expect(api.patchPage).toHaveBeenCalled())
+    expect(api.patchPage).toHaveBeenCalledWith('book', {
+      contents: ['book/two', 'book/one', 'book/gone', '../nope'],
+    })
+  })
+
+  /**
+   * The rule the buttons are already on, and the one a drag makes it possible to
+   * break: an entry moves within the list that names it, so a chapter cannot
+   * leave its part. A `dragover` refuses the drop unless it is cancelled, so a
+   * row that says nothing is a row that says no.
+   */
+  it('will not drop a part onto a scene inside another one', async () => {
+    api.compilePages.mockResolvedValue(nested())
+    const rendered = panel()
+    await rendered.findByText('Part One')
+    rendered.getByText('Reorder').click()
+    await waitFor(() => expect(rendered.queryByLabelText('Move Part One down')).toBeTruthy())
+
+    const [one, opening, , two] = rows(rendered.container)
+    two?.dispatchEvent(drag('dragstart'))
+
+    const refused = drag('dragover')
+    opening?.dispatchEvent(refused)
+    expect(refused.defaultPrevented).toBe(false)
+
+    const accepted = drag('dragover')
+    one?.dispatchEvent(accepted)
+    expect(accepted.defaultPrevented).toBe(true)
+
+    opening?.dispatchEvent(drag('drop'))
+    expect(api.patchPage).not.toHaveBeenCalled()
+  })
+
+  /**
+   * What is being dragged is an entry in the list this panel is holding, so a
+   * drop nothing here picked up is a drag from somewhere else and means nothing.
+   */
+  it('ignores a drop that began outside the list', async () => {
+    const { container } = await reordering()
+    const [one] = rows(container)
+
+    one?.dispatchEvent(drag('drop'))
+
+    expect(api.patchPage).not.toHaveBeenCalled()
+  })
+
+  /** The row in hand, the place it would land, and the rows it could not. */
+  it('marks the row being dragged, its landing place and neither of the rest', async () => {
+    api.compilePages.mockResolvedValue(nested())
+    const rendered = panel()
+    await rendered.findByText('Part One')
+    rendered.getByText('Reorder').click()
+    await waitFor(() => expect(rendered.queryByLabelText('Move Part One down')).toBeTruthy())
+
+    const [one, opening, , two] = rows(rendered.container)
+    two?.dispatchEvent(drag('dragstart'))
+    one?.dispatchEvent(drag('dragover'))
+
+    await waitFor(() => expect(one?.className).toContain('ring-primary'))
+    expect(two?.className).toContain('opacity-40')
+    expect(opening?.className).toContain('opacity-30')
+    expect(opening?.className).not.toContain('ring-primary')
+
+    // Every row clears the mark, including the ones that refuse, or passing over
+    // a scene would leave the last part it could have used still lit.
+    opening?.dispatchEvent(drag('dragover'))
+    await waitFor(() => expect(one?.className).not.toContain('ring-primary'))
+  })
+
+  /**
+   * A list with a hole in it is one `spines` refuses to rebuild, so nothing in
+   * it gets controls. It is still nowhere a drop can go, and the dimming has to
+   * say so: one bright row among eight dimmed ones is the one row on screen
+   * claiming to accept what it will not.
+   */
+  it('dims a row that has no controls, because a drop cannot go there either', async () => {
+    api.compilePages.mockResolvedValue(
+      compiled({
+        sections: [
+          section({ slug: 'book', title: 'The Long Way Round', depth: 0 }),
+          section({ slug: 'book/one', title: 'Part One', parent: 'book', ordinal: 0 }),
+          section({
+            slug: 'book/one/opening',
+            title: 'The Opening',
+            depth: 2,
+            parent: 'book/one',
+            ordinal: 0,
+          }),
+          section({
+            slug: 'book/one/late',
+            title: 'Late',
+            depth: 2,
+            parent: 'book/one',
+            ordinal: 2,
+          }),
+          section({ slug: 'book/two', title: 'Part Two', parent: 'book', ordinal: 1 }),
+        ],
+      }),
+    )
+    const rendered = panel()
+    await rendered.findByText('Part One')
+    rendered.getByText('Reorder').click()
+    await waitFor(() => expect(rendered.queryByLabelText('Move Part One down')).toBeTruthy())
+    expect(rendered.queryByLabelText('Move The Opening down')).toBeNull()
+
+    const [, opening, , two] = rows(rendered.container)
+    two?.dispatchEvent(drag('dragstart'))
+
+    await waitFor(() => expect(opening?.className).toContain('opacity-30'))
+    expect(opening?.getAttribute('draggable')).toBe('false')
+  })
+
+  /** Outside the mode the rows are rows, and the link inside one is a link. */
+  it('makes no row draggable until the mode is entered', async () => {
+    api.compilePages.mockResolvedValue(book())
+    const { findByText, getByText, container } = panel()
+
+    await findByText('Part One')
+    expect(rows(container)[0]?.getAttribute('draggable')).toBe('false')
+    expect(container.querySelector('li a')?.getAttribute('draggable')).toBeNull()
+
+    getByText('Reorder').click()
+
+    await waitFor(() =>
+      expect(rows(container)[0]?.getAttribute('draggable')).toBe('true'),
+    )
+    // A link drags itself by default, and that drag is of the link rather than
+    // of the row underneath it.
+    expect(container.querySelector('li a')?.getAttribute('draggable')).toBe('false')
+  })
+
+  /**
    * Nothing named the root, so there is no list to move it within, and the panel
    * drops its row anyway. This is the guard that keeps a manifest without
    * ordinals from growing buttons that would write nonsense.

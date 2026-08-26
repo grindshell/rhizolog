@@ -93,6 +93,54 @@ export interface Bounds {
 }
 
 /**
+ * An entry in a contents list: which list, and where in it.
+ *
+ * A drag moves an **entry**, not a page. A page listed under two parts is two
+ * entries and two rows, and each one moves within its own list; a page reached
+ * down both an excluded path and an included one is one entry drawn twice, and
+ * both rows are it.
+ */
+export interface Entry {
+  parent: string
+  ordinal: number
+}
+
+/** The entry a section is, or `undefined` where nothing named it. */
+export function entry(section: SectionView): Entry | undefined {
+  const { parent, ordinal } = section
+  if (parent == null || ordinal == null) return undefined
+  return { parent, ordinal }
+}
+
+/** Whether two rows are the same entry, which two of them can be. */
+export function sameEntry(
+  one: Entry | undefined,
+  other: Entry | undefined,
+): boolean {
+  if (!one || !other) return false
+  return one.parent === other.parent && one.ordinal === other.ordinal
+}
+
+/**
+ * Whether dropping the entry being dragged onto `section` would move it.
+ *
+ * The whole rule of the drag, and the same rule the buttons are on: an entry
+ * moves within the list that names it, so a chapter cannot leave its part.
+ *
+ * It matters more for a drag than for a button because of what the panel draws.
+ * The manifest is **flat and recursive**, so a chapter's own scenes sit between
+ * it and the next chapter, and most of the rows a dragged entry passes over
+ * belong to some other list. A drop on one of those has two readings, "before
+ * the part" and "into the part", and answering it would be picking one on
+ * somebody's behalf. Saying no is what a refused drop is for.
+ */
+export function lands(what: Entry | undefined, onto: SectionView): boolean {
+  const there = entry(onto)
+  if (!what || !there) return false
+  return there.parent === what.parent && there.ordinal !== what.ordinal
+}
+
+/**
  * Whether a section is at either end of its own list, or `undefined` when it is
  * not in one this can rebuild.
  *

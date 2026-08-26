@@ -533,17 +533,23 @@ incidental can move a chapter, and a view you have to enter is that same argumen
 carried into the one place that can. It also keeps the ordinary reading of a book
 free of two buttons on every row.
 
-Buttons rather than a drag, which `TODO.md` had called the shape. A drag needs a
-keyboard alternative to be usable at all and that alternative is a pair of
-buttons, so the choice was between buttons and buttons plus a second way in; these
-also work on a phone, where an HTML5 drag does not. They are labelled by the entry
-rather than the direction, because a column of "Move up" buttons read out one after
-another says nothing about which chapter each one moves.
+A row can also be dragged onto another, which is the same write and was laid over
+the buttons rather than built instead of them. A drag has no keyboard and none on
+a phone, so it can only ever be the second way in; the buttons are the first and
+are labelled by the entry rather than the direction, because a column of "Move up"
+buttons read out one after another says nothing about which chapter each one
+moves. The grip beside them is a cue and not a control: the row is what carries
+`draggable`, and a handle nothing can grab from a keyboard would be a control that
+does not work.
 
 An entry moves only within its own list, so a chapter cannot leave its part, and
-the view says so rather than leaving somebody to discover it. There are no reorder
-controls in the card view: up and down in a grid that wraps means something
-different at every width.
+the view says so rather than leaving somebody to discover it. A drag is where that
+rule would otherwise be easiest to break, because the manifest is flat and
+recursive and a chapter's own scenes sit between it and the next chapter. Rows a
+drop cannot land on dim while one is in hand, which teaches the rule rather than
+stating it a second time, and a drop on one of them is refused by the row simply
+not accepting it. There are no reorder controls in the card view: up and down in a
+grid that wraps means something different at every width.
 
 The list written back is rebuilt from the manifest on screen, so it is as old as
 the compile that drew it, and the panel re-reads the book after every move to make
