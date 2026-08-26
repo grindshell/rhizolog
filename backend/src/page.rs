@@ -167,6 +167,44 @@ pub struct Frontmatter {
     /// list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub readers: Vec<String>,
+
+    /// A word count to aim at, measured against the **compiled** total from this
+    /// page: its own words on a leaf, and the whole work on a page that has
+    /// `contents`.
+    ///
+    /// Accepts `90,000` as well as `90000`, for the reason `created` accepts a
+    /// bare date. See [`frontmatter::word_count`].
+    #[serde(
+        default,
+        deserialize_with = "frontmatter::word_count",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub target: Option<u64>,
+
+    /// The day this page is due, as written.
+    ///
+    /// Kept as a string rather than parsed into the struct, which is the
+    /// opposite of what `created` does, and the difference is what each one is
+    /// for. `created` is a timestamp this code writes and compares; `due` is a
+    /// note to the author, so the useful behaviour when it says something that
+    /// is not a date is the one `owner` has: it names no day, and it does not
+    /// take the page down with it. See [`Page::due`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due: Option<String>,
+
+    /// The pages this one assembles, in order.
+    ///
+    /// `None` is a leaf page and `Some([])` is a contents page with nothing in
+    /// it yet, which is what a book looks like on the day it is started. The two
+    /// are different values and both round-trip, so a `PUT` can set either.
+    ///
+    /// Entries are **strings**, not [`Slug`]s, and are parsed when the page is
+    /// compiled rather than when it is read. A slug that will not parse is one
+    /// bad chapter in the manifest; parsing here would make it a malformed page,
+    /// which costs the title, the tags and every listing the page appears in.
+    /// See `knowledge-base/long-form.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contents: Option<Vec<String>>,
 }
 
 impl Frontmatter {
@@ -177,6 +215,9 @@ impl Frontmatter {
             && self.visibility.is_none()
             && self.owner.is_none()
             && self.readers.is_empty()
+            && self.target.is_none()
+            && self.due.is_none()
+            && self.contents.is_none()
     }
 }
 
@@ -311,6 +352,35 @@ impl Page {
             .owner
             .as_deref()
             .and_then(|raw| Username::parse(raw).ok())
+    }
+
+    /// How many words the body holds.
+    ///
+    /// The count an editor means rather than the one `wc -w` gives: see
+    /// [`crate::markdown::count_words`] for every rule and why each is there.
+    pub fn words(&self) -> u64 {
+        crate::markdown::count_words(&self.body)
+    }
+
+    /// The day this page is due, if what the field says is one.
+    ///
+    /// A bare `2027-03-01` means midnight UTC, and a full timestamp is taken as
+    /// written. A wall-clock time with no zone is refused for
+    /// [`frontmatter::timestamp`]'s reason: it carries a real time whose meaning
+    /// depends on where it was written.
+    ///
+    /// Anything else names no day, exactly as an `owner` that is not a username
+    /// names nobody. The field stays in the file either way, so a typo is
+    /// visible and fixable rather than silently discarded on the next write.
+    pub fn due(&self) -> Option<DateTime<Utc>> {
+        self.frontmatter.due.as_deref().and_then(frontmatter::day)
+    }
+
+    /// The pages this one assembles, in order, as written.
+    ///
+    /// Not parsed into slugs here. See [`Frontmatter::contents`].
+    pub fn contents(&self) -> Option<&[String]> {
+        self.frontmatter.contents.as_deref()
     }
 
     /// The accounts named in `readers`, ignoring any that are not valid names.
@@ -788,5 +858,134 @@ mod tests {
     fn writes_no_frontmatter_when_there_is_none_to_write() {
         let parsed = page("Just a body.\n");
         assert_eq!(parsed.to_markdown(), "Just a body.\n");
+    }
+
+    /// The rule the whole `contents` design rests on: a chapter somebody
+    /// mistyped is one bad entry, never a page that has fallen out of the wiki.
+    /// Parsing these into slugs here is what would break it, which is why they
+    /// are strings.
+    #[test]
+    fn a_contents_entry_that_is_not_a_slug_does_not_cost_the_page() {
+        let parsed = page(
+            "---\ntitle: The Long Way Round\ntags: [manuscript]\ncontents:\n  - book/one\n  - ../etc/passwd\n  - CON\n  - \"\"\n---\n\nBody.\n",
+        );
+
+        assert_eq!(parsed.title(), "The Long Way Round");
+        assert_eq!(parsed.tags(), ["manuscript"]);
+        assert_eq!(
+            parsed.contents(),
+            Some(
+                ["book/one", "../etc/passwd", "CON", ""]
+                    .map(String::from)
+                    .as_slice()
+            ),
+            "entries are kept exactly as written, for compile to judge"
+        );
+    }
+
+    /// Absent is an ordinary page; `[]` is a manuscript with no chapters yet.
+    /// Both have to survive a write, or "start a book" is unexpressible.
+    #[test]
+    fn an_absent_contents_and_an_empty_one_both_round_trip() {
+        let ordinary = page("---\ntitle: Ordinary\n---\n\nBody.\n");
+        assert_eq!(ordinary.contents(), None);
+        assert!(
+            !ordinary.to_markdown().contains("contents"),
+            "an ordinary page grew a contents line"
+        );
+
+        let started = page("---\ntitle: Started\ncontents: []\n---\n\nBody.\n");
+        assert_eq!(started.contents(), Some([].as_slice()));
+
+        let written = started.to_markdown();
+        assert!(written.contains("contents: []"), "{written}");
+        let again = page(&written);
+        assert_eq!(again.frontmatter, started.frontmatter);
+    }
+
+    /// The same argument the bare date makes. `90,000` is how a person writes a
+    /// word count, and refusing it would cost them the page rather than the
+    /// field.
+    #[test]
+    fn a_target_written_the_ordinary_way_is_read() {
+        for text in ["90000", "90,000", "90_000", "90 000"] {
+            let parsed = page(&format!(
+                "---\ntitle: Book\ntarget: \"{text}\"\n---\n\nBody.\n"
+            ));
+            assert_eq!(parsed.frontmatter.target, Some(90_000), "{text:?}");
+        }
+
+        // A plain integer is the spelling this writes, and it is written back as
+        // one whatever it arrived as.
+        let plain = page("---\ntarget: 90000\n---\n\nBody.\n");
+        assert_eq!(plain.frontmatter.target, Some(90_000));
+        assert!(plain.to_markdown().contains("target: 90000"));
+    }
+
+    /// A negative target is not a small one. Reading it as zero would report a
+    /// page as finished, and there is no honest value to fall back to.
+    #[test]
+    fn a_target_that_is_not_a_count_is_refused() {
+        for text in ["-1", "lots", "9.5", "1e3"] {
+            let result = Page::from_markdown(
+                Slug::parse("book").unwrap(),
+                &format!("---\ntarget: {text}\n---\n\nBody.\n"),
+                at("2026-08-05T12:00:00Z"),
+            );
+            assert!(result.is_err(), "{text:?} was accepted as a word count");
+        }
+    }
+
+    /// `due` is a note to the author, so it behaves like `owner` rather than
+    /// like `created`: a value that is not a date names no day and leaves the
+    /// page alone. The field stays in the file, so the mistake is visible.
+    #[test]
+    fn a_due_date_that_is_not_a_date_names_no_day_and_keeps_the_page() {
+        let bare = page("---\ndue: 2027-03-01\n---\n\nBody.\n");
+        assert_eq!(bare.due(), Some(at("2027-03-01T00:00:00Z")));
+
+        let full = page("---\ndue: 2027-03-01T09:30:00Z\n---\n\nBody.\n");
+        assert_eq!(full.due(), Some(at("2027-03-01T09:30:00Z")));
+
+        let nonsense = page("---\ntitle: Book\ndue: soon\n---\n\nBody.\n");
+        assert_eq!(nonsense.due(), None);
+        assert_eq!(nonsense.title(), "Book", "a bad date took the page with it");
+        assert!(
+            nonsense.to_markdown().contains("due: soon"),
+            "the field was silently dropped rather than left to be fixed"
+        );
+
+        // A wall-clock time with no zone is refused for the reason `created`
+        // refuses it: reading it as UTC would move it by up to fourteen hours.
+        assert_eq!(
+            page("---\ndue: 2027-03-01T09:30:00\n---\n\nB.\n").due(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_new_fields_do_not_make_an_empty_frontmatter_look_written() {
+        assert!(Frontmatter::default().is_empty());
+        assert!(
+            !Frontmatter {
+                target: Some(1),
+                ..Default::default()
+            }
+            .is_empty()
+        );
+        assert!(
+            !Frontmatter {
+                due: Some("2027-03-01".into()),
+                ..Default::default()
+            }
+            .is_empty()
+        );
+        assert!(
+            !Frontmatter {
+                contents: Some(Vec::new()),
+                ..Default::default()
+            }
+            .is_empty()
+        );
     }
 }

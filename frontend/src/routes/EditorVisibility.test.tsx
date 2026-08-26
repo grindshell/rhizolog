@@ -30,6 +30,7 @@ function page(overrides: Partial<PageView> = {}): PageView {
     created: '2026-08-05T14:00:00Z',
     updated: '2026-08-05T14:00:00Z',
     size: 312,
+    words: 3,
     content: 'Futures are lazy.\n',
     visibility: 'internal',
     ...overrides,

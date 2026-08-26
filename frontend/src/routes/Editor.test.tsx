@@ -37,6 +37,7 @@ function page(overrides: Partial<PageView> = {}): PageView {
     created: '2026-08-05T14:00:00Z',
     updated: '2026-08-05T14:00:00Z',
     size: 312,
+    words: 8,
     content: '# Async in Rust\n\nFutures are lazy.\n',
     // What an unmarked page means, which is what every page in this file is.
     // The visibility control only appears on a wiki that has accounts, and

@@ -94,6 +94,7 @@ pub struct PageRecord {
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
     pub size: u64,
+    pub words: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +102,13 @@ pub struct PageList {
     pub pages: Vec<PageRecord>,
     /// Total matching pages, not just the ones on this page of results.
     pub total: usize,
+    /// Words in every matching page, not just the ones on this page of results.
+    ///
+    /// It travels with `total` because it answers the same shape of question
+    /// about the same filtered set, and because the alternative is a second call
+    /// per prefix to add up numbers the first one already had in hand. A
+    /// manuscript's length is `?prefix=` plus this field.
+    pub words: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -110,6 +118,7 @@ pub enum SortBy {
     Title,
     Created,
     Updated,
+    Words,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -131,6 +140,7 @@ impl SortBy {
             Self::Title => "title",
             Self::Created => "created",
             Self::Updated => "updated",
+            Self::Words => "words",
         }
     }
 }
@@ -253,6 +263,7 @@ impl Index {
         let created = to_nanos(page.created(), "created")?;
         let updated = to_nanos(page.updated, "updated")?;
         let size = page.size as i64;
+        let words = page.words() as i64;
         // Resolved here rather than stored raw, so the index and the page agree
         // on what an absent field and an unrecognised word mean. `Page` is the
         // one place that decides; see `Visibility::parse`.
@@ -273,16 +284,19 @@ impl Index {
             // rowid, while this updates in place and keeps it. A page's rowid
             // is therefore stable for as long as the page exists.
             transaction.execute(
-                "insert into pages (slug, title, created, updated, size, visibility, owner)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "insert into pages (slug, title, created, updated, size, words, visibility, owner)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  on conflict(slug) do update set
                      title      = excluded.title,
                      created    = excluded.created,
                      updated    = excluded.updated,
                      size       = excluded.size,
+                     words      = excluded.words,
                      visibility = excluded.visibility,
                      owner      = excluded.owner",
-                params![&slug, &title, created, updated, size, visibility, &owner],
+                params![
+                    &slug, &title, created, updated, size, words, visibility, &owner
+                ],
             )?;
 
             // Rewritten wholesale, like the tags above: a reader removed from
@@ -648,14 +662,22 @@ impl Index {
             let filter_params: [(&'static str, &dyn ToSql); 3] =
                 [(":tag", &tag), (":prefix", &prefix), (":segment", &segment)];
 
-            let total: i64 = connection.query_row(
-                &format!("select count(*) from pages {filters}"),
+            // The count and the sum come back together, from the same filtered
+            // set, because they are the same question asked twice. Summing the
+            // rows this call returns instead would make a manuscript's length
+            // depend on the caller's `limit`, which is the kind of number that
+            // looks right until somebody pages through it.
+            //
+            // `coalesce` because `sum` over no rows is null, and an empty prefix
+            // has zero words rather than an unknown number of them.
+            let (total, words): (i64, i64) = connection.query_row(
+                &format!("select count(*), coalesce(sum(words), 0) from pages {filters}"),
                 bindings(&filter_params, &visible).as_slice(),
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
 
             let sql = format!(
-                "select slug, title, created, updated, size
+                "select slug, title, created, updated, size, words
                  from pages
                  {filters}
                  order by {} {}, slug asc
@@ -686,23 +708,24 @@ impl Index {
                         row.get::<_, i64>(2)?,
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
                     ))
                 },
             )?;
 
             let mut pending = Vec::new();
             for row in rows {
-                let (slug, title, created, updated, size) = row?;
+                let (slug, title, created, updated, size, words) = row?;
                 let Ok(slug) = Slug::parse(&slug) else {
                     continue;
                 };
-                pending.push((slug, title, created, updated, size));
+                pending.push((slug, title, created, updated, size, words));
             }
 
             let mut tags_of =
                 connection.prepare("select tag from page_tags where slug = ?1 order by tag")?;
             let mut pages = Vec::with_capacity(pending.len());
-            for (slug, title, created, updated, size) in pending {
+            for (slug, title, created, updated, size, words) in pending {
                 let tags = tags_of
                     .query_map(params![slug.as_str()], |row| row.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -713,12 +736,14 @@ impl Index {
                     created: from_nanos(created),
                     updated: from_nanos(updated),
                     size: size as u64,
+                    words: words as u64,
                 });
             }
 
             Ok(PageList {
                 pages,
                 total: total as usize,
+                words: words as u64,
             })
         })
         .await

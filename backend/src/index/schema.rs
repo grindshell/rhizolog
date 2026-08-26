@@ -35,7 +35,14 @@
 /// for every capture rather than wrong, and rebuilding is what fills them in.
 /// **Changing how a capture is tokenized is a bump too**, because every row here
 /// is the output of that one function.
-pub const SCHEMA_VERSION: i64 = 9;
+///
+/// Version 10 adds `pages.words`. An index written before it has none, and a
+/// column defaulting to zero would report every page in an existing wiki as
+/// empty and every prefix total as nothing, which is worse than absent because
+/// it looks like an answer. **Changing how a body is counted is a bump too**,
+/// for `idea_terms`' reason: every row is the output of that one function. See
+/// [`crate::markdown::count_words`] and `knowledge-base/long-form.md`.
+pub const SCHEMA_VERSION: i64 = 10;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -122,12 +129,18 @@ pub const CREATE_DERIVED: &str = "
 -- comparison with `:viewer is not null`: in SQL `null = null` is null, so an
 -- anonymous caller must never be allowed to reach a comparison against an
 -- ownerless page and have it read as a match.
+-- `words` is the body's word count, and it is a column for the reason
+-- `visibility` is one: it is asked for by every listing and summed over every
+-- prefix, and the alternative is reading ten thousand files off disk to add
+-- them up. It counts prose rather than bytes, so it is not derivable from
+-- `size` -- a page that is mostly a code fence is large and nearly wordless.
 create table pages (
     slug       text    primary key,
     title      text    not null,
     created    integer not null,
     updated    integer not null,
     size       integer not null,
+    words      integer not null default 0,
     visibility text    not null default 'internal',
     owner      text
 ) strict;

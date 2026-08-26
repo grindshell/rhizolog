@@ -1184,6 +1184,25 @@ export interface components {
              *     Futures are lazy. See [[notes/rust/pinning]].
              */
             content?: string;
+            /**
+             * @description The pages this one assembles, in order.
+             *
+             *     An empty list makes this a page that assembles others and has none yet.
+             *     Omitting it makes an ordinary page. Entries are slugs from the wiki root.
+             * @example [
+             *       "book/one/opening",
+             *       "book/one/the-ferry"
+             *     ]
+             */
+            contents?: string[] | null;
+            /**
+             * Format: date-time
+             * @description The day this page is due.
+             *
+             *     A full timestamp, because this is JSON and a client has a clock. Files
+             *     may write a bare `2027-03-01` by hand, which reads as midnight UTC.
+             */
+            due?: string | null;
             owner?: null | components["schemas"]["Username"];
             /**
              * @description Only consulted while the visibility is `restricted`.
@@ -1204,6 +1223,13 @@ export interface components {
              *     ]
              */
             tags?: string[];
+            /**
+             * Format: int64
+             * @description A word count to aim at. On a page with `contents` it measures the whole
+             *     assembled work rather than this page's own body.
+             * @example 90000
+             */
+            target?: number | null;
             /**
              * @description Optional. Without it the title falls back to the body's first heading,
              *     then to the slug.
@@ -1853,6 +1879,17 @@ export interface components {
              * @example 128
              */
             total: number;
+            /**
+             * Format: int64
+             * @description Words across every matching page, not just the ones returned.
+             *
+             *     It is the whole filtered set rather than this page of results, so it does
+             *     not move when `limit` does. With `prefix` it is the length of everything
+             *     under a path, which is how a manuscript is measured before there is
+             *     anything to compile.
+             * @example 52840
+             */
+            words: number;
         };
         PageRefView: {
             slug: components["schemas"]["Slug"];
@@ -1895,6 +1932,12 @@ export interface components {
              * @description The file's modification time.
              */
             updated: string;
+            /**
+             * Format: int64
+             * @description How many words the body holds. Prose rather than bytes; see `PageView`.
+             * @example 412
+             */
+            words: number;
         };
         /**
          * @description The time tracked against a page.
@@ -1953,11 +1996,37 @@ export interface components {
              */
             content: string;
             /**
+             * @description The pages this one assembles, in order, as written.
+             *
+             *     Absent means an ordinary page. An **empty list** means a page that
+             *     assembles others and has none yet, which is a different thing and is why
+             *     this is not flattened to a list that is sometimes empty.
+             *
+             *     Entries are strings rather than validated slugs: one that will not parse
+             *     is a bad entry rather than a bad page, and it is reported when the page
+             *     is compiled.
+             * @example [
+             *       "book/one/opening",
+             *       "book/one/the-ferry"
+             *     ]
+             */
+            contents?: string[] | null;
+            /**
              * Format: date-time
              * @description When the page was first written. Falls back to the file's mtime for
              *     pages written by hand, which never carried the field.
              */
             created: string;
+            /**
+             * Format: date-time
+             * @description The day this page is due, if it names one.
+             *
+             *     A file may write this as a bare `2027-03-01`, which means midnight UTC.
+             *     A value that is not a date at all names no day and comes back as absent
+             *     rather than making the page malformed, which is what `owner` does with a
+             *     name that is not a username.
+             */
+            due?: string | null;
             /**
              * @description The body rendered to HTML. Present only when `render=true` was asked
              *     for.
@@ -1997,6 +2066,12 @@ export interface components {
              */
             tags: string[];
             /**
+             * Format: int64
+             * @description A word count to aim at, if the page names one.
+             * @example 90000
+             */
+            target?: number | null;
+            /**
              * @description The page's effective title: its frontmatter `title`, or failing that the
              *     body's first heading, or failing that the slug.
              * @example Async in Rust
@@ -2020,6 +2095,16 @@ export interface components {
             updated: string;
             /** @description Who may read this page. An unmarked page is `internal`. */
             visibility: components["schemas"]["Visibility"];
+            /**
+             * Format: int64
+             * @description How many words the body holds.
+             *
+             *     Prose, not bytes: code fences, inline code, link targets and image alt
+             *     text are all excluded, so this and `size` answer different questions and
+             *     a page that is mostly a code sample is large and nearly wordless.
+             * @example 412
+             */
+            words: number;
         };
         PatchCapture: {
             /**
@@ -2047,6 +2132,18 @@ export interface components {
              */
             content?: string | null;
             /**
+             * @description Omit to leave the contents alone; send `null` to make the page an
+             *     ordinary one, or `[]` to leave it assembling nothing.
+             *
+             *     The three are different requests, which is why this is not a plain list.
+             * @example [
+             *       "book/one/opening"
+             *     ]
+             */
+            contents?: string[] | null;
+            /** @description Omit to leave the due date alone; send `null` to clear it. */
+            due?: string | null;
+            /**
              * @description Omit to leave the owner alone; send `null` to clear it.
              *
              *     Clearing the owner of a `private` page leaves it readable by nobody —
@@ -2064,6 +2161,12 @@ export interface components {
              *     ]
              */
             tags?: string[] | null;
+            /**
+             * Format: int64
+             * @description Omit to leave the target alone; send `null` to clear it.
+             * @example 90000
+             */
+            target?: number | null;
             /**
              * @description Omit to leave the title unchanged; send `null` to clear it and fall
              *     back to the heading or slug.
@@ -2291,6 +2394,25 @@ export interface components {
              *     Futures are lazy. See [[notes/rust/pinning]].
              */
             content?: string;
+            /**
+             * @description Omitting this makes the page an ordinary one again.
+             *
+             *     **An editor has to send this back whether or not it shows a control for
+             *     it.** A `PUT` that leaves it out unmakes a manuscript, which is the same
+             *     trap `owner` already sets and the reason that field is filled back in
+             *     automatically. This one is not: there is nothing to infer a contents list
+             *     from, so the only protection is the client returning what it was given.
+             * @example [
+             *       "book/one/opening",
+             *       "book/one/the-ferry"
+             *     ]
+             */
+            contents?: string[] | null;
+            /**
+             * Format: date-time
+             * @description Omitting this clears the due date.
+             */
+            due?: string | null;
             owner?: null | components["schemas"]["Username"];
             /**
              * @description Omitting this clears the reader list.
@@ -2308,6 +2430,12 @@ export interface components {
              *     ]
              */
             tags?: string[];
+            /**
+             * Format: int64
+             * @description Omitting this clears the target.
+             * @example 90000
+             */
+            target?: number | null;
             /**
              * @description Send `null` to let the title follow the body's first heading. Sending a
              *     title the server derived is what freezes it — see `title_derived`.

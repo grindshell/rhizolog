@@ -41,9 +41,11 @@ use crate::store::StoreError;
 use crate::users::Username;
 
 /// Fields a listing can be narrowed to with `?fields=`.
-pub const SUMMARY_FIELDS: [&str; 6] = ["slug", "title", "tags", "created", "updated", "size"];
+pub const SUMMARY_FIELDS: [&str; 7] = [
+    "slug", "title", "tags", "created", "updated", "size", "words",
+];
 
-const SORT_KEYS: [&str; 4] = ["slug", "title", "created", "updated"];
+const SORT_KEYS: [&str; 5] = ["slug", "title", "created", "updated", "words"];
 const ORDER_KEYS: [&str; 2] = ["asc", "desc"];
 
 const DEFAULT_LIMIT: usize = 50;
@@ -144,6 +146,41 @@ pub struct PageView {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[schema(example = json!(["alice", "bob"]))]
     pub readers: Vec<Username>,
+
+    /// How many words the body holds.
+    ///
+    /// Prose, not bytes: code fences, inline code, link targets and image alt
+    /// text are all excluded, so this and `size` answer different questions and
+    /// a page that is mostly a code sample is large and nearly wordless.
+    #[schema(example = 412)]
+    pub words: u64,
+
+    /// A word count to aim at, if the page names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 90000)]
+    pub target: Option<u64>,
+
+    /// The day this page is due, if it names one.
+    ///
+    /// A file may write this as a bare `2027-03-01`, which means midnight UTC.
+    /// A value that is not a date at all names no day and comes back as absent
+    /// rather than making the page malformed, which is what `owner` does with a
+    /// name that is not a username.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due: Option<DateTime<Utc>>,
+
+    /// The pages this one assembles, in order, as written.
+    ///
+    /// Absent means an ordinary page. An **empty list** means a page that
+    /// assembles others and has none yet, which is a different thing and is why
+    /// this is not flattened to a list that is sometimes empty.
+    ///
+    /// Entries are strings rather than validated slugs: one that will not parse
+    /// is a bad entry rather than a bad page, and it is reported when the page
+    /// is compiled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = json!(["book/one/opening", "book/one/the-ferry"]))]
+    pub contents: Option<Vec<String>>,
 }
 
 impl PageView {
@@ -159,6 +196,10 @@ impl PageView {
             created: page.created(),
             updated: page.updated,
             size: page.size,
+            words: page.words(),
+            target: page.frontmatter.target,
+            due: page.due(),
+            contents: page.frontmatter.contents.clone(),
             content: page.body.clone(),
             html: render.then(|| markdown::render(Some(&page.slug), &page.body)),
         }
@@ -183,6 +224,9 @@ pub struct PageSummary {
     /// Size of the page's file on disk, in bytes.
     #[schema(example = 312)]
     pub size: u64,
+    /// How many words the body holds. Prose rather than bytes; see `PageView`.
+    #[schema(example = 412)]
+    pub words: u64,
 }
 
 impl From<PageRecord> for PageSummary {
@@ -194,6 +238,7 @@ impl From<PageRecord> for PageSummary {
             created: record.created,
             updated: record.updated,
             size: record.size,
+            words: record.words,
         }
     }
 }
@@ -206,6 +251,14 @@ pub struct PageListResponse {
     /// Total matching pages, not the number returned.
     #[schema(example = 128)]
     pub total: usize,
+    /// Words across every matching page, not just the ones returned.
+    ///
+    /// It is the whole filtered set rather than this page of results, so it does
+    /// not move when `limit` does. With `prefix` it is the length of everything
+    /// under a path, which is how a manuscript is measured before there is
+    /// anything to compile.
+    #[schema(example = 52840)]
+    pub words: u64,
     /// The limit that was applied, after clamping.
     #[schema(example = 50)]
     pub limit: usize,
@@ -255,6 +308,24 @@ pub struct CreatePage {
     #[serde(default)]
     #[schema(example = json!(["alice", "bob"]))]
     pub readers: Vec<Username>,
+    /// A word count to aim at. On a page with `contents` it measures the whole
+    /// assembled work rather than this page's own body.
+    #[serde(default)]
+    #[schema(example = 90000)]
+    pub target: Option<u64>,
+    /// The day this page is due.
+    ///
+    /// A full timestamp, because this is JSON and a client has a clock. Files
+    /// may write a bare `2027-03-01` by hand, which reads as midnight UTC.
+    #[serde(default)]
+    pub due: Option<DateTime<Utc>>,
+    /// The pages this one assembles, in order.
+    ///
+    /// An empty list makes this a page that assembles others and has none yet.
+    /// Omitting it makes an ordinary page. Entries are slugs from the wiki root.
+    #[serde(default)]
+    #[schema(example = json!(["book/one/opening", "book/one/the-ferry"]))]
+    pub contents: Option<Vec<String>>,
 }
 
 /// A whole page. Every field is replaced, including the ones left out.
@@ -287,6 +358,23 @@ pub struct ReplacePage {
     #[serde(default)]
     #[schema(example = json!(["alice", "bob"]))]
     pub readers: Vec<Username>,
+    /// Omitting this clears the target.
+    #[serde(default)]
+    #[schema(example = 90000)]
+    pub target: Option<u64>,
+    /// Omitting this clears the due date.
+    #[serde(default)]
+    pub due: Option<DateTime<Utc>>,
+    /// Omitting this makes the page an ordinary one again.
+    ///
+    /// **An editor has to send this back whether or not it shows a control for
+    /// it.** A `PUT` that leaves it out unmakes a manuscript, which is the same
+    /// trap `owner` already sets and the reason that field is filled back in
+    /// automatically. This one is not: there is nothing to infer a contents list
+    /// from, so the only protection is the client returning what it was given.
+    #[serde(default)]
+    #[schema(example = json!(["book/one/opening", "book/one/the-ferry"]))]
+    pub contents: Option<Vec<String>>,
 }
 
 /// A partial update. Omitted fields are left alone.
@@ -319,6 +407,21 @@ pub struct PatchPage {
     /// Replaces the whole reader list when present.
     #[serde(default)]
     pub readers: Option<Vec<Username>>,
+    /// Omit to leave the target alone; send `null` to clear it.
+    #[serde(default, deserialize_with = "present_or_absent")]
+    #[schema(value_type = Option<u64>, example = 90000)]
+    pub target: Option<Option<u64>>,
+    /// Omit to leave the due date alone; send `null` to clear it.
+    #[serde(default, deserialize_with = "present_or_absent")]
+    #[schema(value_type = Option<String>)]
+    pub due: Option<Option<DateTime<Utc>>>,
+    /// Omit to leave the contents alone; send `null` to make the page an
+    /// ordinary one, or `[]` to leave it assembling nothing.
+    ///
+    /// The three are different requests, which is why this is not a plain list.
+    #[serde(default, deserialize_with = "present_or_absent")]
+    #[schema(value_type = Option<Vec<String>>, example = json!(["book/one/opening"]))]
+    pub contents: Option<Option<Vec<String>>>,
 }
 
 /// Distinguishes "field absent" from "field set to null".
@@ -501,6 +604,16 @@ fn names(readers: Vec<Username>) -> Vec<String> {
     readers.iter().map(Username::to_string).collect()
 }
 
+/// What to write into the file for a due date that arrived over the API.
+///
+/// A full RFC 3339 timestamp, which is the same normalisation `created` gets and
+/// for the same reason: the value was parsed on the way in, so there is no
+/// original spelling left to be faithful to. A file written by hand keeps
+/// whatever it says, because nothing parsed it. See [`Page::due`].
+fn stored_due(due: Option<DateTime<Utc>>) -> Option<String> {
+    due.map(|day| day.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
 // ----------------------------------------------------------------- handlers
 
 /// List pages, without their bodies.
@@ -542,6 +655,7 @@ pub async fn list(
     let response = PageListResponse {
         pages: list.pages.into_iter().map(PageSummary::from).collect(),
         total: list.total,
+        words: list.words,
         limit,
         offset,
     };
@@ -586,6 +700,9 @@ pub async fn create(
         // its author included — technically correct and never what was meant.
         owner: resolve_owner(request.owner, visibility, &viewer)?,
         readers: names(request.readers),
+        target: request.target,
+        due: stored_due(request.due),
+        contents: request.contents,
     };
 
     let page = state
@@ -682,6 +799,12 @@ pub async fn replace(
         // stands in, which is what `POST` does too.
         owner: resolve_owner(request.owner, visibility, &viewer)?,
         readers: names(request.readers),
+        // These three get no such rescue, and that is deliberate. An owner can be
+        // inferred from who is asking; a contents list cannot be inferred from
+        // anything, so a `PUT` that leaves it out means what it says.
+        target: request.target,
+        due: stored_due(request.due),
+        contents: request.contents,
     };
 
     let page = state
@@ -742,6 +865,15 @@ pub async fn patch(
     }
     if let Some(readers) = request.readers {
         frontmatter.readers = names(readers);
+    }
+    if let Some(target) = request.target {
+        frontmatter.target = target;
+    }
+    if let Some(due) = request.due {
+        frontmatter.due = stored_due(due);
+    }
+    if let Some(contents) = request.contents {
+        frontmatter.contents = contents;
     }
 
     // Whatever the two fields were before and are being set to, the result has
@@ -933,6 +1065,7 @@ fn parse_sort(raw: Option<&str>) -> AppResult<SortBy> {
         Some("title") => Ok(SortBy::Title),
         Some("created") => Ok(SortBy::Created),
         Some("updated") => Ok(SortBy::Updated),
+        Some("words") => Ok(SortBy::Words),
         Some(other) => Err(AppError::InvalidParameter {
             parameter: "sort",
             value: other.to_owned(),

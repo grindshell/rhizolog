@@ -223,6 +223,89 @@ pub fn extract_links(source: &Slug, markdown: &str) -> Vec<Link> {
     links
 }
 
+/// How many words a page body holds.
+///
+/// The count an editor means, which is not the count `wc -w` gives: code is not
+/// prose, and neither is a link's target or an image's alt text. Every rule here
+/// is a consequence of that one sentence, and each is covered by a test, because
+/// a number nobody can reproduce is a number to argue with.
+///
+/// Counted, from the AST rather than the source:
+///
+/// - Text in paragraphs, headings, list items, block quotes, tables and
+///   footnote definitions.
+/// - A link's **text**, never its target. `[the notes](notes/rust/async.md)` is
+///   two words. A bare `[[notes/rust/async]]` is one, because the slug is what
+///   the page displays.
+///
+/// Not counted: fenced and inline code, raw HTML, image alt text, frontmatter
+/// (which is not in the body at all), and footnote *references*, which are
+/// markers rather than words.
+///
+/// Raw HTML divides in a way worth knowing. A raw HTML **block** takes its
+/// contents with it, since the renderer drops the whole thing and none of it
+/// reaches the page. An **inline** tag does not: `<span>` is dropped and the
+/// words it wraps are still rendered and still read, so they are still words.
+///
+/// A word is a whitespace-separated run holding at least one alphanumeric
+/// character, so `--` and `|` in a table rule are not words and `it's` is one.
+pub fn count_words(markdown: &str) -> u64 {
+    let arena = Arena::new();
+    let root = comrak::parse_document(&arena, markdown, &options());
+
+    let mut text = String::new();
+    collect_text(root, &mut text);
+
+    text.split_whitespace()
+        .filter(|word| word.chars().any(char::is_alphanumeric))
+        .count() as u64
+}
+
+/// Gather the readable text of a subtree.
+///
+/// Literals are concatenated **verbatim**, with separators added only where the
+/// source had one. That is load-bearing: comrak splits `un*believable*` into two
+/// nodes and `hello *world*` into two nodes, and the difference between them is
+/// the space inside the first `Text` literal. Joining every node with a space
+/// would make the first two words; joining with nothing would make the second
+/// one. Following the literals is the only version that gets both right.
+///
+/// Blocks and breaks contribute a newline, so the last word of one paragraph and
+/// the first of the next do not run together into one.
+fn collect_text<'a>(node: &'a AstNode<'a>, out: &mut String) {
+    match &node.data.borrow().value {
+        NodeValue::Text(literal) => {
+            out.push_str(literal);
+            return;
+        }
+        // Code is not prose. This is the whole reason the count goes through the
+        // parser: the parser has already decided what is code, and a scan over
+        // the source would have to relitigate it. It is the same argument
+        // `extract_links` makes above.
+        NodeValue::Code(_) | NodeValue::CodeBlock(_) => return,
+        // Dropped by the renderer, so it is not on the page to be read.
+        NodeValue::HtmlInline(_) | NodeValue::HtmlBlock(_) => return,
+        // Alt text describes a picture rather than being part of the prose, and
+        // the whole subtree goes with it.
+        NodeValue::Image(_) => return,
+        // A marker, not a word.
+        NodeValue::FootnoteReference(_) => return,
+        NodeValue::SoftBreak | NodeValue::LineBreak => {
+            out.push('\n');
+            return;
+        }
+        value => {
+            if value.block() {
+                out.push('\n');
+            }
+        }
+    }
+
+    for child in node.children() {
+        collect_text(child, out);
+    }
+}
+
 /// Drop display text that merely repeats the target.
 ///
 /// A bare `[[notes/a]]` parses with `notes/a` as its label, but that is the
@@ -649,5 +732,115 @@ mod tests {
             assert_eq!(LinkKind::parse(kind.as_str()), Some(kind));
         }
         assert_eq!(LinkKind::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn counts_the_words_in_ordinary_prose() {
+        assert_eq!(count_words("Knowledge branches off chaotically.\n"), 4);
+        assert_eq!(count_words(""), 0);
+        assert_eq!(count_words("   \n\n  \n"), 0);
+    }
+
+    /// Two paragraphs are not one long sentence, and neither are two cells.
+    #[test]
+    fn blocks_do_not_run_into_each_other() {
+        assert_eq!(count_words("# One\n\nTwo three\n\n- four\n- five\n"), 5);
+        assert_eq!(count_words("> quoted words here\n"), 3);
+        assert_eq!(
+            count_words("| a | b |\n|---|---|\n| c | d |\n"),
+            4,
+            "the rule row is punctuation, not two words"
+        );
+    }
+
+    /// Emphasis splits a word in the AST, and the source is what says whether
+    /// the pieces were one word or two.
+    #[test]
+    fn emphasis_does_not_change_the_count() {
+        assert_eq!(count_words("un*believable*\n"), 1);
+        assert_eq!(count_words("hello *world*\n"), 2);
+        assert_eq!(count_words("**all** of it *emphasised*\n"), 4);
+    }
+
+    /// The reason this goes through the parser at all.
+    #[test]
+    fn code_is_not_prose() {
+        assert_eq!(
+            count_words(
+                "Prose here.\n\n```rust\nfn main() { println!(\"lots of words\"); }\n```\n"
+            ),
+            2
+        );
+        assert_eq!(count_words("Call `std::mem::swap` now.\n"), 2);
+        assert_eq!(
+            count_words("~~~\nnot counted at all\n~~~\n"),
+            0,
+            "a tilde fence is a fence"
+        );
+    }
+
+    /// A count that moved when somebody indented a code block would send the
+    /// writer looking for words they never wrote.
+    #[test]
+    fn an_indented_code_block_is_code_too() {
+        assert_eq!(
+            count_words("Prose.\n\n    fn main() { one two three }\n"),
+            1
+        );
+    }
+
+    /// A link says something; where it points is not part of what it says.
+    #[test]
+    fn a_link_contributes_its_text_and_not_its_target() {
+        assert_eq!(
+            count_words("See [the async notes](notes/rust/async.md).\n"),
+            4
+        );
+        assert_eq!(
+            count_words("See [[notes/rust/async|the async notes]].\n"),
+            4
+        );
+        assert_eq!(
+            count_words("See [[notes/rust/async]].\n"),
+            2,
+            "a bare wikilink displays its slug, so the slug is the word"
+        );
+        assert_eq!(count_words("Read <https://example.com/a/b/c>.\n"), 2);
+    }
+
+    /// Alt text describes a picture rather than being read as part of the prose.
+    #[test]
+    fn image_alt_text_is_not_prose() {
+        assert_eq!(count_words("Look: ![a red bicycle](bike.png)\n"), 1);
+    }
+
+    /// The markup is not words. What is *between* the markup still is, and the
+    /// two halves of that are not the same rule.
+    ///
+    /// A raw HTML **block** takes its whole contents with it, because the
+    /// renderer drops the block and nothing in it reaches the page. An inline
+    /// tag does not: `<span>` is dropped and the words it wraps are still
+    /// rendered, still read, and still words. Counting them would have been the
+    /// easy thing to write and would have made the number disagree with the page.
+    #[test]
+    fn markup_is_not_words_but_the_words_inside_it_are() {
+        assert_eq!(count_words("<div>markup words here</div>\n"), 0);
+        assert_eq!(count_words("Prose <span>and markup</span> prose.\n"), 4);
+    }
+
+    /// A footnote's text is prose; its marker is not.
+    #[test]
+    fn footnote_text_counts_and_the_marker_does_not() {
+        assert_eq!(
+            count_words("A claim.[^1]\n\n[^1]: Two words.\n"),
+            4,
+            "two in the claim, two in the note"
+        );
+    }
+
+    /// Punctuation on its own is not a word, and an apostrophe does not make two.
+    #[test]
+    fn a_word_needs_a_letter_or_a_digit_in_it() {
+        assert_eq!(count_words("it's a 42 --- ... word\n"), 4);
     }
 }

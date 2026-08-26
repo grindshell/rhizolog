@@ -1036,6 +1036,219 @@ async fn an_unknown_sort_key_is_refused_with_the_valid_ones() {
     );
 }
 
+// ----------------------------------------------------------------- words
+
+/// The whole point of putting the count in the index: a manuscript's length is
+/// a prefix filter and one field, rather than reading every file to add them up.
+#[tokio::test]
+async fn a_prefix_total_is_every_page_under_it() {
+    let app = App::new().await;
+    app.seed("book/one", json!({ "content": "one two three\n" }))
+        .await;
+    app.seed("book/two", json!({ "content": "four five\n" }))
+        .await;
+    app.seed("elsewhere", json!({ "content": "not part of the book\n" }))
+        .await;
+
+    let book = app.get("/api/pages?prefix=book").await;
+    assert_eq!(book.body["total"], 2);
+    assert_eq!(book.body["words"], 5, "three words plus two");
+
+    let everything = app.get("/api/pages").await;
+    assert_eq!(everything.body["words"], 10);
+}
+
+/// The total is the filtered set, not the page of results. Summing what came
+/// back would make a book's length depend on how the caller paginated it, which
+/// is the kind of number that looks right until somebody scrolls.
+#[tokio::test]
+async fn a_prefix_total_does_not_move_when_the_limit_does() {
+    let app = App::new().await;
+    for slug in ["book/one", "book/two", "book/three"] {
+        app.seed(slug, json!({ "content": "two words\n" })).await;
+    }
+
+    let all = app.get("/api/pages?prefix=book").await;
+    let one = app.get("/api/pages?prefix=book&limit=1").await;
+
+    assert_eq!(all.body["words"], 6);
+    assert_eq!(one.body["words"], 6, "the sum followed the limit");
+    assert_eq!(one.body["pages"].as_array().unwrap().len(), 1);
+}
+
+/// `size` is the file and `words` is the prose, and a page that is mostly a code
+/// fence is the case where they disagree loudly. Sorting on one is not sorting
+/// on the other.
+#[tokio::test]
+async fn words_are_prose_and_size_is_bytes() {
+    let app = App::new().await;
+    app.seed(
+        "sample",
+        json!({ "content": "Two words.\n\n```rust\nfn main() { a lot of text in here }\n```\n" }),
+    )
+    .await;
+    app.seed("prose", json!({ "content": "one two three four five\n" }))
+        .await;
+
+    let by_words = app.get("/api/pages?sort=words&order=desc").await;
+    assert_eq!(by_words.body["pages"][0]["slug"], "prose");
+    assert_eq!(by_words.body["pages"][0]["words"], 5);
+    assert_eq!(by_words.body["pages"][1]["words"], 2);
+
+    // The code-heavy page is the larger file and the smaller count.
+    let sample = app.get("/api/pages/sample").await;
+    let prose = app.get("/api/pages/prose").await;
+    assert!(sample.body["size"].as_u64().unwrap() > prose.body["size"].as_u64().unwrap());
+    assert!(sample.body["words"].as_u64().unwrap() < prose.body["words"].as_u64().unwrap());
+}
+
+/// A rebuild recomputes every count from the files. If it did not agree with the
+/// incremental path, the number on screen would depend on when it was last
+/// written rather than on what the page says.
+#[tokio::test]
+async fn a_rebuild_produces_the_same_counts() {
+    let app = App::new().await;
+    app.seed("book/one", json!({ "content": "one two three\n" }))
+        .await;
+    app.seed("book/two", json!({ "content": "four five\n" }))
+        .await;
+
+    let before = app.get("/api/pages?prefix=book").await;
+    assert_eq!(
+        app.post("/api/reindex", json!({})).await.status,
+        StatusCode::OK
+    );
+    let after = app.get("/api/pages?prefix=book").await;
+
+    assert_eq!(before.body["words"], after.body["words"]);
+    assert_eq!(before.body["pages"], after.body["pages"]);
+}
+
+// -------------------------------------------------------------- contents
+
+/// Absent means an ordinary page and `[]` means a manuscript with no chapters
+/// yet. Collapsing the two would make "start a book" unexpressible.
+#[tokio::test]
+async fn an_absent_contents_and_an_empty_one_are_different() {
+    let app = App::new().await;
+    app.seed("ordinary", json!({ "content": "Body.\n" })).await;
+    app.seed("started", json!({ "content": "Body.\n", "contents": [] }))
+        .await;
+
+    let ordinary = app.get("/api/pages/ordinary").await;
+    let started = app.get("/api/pages/started").await;
+
+    assert!(
+        ordinary.body.get("contents").is_none(),
+        "an ordinary page claimed to assemble something"
+    );
+    assert_eq!(started.body["contents"], json!([]));
+}
+
+/// A `PUT` replaces every field, so a client that does not send the list back
+/// unmakes the manuscript. That is the documented behaviour rather than a bug,
+/// and it is worth a test precisely because it is the trap `owner` already set.
+#[tokio::test]
+async fn a_put_that_omits_contents_clears_it() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "Body.\n", "contents": ["book/one"], "target": 90000 }),
+    )
+    .await;
+
+    let kept = app
+        .put(
+            "/api/pages/book",
+            json!({ "content": "Body.\n", "contents": ["book/one"], "target": 90000 }),
+        )
+        .await;
+    assert_eq!(kept.body["contents"], json!(["book/one"]));
+    assert_eq!(kept.body["target"], 90000);
+
+    let dropped = app
+        .put("/api/pages/book", json!({ "content": "Body.\n" }))
+        .await;
+    assert!(dropped.body.get("contents").is_none());
+    assert!(dropped.body.get("target").is_none());
+}
+
+/// `PATCH` has three answers where `PUT` has two, and all three are different
+/// requests: leave it, empty it, and make the page ordinary again.
+#[tokio::test]
+async fn patch_tells_an_omitted_contents_from_a_null_and_an_empty_one() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "Body.\n", "contents": ["book/one"] }),
+    )
+    .await;
+
+    let untouched = app
+        .patch("/api/pages/book", json!({ "title": "Book" }))
+        .await;
+    assert_eq!(untouched.body["contents"], json!(["book/one"]));
+
+    let emptied = app
+        .patch("/api/pages/book", json!({ "contents": [] }))
+        .await;
+    assert_eq!(emptied.body["contents"], json!([]));
+
+    let cleared = app
+        .patch("/api/pages/book", json!({ "contents": null }))
+        .await;
+    assert!(cleared.body.get("contents").is_none());
+}
+
+/// An entry nobody can resolve is one bad chapter, never a bad page. Parsing
+/// these into slugs on the way in would make a typo cost the title, the tags and
+/// every listing the page appears in.
+#[tokio::test]
+async fn a_contents_entry_that_is_not_a_slug_leaves_the_page_alone() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({
+            "title": "The Long Way Round",
+            "tags": ["manuscript"],
+            "content": "Body.\n",
+            "contents": ["book/one", "../etc/passwd", "", "not a slug at all"],
+        }),
+    )
+    .await;
+
+    let listing = app.get("/api/pages?tag=manuscript").await;
+    assert_eq!(
+        listing.body["total"], 1,
+        "the page fell out of its own listing"
+    );
+    assert_eq!(listing.body["pages"][0]["title"], "The Long Way Round");
+
+    let read = app.get("/api/pages/book").await;
+    assert_eq!(read.status, StatusCode::OK);
+    assert_eq!(read.body["title"], "The Long Way Round");
+    assert_eq!(
+        read.body["contents"],
+        json!(["book/one", "../etc/passwd", "", "not a slug at all"]),
+        "entries are kept as written for compile to judge"
+    );
+}
+
+/// A due date is a full timestamp over the API and normalises like `created`.
+#[tokio::test]
+async fn a_target_and_a_due_date_round_trip() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "Body.\n", "target": 90000, "due": "2027-03-01T00:00:00Z" }),
+    )
+    .await;
+
+    let read = app.get("/api/pages/book").await;
+    assert_eq!(read.body["target"], 90000);
+    assert_eq!(read.body["due"], "2027-03-01T00:00:00Z");
+}
+
 // ---------------------------------------------------------------- search
 
 /// The property that makes writes usable immediately: the index is updated

@@ -247,8 +247,11 @@ who wrote it.
 
 Five phases, in this order, and L3 may swap with L2:
 
-- **L0: words.** A `words` column filled from the AST link extraction already
-  walks, plus `target`, `due` and `contents` in frontmatter.
+- **L0: words.** **Built.** `markdown::count_words`, `pages.words` at schema
+  version 10, `target`, `due` and `contents` in frontmatter, `?sort=words`, and
+  a `words` total on the listing summed over the whole filtered set. What the
+  plan did not say and the code had to decide is on the plan page under "What L0
+  turned out to be".
 - **L1: compile and the manifest.** `contents:` entries indexed as `part` links
   with an `ordinal`, heading shift, gaps and cycles reported rather than hidden.
 - **L2: `prose/v1`.** Rules in `.rhizolog/prose.toml`, five rule kinds, every

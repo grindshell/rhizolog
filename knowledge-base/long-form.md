@@ -875,6 +875,8 @@ Each ends at a reviewable state and a reasonable commit boundary.
 
 ### L0: words
 
+**Built.** See [What L0 turned out to be](#what-l0-turned-out-to-be).
+
 Add the `words` column and the AST word counter; `target`, `due` and `contents`
 to frontmatter, the last as an `Option<Vec<String>>`; `?sort=words` and prefix
 totals.
@@ -941,6 +943,74 @@ It is authored and **not** secret, so it goes with `times/` and `ideas/` rather
 than with `users/`: back it up, commit it. The gitignore needs no change, because
 it already names `index.db` rather than the directory, which is the decision that
 keeps paying.
+
+## What L0 turned out to be
+
+`markdown::count_words` is the counter, `pages.words` is the column at schema
+version 10, and `target`, `due` and `contents` are on `Frontmatter`. Four things
+about it differ from what this page said above, and one is a rule the plan had
+not thought to state.
+
+### The counter is in `markdown.rs`, not in `prose/text.rs`
+
+The module list puts text extraction in `prose/text.rs` and says it is shared
+with the word counter on purpose. That sharing still stands and the location does
+not: `markdown.rs` is already the module that owns walking comrak's AST, it
+already has `options()` and a `text_of` for link labels, and a second module
+holding one function would have split that knowledge in two before there was a
+second reader. When `prose/v1` lands, `prose/text.rs` holds sentence splitting
+and calls in here for extraction.
+
+### Raw HTML divides, and only half of it was in the plan
+
+The plan says raw HTML is not counted. That is one rule where the code needs two,
+and the difference is what the reader sees:
+
+- A raw HTML **block** takes its contents with it. The renderer drops the whole
+  thing, so none of it reaches the page.
+- An **inline** tag does not. `<span>` is dropped and the words it wraps are
+  still rendered, still read, and therefore still words.
+
+`markup_is_not_words_but_the_words_inside_it_are` is the test, and it was written
+after the easy version of the rule failed it. Counting a `<span>`'s contents as
+nothing would have made the number disagree with the page.
+
+Two smaller rules arrived the same way. Literals are concatenated **verbatim**
+rather than joined with a separator, because comrak splits `un*believable*` and
+`hello *world*` into two nodes each and only the source says which was one word.
+And a bare `[[notes/rust/async]]` counts as **one** word, since the slug is what
+the page displays.
+
+### `target` gets the bare-date treatment, and `due` gets `owner`'s
+
+The plan named the fields and not what happens when somebody mistypes one. Both
+answers already existed in this codebase and they are not the same answer:
+
+- **`target` is parsed**, through a `frontmatter::word_count` deserialiser that
+  accepts `90,000`, `90_000` and `90 000` as well as `90000`, for the reason
+  `created` accepts a bare date. `-1`, `9.5` and `lots` are refused, because a
+  negative target is not a small one and reading it as zero would report a page
+  as finished.
+- **`due` is kept as written** and read by an accessor. A value that is not a
+  date names no day, exactly as an `owner` that is not a username names nobody,
+  and the field stays in the file so the mistake is visible rather than silently
+  dropped on the next write. This is the softer of the two because a due date is
+  a note to the author rather than something the code computes with.
+
+Over the API `due` is a full timestamp and a bad one is a `400`: strict at the
+boundary, lenient for a file somebody typed. That is the same split slugs already
+get, and it means the API can be unforgiving without a hand-written page paying
+for it.
+
+### The prefix total is a field on the listing
+
+`GET /api/pages` gained `words` beside `total`, summed over the **whole filtered
+set** rather than the page of results, from the same query that produces the
+count. Summing the returned rows instead would make a manuscript's length depend
+on the caller's `limit`.
+
+Measured against `example-wiki/`, which is the first real prose it has seen:
+`?prefix=notes` reports 711 words across six pages, and the six add up.
 
 ## Test strategy
 

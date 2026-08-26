@@ -166,6 +166,98 @@ impl<'de> de::Visitor<'de> for Stamp {
     }
 }
 
+/// Read an optional word count that may have been written with separators.
+///
+/// The same argument [`timestamp`] makes, arriving at the same answer for the
+/// same reason. `target: 90000` is what this writes; `target: 90,000` is what a
+/// person writes, and refusing it would not cost them the field but the
+/// **page**: a frontmatter block that will not parse takes the title and tags
+/// with it. There is no ambiguity to resolve in `90,000`, so accepting it
+/// invents nothing.
+///
+/// `,`, `_` and spaces are all read as separators, since which one somebody
+/// reaches for is a matter of where they learned to write numbers. A negative
+/// target is refused rather than clamped: it is not a small target, it is a
+/// value that means nothing here, and quietly reading it as zero would report a
+/// page as finished.
+///
+/// It is written back as a plain integer, exactly as `created` is written back
+/// as a full timestamp. This is a parsed value rather than one kept as written,
+/// so normalising it loses nothing that was there.
+pub fn word_count<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_option(Count)
+}
+
+/// Raised from inside the visitor for [`Stamp`]'s reason: that is what puts a
+/// line number on the message.
+struct Count;
+
+impl<'de> de::Visitor<'de> for Count {
+    type Value = Option<u64>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a word count like 90000 or 90,000")
+    }
+
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(Some(value))
+    }
+
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        u64::try_from(value)
+            .map(Some)
+            .map_err(|_| E::invalid_value(de::Unexpected::Signed(value), &self))
+    }
+
+    fn visit_str<E: de::Error>(self, raw: &str) -> Result<Self::Value, E> {
+        parse_word_count(raw)
+            .map(Some)
+            .ok_or_else(|| E::invalid_value(de::Unexpected::Str(raw), &self))
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(None)
+    }
+}
+
+fn parse_word_count(raw: &str) -> Option<u64> {
+    let digits: String = raw
+        .trim()
+        .chars()
+        .filter(|character| !matches!(character, ',' | '_' | ' '))
+        .collect();
+
+    if digits.is_empty() || !digits.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+
+    digits.parse().ok()
+}
+
+/// Read a date that was kept as written, rather than parsed on the way in.
+///
+/// The same two spellings [`timestamp`] accepts and the same one it refuses, but
+/// as a fallible accessor rather than a deserialiser. A field a reader can
+/// consult without the file having had to be valid is what lets `due` be a note
+/// to the author instead of something that can make a page malformed.
+pub fn day(raw: &str) -> Option<DateTime<Utc>> {
+    parse_timestamp(raw)
+}
+
 fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     let text = raw.trim();
 
