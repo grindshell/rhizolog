@@ -89,9 +89,11 @@ for. Check `git status example-wiki` afterwards.
 
 Anything that changes `index.md` changes its own word count, which the log's last
 line for `index` has to match or the next scan records the difference as a `net`.
-The chain is baseline 2659, then `+260 -40`, then `+220 -21`, ending at 3078. Fix
+The chain is baseline 3100, then `+260 -40`, then `+220 -21`, ending at 3519. Fix
 it by moving the **baseline**, which carries no churn and so changes no total on
 the chart: it is the final count less 419, and the middle total moves with it.
+Those three numbers rot every time this page's prose changes; the rule is what to
+trust, and it has been right every time the illustration was not.
 
 **`.rhizolog/` is not all disposable.** `index.db` is derived and rebuilds on
 startup. Four things beside it are authored data with no other copy:

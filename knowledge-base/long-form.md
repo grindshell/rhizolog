@@ -1524,6 +1524,11 @@ The panel pays one compile when it is shown and divides. That is the same walk
 walk is where the cost is, the assembly is concatenation, and a second code path
 for the same tree would be a second answer about what the book is.
 
+The same argument later produced `GET /api/pace`, which does the division that
+`target` and `due` and the word log make possible and which nothing here could
+have been a field for either. See [Pacing](pacing.md), including what it costs to
+walk the book a second time on the same page view.
+
 ### A part edge does not look like a wikilink, and bows the same way
 
 The two questions L1 deferred, answered. Drawn in the second colour and heavier

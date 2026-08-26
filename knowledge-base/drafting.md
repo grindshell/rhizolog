@@ -56,6 +56,11 @@ the index is derived, and a field somebody mistyped must not cost them the page.
   `target`, `due` and the word log and needs no fields, so it is cheaper after
   this lands than before. Reorder and split are edits to the spine rather than
   facts about a chapter.
+
+  **Pacing was built afterwards, on exactly those terms**: no new fields, and
+  the manifest's `target` and `subtree` were two of its inputs. See
+  [Pacing](pacing.md). The other two are still gaps. This bullet is left as
+  written, like everything else above the record sections.
 - **Colour as data.** Scrivener's Label is a colour with a name. Here a stage is
   a word, and the dashboard decides how to paint it. A palette in frontmatter is
   a document about a display.

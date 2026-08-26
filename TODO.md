@@ -327,6 +327,12 @@ What is not done:
   fine at the sizes anybody has written here. It is the first thing to look at if
   a large manuscript makes its own contents page slow to open.
 
+  **Pacing doubles it** on a page that also names a `target` or a `due`, since
+  `GET /api/pace` walks the same tree to know what the document carries. Paid
+  deliberately rather than avoided: the alternatives were trusting a client's
+  arithmetic or hiding the one glanceable figure behind a click. A page with only
+  a `contents:` list is unaffected, because the strip asks for nothing there.
+
 **The recursion rule is settled.** A page contributes its body, then each page in
 its `contents:` list, in order, recursively; a link in prose is never structure,
 anywhere. Six alternatives and why each lost are on the plan page. What it left as
@@ -400,13 +406,10 @@ failed on `create table` and the index would not have opened at all. Two tests
 guard it now, one comparing the two lists and one opening a database stamped with
 an older version.
 
-Three gaps found in the survey this plan came out of and still **not** built:
+Three gaps were found in the survey this plan came out of. **Pacing is built**
+and has [its own page](knowledge-base/pacing.md) and its own section below. The
+other two are still not:
 
-- **Pacing.** Words remaining over days remaining, from `target`, `due`, the
-  compiled total and the word log. It needs no new fields at all, and it is now
-  cheaper than it was: the manifest reports every section's own target and its
-  `subtree`, so the arithmetic has its inputs. The house rule applies: a figure
-  with its arithmetic, not encouragement.
 - **Reordering the spine from the panel.** Today the only way to move a chapter
   is to edit a YAML list in a textarea. Order moved into frontmatter so a
   formatter could not reorder a book, and the panel was meant to pay that back;
@@ -427,6 +430,38 @@ Three questions the plan left open and the build did not close:
   across one manuscript, and it is not obvious anybody is asking it.
 - **Promotion from Idea Inbox sets no stage.** `todo` would be defensible and so
   would nothing, and nothing is the smaller claim, so nothing is what it does.
+
+## Pacing
+
+**Built**, `pace/v1`, and recorded in [Pacing](knowledge-base/pacing.md). Words
+remaining over days remaining, against what the last fortnight actually came to,
+from `target`, `due`, the compiled total and the word log. No new fields: every
+input was already on disk and drafting had already given the manifest the two
+counts the arithmetic needed.
+
+`GET /api/pace?root=` is its own endpoint rather than a flag on `/api/compile`,
+because half of it is read off the word log and is therefore refused to a caller
+with no account even under `RHIZOLOG_ANONYMOUS_READ`, which a compile is not. It
+is arithmetic and not encouragement: two rates in the same unit, every figure
+beside the values it was divided from, and no verdict anywhere.
+
+The one figure worth knowing about before reading the page is `uncounted`: words
+written in the same fortnight on pages the document does not carry. The rate has
+to be in the same currency as the remainder, so a cut scene is in neither, and
+saying so is what stops "excluded words do not count" being read as a claim about
+the chart, where they very much do.
+
+What is not done:
+
+- **Nothing paces a whole wiki.** One manuscript at a time, so somebody writing
+  two books asks twice. `/api/word-stats` answers the wiki-wide half already.
+- **The dashboard always asks about now.** `?at=` is on the endpoint, so the
+  fixture's pinned figures are reproducible over HTTP and not in a browser. The
+  hours heat map and the words chart have the same shape, so this is the
+  dashboard's rather than pacing's.
+- **A rate over a fortnight says nothing about which fortnight.** One enormous
+  day and fourteen steady ones give the same number, and `active_days` is all
+  that separates them.
 
 ## Rough edges
 

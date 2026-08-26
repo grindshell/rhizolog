@@ -26,6 +26,8 @@ Every page should be reachable from this index.
   in it, and holding the prose to rules you wrote down
 - [Drafting](drafting.md): what a chapter says about itself, being a synopsis, a
   stage, a target of its own, and staying in the spine while out of the book
+- [Pacing](pacing.md): words remaining over days remaining, the rate that
+  actually happened, and why a net is the right number here and nowhere else
 - [The desktop app](desktop-app.md) — packaging as a portable Tauri app, and
   keeping the server the only interface
 - [The product site](product-site.md) — rhizolog.com: what the landing page is

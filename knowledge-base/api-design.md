@@ -58,6 +58,29 @@ storage model it sits on.
 Plus fields rather than endpoints: `words` on the page listing and the page read,
 and `target`, `due` and `contents` on a page that carries them.
 
+### Pacing is one more, and it is one more because of who may ask
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/pace` | Words remaining over days remaining for `?root=`, against what the last `?days=` actually came to; `?at=`, `?offset=` |
+
+It could have been `?pace=true` on `/api/compile` and the shapes would have
+fitted. The gate does not. A compile is a document, served under the ordinary
+page rules, so an anonymous caller on a wiki published with
+`RHIZOLOG_ANONYMOUS_READ` can assemble a public book; a pace is half read off the
+word log and is refused to a caller with no account on the same terms
+`/api/word-stats` is. **Two different answers to "who may ask this" is two
+endpoints.** A query parameter that quietly changes the audience of a response is
+right until somebody adds a caller.
+
+`?root=` rather than a path segment, for the catch-all reason below that already
+produced `/api/move` and `/api/compile`.
+
+`/api/compile` gained one field with it: the root's `due`, beside the `target` it
+already reported. They are the same kind of thing, what the work is aiming at and
+when, and carrying both means a client holding a compile never has to read the
+page again to draw a deadline. See [Pacing](pacing.md).
+
 ### Drafting is no endpoints at all
 
 Three more fields and one more query parameter, which is the measure of whether a
@@ -98,9 +121,11 @@ needs whenever a parameter changes what a number indexes, and it is cheaper than
 two endpoints that would drift.
 
 **`GET /api/word-stats` refuses an anonymous caller** on a wiki with accounts,
-including under `RHIZOLOG_ANONYMOUS_READ`. It is the only read that does. A
-writing history is working state rather than published content, and that variable
-exists to publish pages marked `public`.
+including under `RHIZOLOG_ANONYMOUS_READ`. A writing history is working state
+rather than published content, and that variable exists to publish pages marked
+`public`. `GET /api/pace` is refused on the same terms and for the same reason,
+which is why it is not a parameter on `/api/compile`; those two are the only
+reads that do it.
 
 **`GET /api/prose/rules` is what makes the other two honest.** `.rhizolog/prose.toml`
 is outside the page API and outside the wiki walker, so without it a remote caller

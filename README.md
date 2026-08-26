@@ -306,6 +306,39 @@ The log is files, at `<root>/.rhizolog/words/<YYYY-MM>.log`, one line a write.
 Deleting `index.db` and restarting reproduces the whole series and adds nothing
 to the log, which is the property that made it a file rather than a table.
 
+### Pacing
+
+`GET /api/pace?root=book` divides one by the other. A `target` says how long the
+work should end up, a `due` says when, the compiled total says where it is now,
+and the word log says what the last fortnight actually came to:
+
+```
+1,394 to go · 56 days left · 24.9 a day to make it
+Last 14 days · +606 (726 added, 120 removed) on 4 days · 43.3 a day
+At that rate, Sep 7, 2026 (33 days)
+```
+
+Two rates, the same unit, side by side, and **nothing that has an opinion about
+which is bigger.** No streak, no badge, no colour that changes when a number
+crosses a line. Every figure comes back with the values it was divided from, so
+the arithmetic can be checked from the response rather than believed.
+
+This is the one place a **net** is the right number, and the reason is worth
+stating: a target is a length rather than an amount of effort, so cutting two
+hundred words moves you away from it exactly as surely as writing two hundred
+moves you toward it. Both halves come back beside it, in that order, and the log
+itself still stores no difference anywhere.
+
+It also reports what was written in the same fortnight on pages the document does
+**not** carry: a cut scene, a chapter under an excluded part, a page deleted
+since. Those words are real and they are in the chart, and they are in no rate
+here, because the rate has to be in the same currency as the remainder or
+dividing one by the other means nothing.
+
+Half of it is read off the word log, so like `/api/word-stats` it is refused to a
+caller who has not signed in, even under `RHIZOLOG_ANONYMOUS_READ`. The dashboard
+draws it as a strip under the manuscript's progress bar.
+
 ### Prose rules you wrote down
 
 `.rhizolog/prose.toml` holds rules; `prose/v1` runs them. It is voice defence

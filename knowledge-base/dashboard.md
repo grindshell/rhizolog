@@ -417,6 +417,45 @@ and page content is what agents write, which is the rule `Snippet.tsx` exists to
 keep; here it is kept by there being nothing to render, since the field is plain
 text by definition.
 
+### The pace strip is the same question with time in it
+
+Under the progress bar, on a page naming a `target` or a `due`: the bar says how
+far along, the strip says how fast.
+
+```
+1,394 to go · 56 days left · 24.9 a day to make it
+Last 14 days · +606 (726 added, 120 removed) on 4 days · 43.3 a day
+At that rate, Sep 7, 2026 (33 days)
+```
+
+The two rates end consecutive lines so they can be read against each other, and
+**neither of them is coloured**. Nothing on the strip says which is bigger, and
+there is no streak, no badge and no change of tone when a number goes up: the
+same terms the hours heat map and the words chart are on. A net is always shown
+with both halves it came from, because a rewrite of two thousand words into
+nineteen hundred is not "minus one hundred" anywhere else in this product either.
+
+Three of its behaviours are decisions rather than defaults:
+
+- **It asks for nothing on a page carrying only a `contents:` list.** A null
+  resource source is what makes that true, and it matters because
+  `GET /api/pace` walks the whole book again, on top of the walk this panel
+  already costs.
+- **It renders nothing at all when the request fails**, with no error notice. The
+  expected failure is a 401, since half of a pace is read off the word log, and
+  on a wiki published with `RHIZOLOG_ANONYMOUS_READ` the spine above is still the
+  anonymous reader's to read. The read is guarded because reading an errored
+  resource **rethrows**, which unguarded would take the panel down with it: the
+  same guard `Async` carries.
+- **A manuscript past its target says so** rather than clamping to zero and
+  reading as finished. A target is a length somebody is aiming at, not a ceiling.
+
+The strip also reports what was written in the same fortnight on pages the
+document does not carry, and names them. That is the one way these two figures
+get misread: a cut scene is in the word log and not in the book, so it is in
+neither rate, and a reader who did not see it said so would conclude a
+fortnight's work had vanished. See [Pacing](pacing.md).
+
 ### The page header answers the same two questions about itself
 
 The panel belongs to the **parent**, and a reader arriving at a chapter from a

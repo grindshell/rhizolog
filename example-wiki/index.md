@@ -302,6 +302,66 @@ what makes the log checkable rather than believable. `scratch/inbox` is 60 words
 on 30 July and 85 on 5 August, and the line between them says `added 30,
 removed 5`.
 
+## Pacing
+
+The two sections above are the inputs to a third question, and
+`GET /api/pace?root=book` divides one into the other. It needs the same pinned
+moment they do:
+
+```
+/api/pace?root=book&at=2026-08-06T18:00:00Z&offset=0
+```
+
+which should answer **1,394 words to go in 56 days**, which is 24.9 a day, against
+**606 written in the fourteen days before it**, which is 43.3 a day, finishing on
+7 September.
+
+| Figure | Value | From |
+|---|---|---|
+| `words` | 606 | The compiled total, which is what a reader would get |
+| `remaining` | 1394 | `2000 - 606` |
+| `days_remaining` | 56 | 6 August to 30 September, counting today |
+| `required_per_day` | 24.89 | `1394 / 56` |
+| `window.added` | 726 | Eight observations across the seven assembled pages |
+| `window.removed` | 120 | All of it the rewrite of [[book/one/the-ferry]] |
+| `window.net` | 606 | `726 - 120` |
+| `window.active_days` | 4 | 3, 4, 5 and 6 August |
+| `window.per_day` | 43.29 | `606 / 14` |
+| `projected_days` | 33 | `ceil(1394 / 43.29)`, today being the first |
+| `uncounted.net` | 107 | The cut scene, in the log and not in the book |
+
+Two rates in the same unit, and nothing anywhere that says which is bigger. There
+is no streak here, no badge, and no change of tone when the number goes up, which
+is the same footing the hours heat map and the words chart are on.
+
+**The net and the compiled total are the same 606, and that is this fixture
+rather than a rule.** Every word of the book was written inside that fortnight
+and nothing was written before it, so what the log counts and what the document
+holds happen to agree exactly. On a manuscript older than its window they would
+not, and neither number would be wrong.
+
+`window.net` is also the one place in Rhizolog where a difference is the right
+figure, which reads like a contradiction of the section above it and is not. A
+target is a length rather than an amount of effort: cutting two hundred words
+moves you away from it exactly as surely as writing two hundred moves you toward
+it. So the subtraction happens here, at the point where it is the question, and
+both halves come back beside it.
+
+**The cut scene is the case worth sitting with.** Its 107 words are reported, and
+they are in neither rate:
+
+- They are not in `words`, because `book/two/the-argument` says `compile: false`
+  and nothing compiled it.
+- They are not in `window.net`, because the rate has to be in the same currency
+  as the remainder. A day spent on a scene that is out of the book does not move
+  the compiled total, and counting it would project a finish that never arrives.
+- They are in `/api/word-stats`, in full, because somebody wrote them.
+
+Reporting them under `uncounted` rather than dropping them is what stops the
+first two facts being read as the third. A reader who saw a fortnight's work
+disappear from a rate, with nothing saying where it went, would be right to
+distrust the rate.
+
 ## The prose rules
 
 `.rhizolog/prose.toml` holds five rules, one of each kind `prose/v1` has. They
@@ -311,7 +371,7 @@ opinion about your voice.
 `GET /api/prose/rules` reports them with their defaults filled in and a digest
 over the lot, so an assistant handed a finding can reproduce it without reading
 the file. `GET /api/prose?slug=index` runs them over this page and should answer
-**10 errors and 93 warnings**: an em dash for each of the first, and a word used
+**10 errors and 98 warnings**: an em dash for each of the first, and a word used
 twice inside eight of another for each of the second.
 
 The first rule is the one this project holds itself to, and it is written with
