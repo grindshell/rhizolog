@@ -473,6 +473,11 @@ mod tests {
             synopsis: None,
             stage: None,
             target: None,
+            // Pacing never reads these: what it wants from a section is its
+            // status and its slug, and where the spine named it is a question for
+            // whoever is editing the spine.
+            parent: None,
+            ordinal: None,
             depth: 0,
             words,
             subtree: words,

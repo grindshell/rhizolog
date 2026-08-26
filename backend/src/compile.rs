@@ -153,6 +153,21 @@ pub struct Section {
     /// no second concept. On a leaf the two are equal; on a part page `words` is
     /// the epigraph and `target` means the part.
     pub target: Option<u64>,
+    /// The page whose `contents:` list named this entry.
+    ///
+    /// Absent on the root and on a `?style=` preamble, which nothing named:
+    /// those are pages the request asked for rather than pages the spine
+    /// reaches. Always absent or present together with [`Section::ordinal`].
+    pub parent: Option<String>,
+    /// Where in that list, counting from zero.
+    ///
+    /// The **identity** of the entry, and not a position in this manifest. A
+    /// contents list may name the same child twice, which is what `page_parts`
+    /// is keyed `(src_slug, ordinal)` for, and a parent below something excluded
+    /// and something included is walked down both paths, so its children appear
+    /// here twice with the same ordinals. Anything reconstructing a contents
+    /// list has to key on this rather than counting rows.
+    pub ordinal: Option<usize>,
     /// How many contents lists deep this page sits. The root is zero.
     pub depth: usize,
     /// This section's own body, in words. Zero for everything but `included`.
@@ -246,18 +261,18 @@ pub async fn compile(
     if let Some(style) = style
         && let Fetched::Page(page) = pages.fetch(style).await
     {
-        emit(&mut out, &mut sections, &mut words, &page, 0)?;
+        emit(&mut out, &mut sections, &mut words, &page, 0, None)?;
     }
 
     // An explicit stack rather than recursion, which for an async walk would
     // mean boxing every level. Children are pushed in reverse so they come off
     // in the order the contents list names them.
-    //
-    // The flag is whether this entry is inside a subtree something excluded.
-    // It is carried down rather than looked up, because "excluded" is a fact
-    // about a path through the tree and not about a page: the same appendix can
-    // be excluded under one part and included under another.
-    let mut stack: Vec<(String, usize, bool)> = vec![(root.to_string(), 0, false)];
+    let mut stack: Vec<Pending> = vec![Pending {
+        raw: root.to_string(),
+        depth: 0,
+        inherited: false,
+        origin: None,
+    }];
     let mut emitted: HashSet<String> = HashSet::new();
     // Pages already walked while excluded. Nothing else can end an excluded
     // cycle: `emitted` is deliberately not consulted or written on that path, so
@@ -265,7 +280,13 @@ pub async fn compile(
     // until it hit the depth limit and turn a harmless mistake into a refusal.
     let mut skipped: HashSet<String> = HashSet::new();
 
-    while let Some((raw, depth, inherited)) = stack.pop() {
+    while let Some(Pending {
+        raw,
+        depth,
+        inherited,
+        origin,
+    }) = stack.pop()
+    {
         if sections.len() >= MAX_SECTIONS {
             return Err(CompileError::TooLarge {
                 limit: Limit::Sections,
@@ -280,7 +301,7 @@ pub async fn compile(
         }
 
         let Ok(slug) = Slug::parse(&raw) else {
-            sections.push(gap(raw, depth, out.len(), Status::Invalid));
+            sections.push(gap(raw, depth, out.len(), Status::Invalid, origin));
             continue;
         };
 
@@ -290,36 +311,33 @@ pub async fn compile(
         // one come out `included` once and `duplicate` nowhere. No special case:
         // the rule is that `duplicate` means already emitted.
         if !inherited && emitted.contains(slug.as_str()) {
-            sections.push(gap(raw, depth, out.len(), Status::Duplicate));
+            sections.push(gap(raw, depth, out.len(), Status::Duplicate, origin));
             continue;
         }
 
         match pages.fetch(&slug).await {
-            Fetched::Missing => sections.push(gap(raw, depth, out.len(), Status::Wanted)),
-            Fetched::Unreadable => sections.push(gap(raw, depth, out.len(), Status::Unreadable)),
+            Fetched::Missing => sections.push(gap(raw, depth, out.len(), Status::Wanted, origin)),
+            Fetched::Unreadable => {
+                sections.push(gap(raw, depth, out.len(), Status::Unreadable, origin))
+            }
             Fetched::Page(page) => {
                 let excluded = inherited || !page.compiled();
 
                 if excluded {
-                    sections.push(gap(raw, depth, out.len(), Status::Excluded));
+                    sections.push(gap(raw, depth, out.len(), Status::Excluded, origin));
 
                     // Still walked, so every chapter under a cut part keeps its
                     // position in the manifest rather than vanishing with it.
                     // Seen twice, it stops: see `skipped` above.
                     if skipped.insert(slug.to_string()) {
-                        for child in page.contents().unwrap_or_default().iter().rev() {
-                            stack.push((child.clone(), depth + 1, true));
-                        }
+                        descend(&mut stack, &page, depth, true);
                     }
                     continue;
                 }
 
                 emitted.insert(slug.to_string());
-                emit(&mut out, &mut sections, &mut words, &page, depth)?;
-
-                for child in page.contents().unwrap_or_default().iter().rev() {
-                    stack.push((child.clone(), depth + 1, false));
-                }
+                emit(&mut out, &mut sections, &mut words, &page, depth, origin)?;
+                descend(&mut stack, &page, depth, false);
             }
         }
     }
@@ -333,6 +351,39 @@ pub async fn compile(
         target,
         due,
     })
+}
+
+/// One entry still to be walked.
+///
+/// The flag is whether this entry is inside a subtree something excluded. It is
+/// carried down rather than looked up, because "excluded" is a fact about a path
+/// through the tree and not about a page: the same appendix can be excluded under
+/// one part and included under another.
+struct Pending {
+    raw: String,
+    depth: usize,
+    inherited: bool,
+    /// Which contents list named it, and where in that list. `None` for the root
+    /// and for a `?style=` preamble, which nothing named.
+    origin: Option<(String, usize)>,
+}
+
+/// Queue everything `page` assembles, in the order its contents list names them.
+///
+/// Pushed in reverse so they come off the stack forwards, which is why the
+/// ordinal is taken before the reversal rather than after it: it is the index in
+/// the **contents list**, not the order anything is visited in.
+fn descend(stack: &mut Vec<Pending>, page: &Page, depth: usize, inherited: bool) {
+    let slug = page.slug.to_string();
+
+    for (ordinal, child) in page.contents().unwrap_or_default().iter().enumerate().rev() {
+        stack.push(Pending {
+            raw: child.clone(),
+            depth: depth + 1,
+            inherited,
+            origin: Some((slug.clone(), ordinal)),
+        });
+    }
 }
 
 /// Fill in each section's `subtree` from the sections beneath it.
@@ -371,6 +422,7 @@ fn emit(
     words: &mut u64,
     page: &Page,
     depth: usize,
+    origin: Option<(String, usize)>,
 ) -> Result<(), CompileError> {
     separate(out);
 
@@ -388,12 +440,16 @@ fn emit(
     let counted = page.words();
     *words += counted;
 
+    let (parent, ordinal) = split(origin);
+
     sections.push(Section {
         slug: page.slug.to_string(),
         title: Some(page.title()),
         synopsis: page.synopsis().map(str::to_owned),
         stage: page.stage().map(str::to_owned),
         target: page.frontmatter.target,
+        parent,
+        ordinal,
         depth,
         words: counted,
         // Filled in by `accumulate_subtrees` once the whole tree is known, since
@@ -413,19 +469,43 @@ fn emit(
 /// `title` already followed: what a caller is being told is that nothing was
 /// emitted here, and a card for a chapter that is not in the book would be
 /// describing something the reader will not get.
-fn gap(slug: String, depth: usize, offset: usize, status: Status) -> Section {
+fn gap(
+    slug: String,
+    depth: usize,
+    offset: usize,
+    status: Status,
+    origin: Option<(String, usize)>,
+) -> Section {
+    let (parent, ordinal) = split(origin);
+
     Section {
         slug,
         title: None,
         synopsis: None,
         stage: None,
         target: None,
+        // Kept where everything else about the page is dropped, and deliberately.
+        // The other fields describe a page a reader will not get; these two
+        // describe the **entry**, which is exactly what is still there and
+        // exactly what somebody fixing a typo or reordering a spine needs. A gap
+        // that could not say which list named it would be a gap nothing could
+        // move.
+        parent,
+        ordinal,
         depth,
         words: 0,
         subtree: 0,
         offset,
         length: 0,
         status,
+    }
+}
+
+/// A parent and an ordinal are absent together or present together.
+fn split(origin: Option<(String, usize)>) -> (Option<String>, Option<usize>) {
+    match origin {
+        Some((parent, ordinal)) => (Some(parent), Some(ordinal)),
+        None => (None, None),
     }
 }
 
@@ -613,6 +693,27 @@ mod tests {
             .sections
             .iter()
             .map(|section| (section.slug.as_str(), section.status))
+            .collect()
+    }
+
+    /// A parent's `contents:` list, rebuilt out of the manifest alone.
+    ///
+    /// This is the whole reason `parent` and `ordinal` are reported, so it is
+    /// written here the way a client has to write it: keyed on the ordinal, never
+    /// on the order rows appear or on how many of them there are.
+    fn rebuilt(compiled: &Compiled, parent: &str) -> Vec<String> {
+        let mut entries: Vec<(usize, &str)> = compiled
+            .sections
+            .iter()
+            .filter(|section| section.parent.as_deref() == Some(parent))
+            .filter_map(|section| section.ordinal.map(|at| (at, section.slug.as_str())))
+            .collect();
+
+        entries.sort_by_key(|(at, _)| *at);
+        entries.dedup_by_key(|(at, _)| *at);
+        entries
+            .into_iter()
+            .map(|(_, slug)| slug.to_owned())
             .collect()
     }
 
@@ -1347,5 +1448,161 @@ mod tests {
     fn a_body_with_no_headings_is_untouched() {
         let body = "Just prose, and a [link](a.md).\n";
         assert_eq!(shift_headings(body, 3), body);
+    }
+
+    // ------------------------------------------------- who named which entry
+
+    #[tokio::test]
+    async fn every_entry_names_the_list_that_named_it_and_where() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/one, book/two]\n---\n\n# Book\n",
+            )
+            .page("book/one", "---\ncontents: [book/one/a]\n---\n\n# One\n")
+            .page("book/one/a", "# A\n")
+            .page("book/two", "# Two\n");
+
+        let result = compiled(&wiki, "book").await;
+        let named: Vec<(&str, Option<&str>, Option<usize>)> = result
+            .sections
+            .iter()
+            .map(|section| {
+                (
+                    section.slug.as_str(),
+                    section.parent.as_deref(),
+                    section.ordinal,
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            named,
+            vec![
+                ("book", None, None),
+                ("book/one", Some("book"), Some(0)),
+                ("book/one/a", Some("book/one"), Some(0)),
+                ("book/two", Some("book"), Some(1)),
+            ]
+        );
+    }
+
+    /// A preamble is a page this request asked for rather than one the spine
+    /// reaches, so it is named by nobody and there is nothing to reorder it in.
+    #[tokio::test]
+    async fn a_preamble_is_named_by_nobody() {
+        let wiki = Wiki::new()
+            .page("book", "# Book\n")
+            .page("rules/voice", "# Voice\n");
+
+        let result = compile(
+            &Slug::parse("book").unwrap(),
+            Some(&Slug::parse("rules/voice").unwrap()),
+            &wiki,
+        )
+        .await
+        .expect("compiles");
+
+        assert_eq!(result.sections[0].slug, "rules/voice");
+        assert_eq!(result.sections[0].parent, None);
+        assert_eq!(result.sections[0].ordinal, None);
+    }
+
+    /// Everything a page would say about itself is dropped on a section that is
+    /// not `included`. These two are not about the page, they are about the
+    /// entry, and an entry nothing could locate would be an entry nothing could
+    /// fix.
+    #[tokio::test]
+    async fn a_gap_a_repeat_a_bad_entry_and_a_cut_scene_all_say_where_they_sit() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/gone, book/cut, book/live, book/live, '../nope']\n---\n\n# Book\n",
+            )
+            .page("book/cut", "---\ncompile: false\n---\n\n# Cut\n")
+            .page("book/live", "# Live\n");
+
+        let result = compiled(&wiki, "book").await;
+        let placed: Vec<(&str, Status, Option<usize>)> = result.sections[1..]
+            .iter()
+            .map(|section| (section.slug.as_str(), section.status, section.ordinal))
+            .collect();
+
+        assert_eq!(
+            placed,
+            vec![
+                ("book/gone", Status::Wanted, Some(0)),
+                ("book/cut", Status::Excluded, Some(1)),
+                ("book/live", Status::Included, Some(2)),
+                ("book/live", Status::Duplicate, Some(3)),
+                ("../nope", Status::Invalid, Some(4)),
+            ]
+        );
+        assert!(
+            result.sections[1..]
+                .iter()
+                .all(|section| section.parent.as_deref() == Some("book")),
+            "every entry in one list names that list"
+        );
+    }
+
+    /// The property a client reorders against: what comes back rebuilds the
+    /// authored list byte for byte, repeats and typos included. Losing either to
+    /// a reorder would be losing something somebody wrote.
+    #[tokio::test]
+    async fn a_contents_list_is_rebuildable_from_the_manifest() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/gone, book/live, book/live, '../nope', book/cut]\n---\n\n# Book\n",
+            )
+            .page("book/live", "# Live\n")
+            .page("book/cut", "---\ncompile: false\n---\n\n# Cut\n");
+
+        let result = compiled(&wiki, "book").await;
+
+        assert_eq!(
+            rebuilt(&result, "book"),
+            vec!["book/gone", "book/live", "book/live", "../nope", "book/cut"]
+        );
+    }
+
+    /// The case that makes counting rows wrong. A page under one excluded part
+    /// and one included part is walked down both, so its own children appear
+    /// twice carrying the same ordinals, and a rebuild that counted rows would
+    /// double the list and write a book with every chapter in it twice.
+    #[tokio::test]
+    async fn a_parent_walked_down_two_paths_repeats_its_children_with_the_same_ordinals() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/cut, book/live]\n---\n\n# Book\n",
+            )
+            .page(
+                "book/cut",
+                "---\ncompile: false\ncontents: [book/shared]\n---\n\n# Cut\n",
+            )
+            .page("book/live", "---\ncontents: [book/shared]\n---\n\n# Live\n")
+            .page(
+                "book/shared",
+                "---\ncontents: [book/shared/a, book/shared/b]\n---\n\n# Shared\n",
+            )
+            .page("book/shared/a", "# A\n")
+            .page("book/shared/b", "# B\n");
+
+        let result = compiled(&wiki, "book").await;
+
+        let rows = result
+            .sections
+            .iter()
+            .filter(|section| section.parent.as_deref() == Some("book/shared"))
+            .count();
+        assert_eq!(rows, 4, "twice down the tree, twice in the manifest");
+
+        assert_eq!(
+            rebuilt(&result, "book/shared"),
+            vec!["book/shared/a", "book/shared/b"],
+            "and still one list of two"
+        );
     }
 }

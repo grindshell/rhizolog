@@ -2560,6 +2560,94 @@ async fn a_reindex_counts_log_lines_it_could_not_read() {
     assert_eq!(res.body["words"]["read"], true);
 }
 
+/// The manifest says which list named each entry and where in it, which is the
+/// whole of what a client needs to move one without reading any page.
+#[tokio::test]
+async fn the_manifest_says_which_contents_list_named_each_entry() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({
+            "content": "# Book\n",
+            "contents": ["book/one", "book/gone", "book/one", "../nope"],
+        }),
+    )
+    .await;
+    app.seed("book/one", json!({ "content": "# One\n" })).await;
+
+    let res = app.get("/api/compile?root=book").await;
+    let sections = res.body["sections"].as_array().expect("sections");
+
+    // The root is the page that was asked for rather than one the spine reaches,
+    // so nothing named it.
+    assert!(sections[0]["parent"].is_null());
+    assert!(sections[0]["ordinal"].is_null());
+
+    // Rebuilt by ordinal, the way a client has to do it, and byte for byte what
+    // the frontmatter says, repeat and typo included.
+    let mut entries: Vec<(u64, &str)> = sections[1..]
+        .iter()
+        .map(|section| {
+            assert_eq!(section["parent"], "book");
+            (
+                section["ordinal"].as_u64().expect("an ordinal"),
+                section["slug"].as_str().expect("a slug"),
+            )
+        })
+        .collect();
+    entries.sort_by_key(|(at, _)| *at);
+
+    assert_eq!(
+        entries,
+        vec![
+            (0, "book/one"),
+            (1, "book/gone"),
+            (2, "book/one"),
+            (3, "../nope"),
+        ]
+    );
+}
+
+/// Moving a chapter is a `PATCH` of the list that names it, and nothing else:
+/// no new endpoint, and the entries a compile could not resolve survive it.
+#[tokio::test]
+async fn reordering_a_spine_is_a_patch_of_its_contents() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({
+            "content": "# Book\n",
+            "contents": ["book/one", "book/gone", "../nope"],
+        }),
+    )
+    .await;
+    app.seed("book/one", json!({ "content": "# One\n" })).await;
+
+    let res = app
+        .patch(
+            "/api/pages/book",
+            json!({ "contents": ["book/gone", "book/one", "../nope"] }),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK);
+
+    let compiled = app.get("/api/compile?root=book").await;
+    let order: Vec<&str> = compiled.body["sections"]
+        .as_array()
+        .expect("sections")
+        .iter()
+        .map(|section| section["slug"].as_str().expect("a slug"))
+        .collect();
+
+    assert_eq!(order, vec!["book", "book/gone", "book/one", "../nope"]);
+
+    // A reorder is not an edit. The prose the page holds is the prose it held,
+    // and a `PATCH` that named only `contents` left everything else alone.
+    let root = app.get("/api/pages/book").await;
+    assert_eq!(root.body["content"], "# Book\n");
+    assert_eq!(root.body["contents"][0], "book/gone");
+}
+
 // ------------------------------------------------------------------ pace
 
 /// Seed a book with a target, a deadline and a scene that was cut.

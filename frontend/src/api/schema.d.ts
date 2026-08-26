@@ -3277,6 +3277,28 @@ export interface components {
              */
             offset: number;
             /**
+             * @description Where in that list, counting from zero.
+             *
+             *     The identity of the entry, **not** a position in this manifest. One
+             *     contents list may name the same child twice, and a parent reached down
+             *     both an excluded path and an included one is walked twice, so its children
+             *     appear here twice carrying the same ordinals. Rebuild a contents list by
+             *     keying on this, never by counting rows.
+             * @example 1
+             */
+            ordinal?: number | null;
+            /**
+             * @description The page whose `contents:` list named this entry.
+             *
+             *     Absent on the root and on a `?style=` preamble, which nothing named.
+             *     Always absent or present together with `ordinal`. Present on a gap, a
+             *     repeat and a cut chapter as well, where everything else about the page is
+             *     absent: these two describe the **entry** rather than the page, and they
+             *     are what an entry needs to be moved or corrected.
+             * @example book/one
+             */
+            parent?: string | null;
+            /**
              * @description The slug as the contents list wrote it, so an `invalid` entry can be
              *     found and fixed.
              * @example book/one/the-ferry

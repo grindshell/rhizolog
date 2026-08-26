@@ -148,6 +148,26 @@ pub struct SectionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = 3000)]
     pub target: Option<u64>,
+    /// The page whose `contents:` list named this entry.
+    ///
+    /// Absent on the root and on a `?style=` preamble, which nothing named.
+    /// Always absent or present together with `ordinal`. Present on a gap, a
+    /// repeat and a cut chapter as well, where everything else about the page is
+    /// absent: these two describe the **entry** rather than the page, and they
+    /// are what an entry needs to be moved or corrected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "book/one")]
+    pub parent: Option<String>,
+    /// Where in that list, counting from zero.
+    ///
+    /// The identity of the entry, **not** a position in this manifest. One
+    /// contents list may name the same child twice, and a parent reached down
+    /// both an excluded path and an included one is walked twice, so its children
+    /// appear here twice carrying the same ordinals. Rebuild a contents list by
+    /// keying on this, never by counting rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 1)]
+    pub ordinal: Option<usize>,
     /// How many contents lists deep this page sits. The root is zero.
     #[schema(example = 2)]
     pub depth: usize,
@@ -274,6 +294,8 @@ pub async fn compile_pages(
             synopsis: section.synopsis.clone(),
             stage: section.stage.clone(),
             target: section.target,
+            parent: section.parent.clone(),
+            ordinal: section.ordinal,
             depth: section.depth,
             words: section.words,
             subtree: section.subtree,
