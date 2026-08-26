@@ -1,18 +1,40 @@
 import { For, Show, createMemo, createResource, createSignal } from 'solid-js'
 import { A } from '@solidjs/router'
-import { assembledHref, compilePages, pageHref } from '../api/client'
+import { assembledHref, compilePages, pageHref, patchPage } from '../api/client'
 import type { CompiledView, PageView, SectionView } from '../api/client'
-import { Async } from './Async'
+import { Async, ErrorNotice } from './Async'
 import Pace, { formatDay } from './Pace'
 import StageSummary, { StageBadge } from './Stages'
+import { bounds, moved, spines } from './spine'
+import type { Bounds } from './spine'
 
-/** How the sections can be laid out. */
-type View = 'list' | 'cards'
+/**
+ * How the sections are shown, and whether they can be moved.
+ *
+ * `reorder` is a mode rather than a layout, and it is in this group anyway: it is
+ * the list with two buttons on each row, and a fourth control saying "now you may
+ * edit" beside three saying "look at it this way" would be a distinction nobody
+ * asked for. Being modal is the point. Order lives in frontmatter precisely so
+ * that nothing incidental can move a chapter, and a mode you have to enter is
+ * that argument carried into the one place that can.
+ */
+type View = 'list' | 'cards' | 'reorder'
 
 const VIEWS: { value: View; label: string; title: string }[] = [
   { value: 'list', label: 'List', title: 'The spine, in order, one line each' },
   { value: 'cards', label: 'Cards', title: 'One card per section, with its synopsis' },
+  {
+    value: 'reorder',
+    label: 'Reorder',
+    title: 'Move an entry within the contents list that names it',
+  },
 ]
+
+/** What a row needs to offer its two buttons. */
+interface Reorder extends Bounds {
+  busy: boolean
+  move: (by: -1 | 1) => void
+}
 
 /**
  * The spine of a manuscript, rendered as something you can click.
@@ -35,7 +57,7 @@ const VIEWS: { value: View; label: string; title: string }[] = [
  * about what the book is.
  */
 export default function Manuscript(props: { page: PageView }) {
-  const [compiled] = createResource(
+  const [compiled, { refetch }] = createResource(
     () => props.page.slug,
     (root) => compilePages({ root }),
   )
@@ -48,6 +70,45 @@ export default function Manuscript(props: { page: PageView }) {
    * an x and a y per card would be exactly that in a different coat.
    */
   const [view, setView] = createSignal<View>('list')
+  const [moving, setMoving] = createSignal(false)
+  const [failure, setFailure] = createSignal<unknown>()
+
+  /**
+   * Move one entry within the list that names it, and read the book back.
+   *
+   * A `PATCH` of the parent's `contents:` and nothing else. There is no reorder
+   * endpoint, deliberately: `contents` is already patchable, a second way to say
+   * the same thing would be two answers to one question, and the whole dashboard
+   * is read-modify-write already, since saving in the editor replaces a page with
+   * what was on screen when it opened.
+   *
+   * The list written back is rebuilt from the manifest this panel is showing, so
+   * it is as old as the compile above it. A chapter added in your own editor
+   * since then would be written back out of the spine. Refetching after the write
+   * is what makes that visible rather than silent, and the honest fix is the same
+   * one the editor wants and does not have.
+   */
+  const move = async (section: SectionView, by: -1 | 1) => {
+    const document = compiled.error ? undefined : compiled.latest
+    const parent = section.parent
+    const ordinal = section.ordinal
+    if (moving() || !document || parent == null || ordinal == null) return
+
+    const list = spines(document.sections).get(parent)
+    const to = ordinal + by
+    if (!list || to < 0 || to >= list.length) return
+
+    setMoving(true)
+    setFailure(undefined)
+    try {
+      await patchPage(parent, { contents: moved(list, ordinal, to) })
+      await refetch()
+    } catch (error) {
+      setFailure(error)
+    } finally {
+      setMoving(false)
+    }
+  }
 
   return (
     <section class="card bg-base-100 shadow">
@@ -55,7 +116,7 @@ export default function Manuscript(props: { page: PageView }) {
         <div class="flex flex-wrap items-baseline justify-between gap-2">
           <h2 class="card-title text-base">Manuscript</h2>
           <div class="flex flex-wrap items-center gap-2">
-            <div class="join" role="group" aria-label="Section layout">
+            <div class="join" role="group" aria-label="Section view">
               <For each={VIEWS}>
                 {(option) => (
                   <button
@@ -76,9 +137,24 @@ export default function Manuscript(props: { page: PageView }) {
           </div>
         </div>
 
+        {/*
+          A failed move, kept until the next one. It is the only write this panel
+          makes, and the interesting failure is a 409 or a 401 rather than
+          anything about the book.
+        */}
+        <Show when={failure()}>
+          <ErrorNotice error={failure()} />
+        </Show>
+
         <Async resource={compiled}>
           {(document) => (
-            <Assembly page={props.page} compiled={document} view={view()} />
+            <Assembly
+              page={props.page}
+              compiled={document}
+              view={view()}
+              moving={moving()}
+              onMove={move}
+            />
           )}
         </Async>
       </div>
@@ -86,7 +162,13 @@ export default function Manuscript(props: { page: PageView }) {
   )
 }
 
-function Assembly(props: { page: PageView; compiled: CompiledView; view: View }) {
+function Assembly(props: {
+  page: PageView
+  compiled: CompiledView
+  view: View
+  moving: boolean
+  onMove: (section: SectionView, by: -1 | 1) => void
+}) {
   /**
    * Everything but the root's own body, which compile emits first.
    *
@@ -106,6 +188,29 @@ function Assembly(props: { page: PageView; compiled: CompiledView; view: View })
   const gaps = createMemo(
     () => parts().filter((section) => section.status !== 'included').length,
   )
+
+  /**
+   * Every contents list the manifest holds, rebuilt once for the whole panel.
+   *
+   * Over the **whole** manifest rather than over `parts()`, because the root's
+   * own section is dropped from the list and is still the page most of these
+   * entries belong to. Rebuilding a list without it would be rebuilding it
+   * without one of its entries.
+   */
+  const lists = createMemo(() => spines(props.compiled.sections))
+
+  /** What a row needs to move itself, or nothing outside the reorder view. */
+  const reorderable = (section: SectionView): Reorder | undefined => {
+    if (props.view !== 'reorder') return undefined
+    const ends = bounds(lists(), section)
+    if (!ends) return undefined
+
+    return {
+      ...ends,
+      busy: props.moving,
+      move: (by) => props.onMove(section, by),
+    }
+  }
 
   /**
    * The sentence shown where there is nothing to list.
@@ -144,6 +249,19 @@ function Assembly(props: { page: PageView; compiled: CompiledView; view: View })
       */}
       <StageSummary sections={parts()} />
 
+      {/*
+        Every contents list this manifest holds, rebuilt once for the whole
+        panel rather than per row: it is what decides which buttons are at an
+        end, and rebuilding it inside a `For` would do it once a chapter.
+      */}
+      <Show when={props.view === 'reorder'}>
+        <p class="text-xs opacity-60">
+          Each entry moves within the contents list that names it, so a chapter
+          cannot leave its part. Editing that list by hand is the other way, and
+          the only way to move one between parts.
+        </p>
+      </Show>
+
       <Show when={parts().length > 0} fallback={nothing()}>
         <Show
           when={props.view === 'cards'}
@@ -151,7 +269,11 @@ function Assembly(props: { page: PageView; compiled: CompiledView; view: View })
             <ul class="flex flex-col gap-1 text-sm">
               <For each={parts()}>
                 {(section, position) => (
-                  <Part section={section} position={position()} />
+                  <Part
+                    section={section}
+                    position={position()}
+                    reorder={reorderable(section)}
+                  />
                 )}
               </For>
             </ul>
@@ -188,7 +310,11 @@ function Assembly(props: { page: PageView; compiled: CompiledView; view: View })
  * apart would confirm that something exists at a slug somebody guessed, which is
  * `404, never 403` in the manifest's own spelling.
  */
-function Part(props: { section: SectionView; position: number }) {
+function Part(props: {
+  section: SectionView
+  position: number
+  reorder?: Reorder
+}) {
   const status = () => props.section.status
   const included = () => status() === 'included'
 
@@ -196,6 +322,9 @@ function Part(props: { section: SectionView; position: number }) {
     <li class="flex flex-col gap-0.5">
       <div class="flex flex-wrap items-baseline justify-between gap-2">
         <span class="flex min-w-0 items-baseline gap-2">
+          <Show when={props.reorder}>
+            {(reorder) => <Handles section={props.section} reorder={reorder()} />}
+          </Show>
           <span class="w-6 shrink-0 text-right font-mono text-xs opacity-40">
             {props.position + 1}
           </span>
@@ -259,6 +388,48 @@ function Part(props: { section: SectionView; position: number }) {
         <SectionTarget section={props.section} />
       </div>
     </li>
+  )
+}
+
+/**
+ * Two buttons, rather than a drag.
+ *
+ * A drag is the obvious gesture and it is not the one built. It needs a keyboard
+ * alternative to be usable at all, and that alternative is a pair of buttons, so
+ * the choice was between buttons and buttons plus a second way in. These also
+ * work on a phone, where an HTML5 drag does not, and they are the same size on a
+ * row that has wrapped. A drag can be laid over this later; it would end in the
+ * same `PATCH`.
+ *
+ * The label names the entry rather than the direction, because a row of "Move up"
+ * buttons read out one after another says nothing about which chapter each one
+ * moves.
+ */
+function Handles(props: { section: SectionView; reorder: Reorder }) {
+  const name = () => props.section.title ?? props.section.slug
+
+  return (
+    <span class="join shrink-0">
+      <button
+        class="btn join-item btn-xs"
+        disabled={props.reorder.first || props.reorder.busy}
+        title="Move up"
+        aria-label={`Move ${name()} up`}
+        onClick={() => props.reorder.move(-1)}
+      >
+        {/* A character rather than an icon set this project does not have. */}
+        <span aria-hidden="true">↑</span>
+      </button>
+      <button
+        class="btn join-item btn-xs"
+        disabled={props.reorder.last || props.reorder.busy}
+        title="Move down"
+        aria-label={`Move ${name()} down`}
+        onClick={() => props.reorder.move(1)}
+      >
+        <span aria-hidden="true">↓</span>
+      </button>
+    </span>
   )
 }
 

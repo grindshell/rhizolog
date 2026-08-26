@@ -6,7 +6,11 @@ import type { CompiledView, PageView, SectionView } from '../api/client'
 // `manuscriptPace` as well as the compile: the panel asks for a pace on any page
 // that names a target or a day, and a fetcher left real would reach for an
 // origin jsdom does not have.
-const api = vi.hoisted(() => ({ compilePages: vi.fn(), manuscriptPace: vi.fn() }))
+const api = vi.hoisted(() => ({
+  compilePages: vi.fn(),
+  manuscriptPace: vi.fn(),
+  patchPage: vi.fn(),
+}))
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>()
@@ -76,6 +80,7 @@ beforeEach(() => {
   // pace is refused for a caller with no account, and the spine has to draw
   // anyway. `Pace.test.tsx` is where the figures themselves are checked.
   api.manuscriptPace.mockRejectedValue(new Error('no account'))
+  api.patchPage.mockResolvedValue(page())
 })
 
 afterEach(() => {
@@ -374,5 +379,143 @@ describe('the card view', () => {
     // and it is still said.
     expect(cards(container)[0]?.textContent).toContain('excluded')
     expect(cards(container)[1]?.textContent).toContain('wanted')
+  })
+})
+
+describe('reordering the spine', () => {
+  /**
+   * A book whose contents list holds four entries, two of which a compile could
+   * not resolve. Both have to survive a move, because both are things somebody
+   * wrote.
+   */
+  function book(): CompiledView {
+    return compiled({
+      sections: [
+        section({ slug: 'book', title: 'The Long Way Round', depth: 0, words: 40 }),
+        section({ slug: 'book/one', title: 'Part One', parent: 'book', ordinal: 0 }),
+        section({
+          slug: 'book/gone',
+          title: undefined,
+          status: 'wanted',
+          words: 0,
+          parent: 'book',
+          ordinal: 1,
+        }),
+        section({ slug: 'book/two', title: 'Part Two', parent: 'book', ordinal: 2 }),
+        section({
+          slug: '../nope',
+          title: undefined,
+          status: 'invalid',
+          words: 0,
+          parent: 'book',
+          ordinal: 3,
+        }),
+      ],
+    })
+  }
+
+  async function reordering() {
+    api.compilePages.mockResolvedValue(book())
+    const rendered = panel()
+    await rendered.findByText('Part One')
+    rendered.getByText('Reorder').click()
+    await waitFor(() => expect(rendered.queryByLabelText('Move Part One down')).toBeTruthy())
+    return rendered
+  }
+
+  it('offers no move buttons until the mode is entered', async () => {
+    api.compilePages.mockResolvedValue(book())
+    const { findByText, queryByLabelText } = panel()
+
+    await findByText('Part One')
+    expect(queryByLabelText('Move Part One down')).toBeNull()
+  })
+
+  /**
+   * The whole feature: the parent's list is written back with one entry moved,
+   * and it is a `PATCH` of `contents` rather than anything new.
+   */
+  it('writes the parent list back with the entry moved', async () => {
+    const { getByLabelText } = await reordering()
+
+    getByLabelText('Move Part Two up').click()
+
+    await waitFor(() => expect(api.patchPage).toHaveBeenCalled())
+    expect(api.patchPage).toHaveBeenCalledWith('book', {
+      contents: ['book/one', 'book/two', 'book/gone', '../nope'],
+    })
+  })
+
+  /**
+   * A gap and a typo are entries somebody wrote, and a reorder that dropped one
+   * would be losing work to a button press. They are also what a compile can say
+   * least about, which is why they are the ones worth pinning.
+   */
+  it('keeps a gap and a bad entry in the list it writes', async () => {
+    const { getByLabelText } = await reordering()
+
+    getByLabelText('Move Part One down').click()
+
+    await waitFor(() => expect(api.patchPage).toHaveBeenCalled())
+    const [, body] = api.patchPage.mock.calls[0] as [string, { contents: string[] }]
+    expect(body.contents).toHaveLength(4)
+    expect(body.contents).toContain('book/gone')
+    expect(body.contents).toContain('../nope')
+  })
+
+  it('will not move an entry off either end of its list', async () => {
+    const { getByLabelText } = await reordering()
+
+    expect(getByLabelText('Move Part One up')).toHaveProperty('disabled', true)
+    expect(getByLabelText('Move ../nope down')).toHaveProperty('disabled', true)
+    expect(getByLabelText('Move Part One down')).toHaveProperty('disabled', false)
+  })
+
+  /** Reading the book back is what makes a stale list visible rather than silent. */
+  it('re-reads the manuscript after a move', async () => {
+    const { getByLabelText } = await reordering()
+
+    getByLabelText('Move Part Two up').click()
+
+    await waitFor(() => expect(api.compilePages).toHaveBeenCalledTimes(2))
+  })
+
+  /**
+   * The only write this panel makes, so the only failure it has to render. A 401
+   * on a published wiki is the likeliest.
+   */
+  it('says so when the write is refused', async () => {
+    const { getByLabelText, findByRole, queryByRole } = await reordering()
+    api.patchPage.mockRejectedValue(new Error('page_not_found'))
+
+    // Or the wait below would find an alert that was already there and pass
+    // whatever the click did.
+    expect(queryByRole('alert')).toBeNull()
+    getByLabelText('Move Part Two up').click()
+
+    expect(await findByRole('alert')).toBeTruthy()
+  })
+
+  /**
+   * Nothing named the root, so there is no list to move it within, and the panel
+   * drops its row anyway. This is the guard that keeps a manifest without
+   * ordinals from growing buttons that would write nonsense.
+   */
+  it('offers nothing on a manifest that does not say who named what', async () => {
+    api.compilePages.mockResolvedValue(
+      compiled({
+        sections: [
+          section({ slug: 'book', title: 'The Long Way Round', depth: 0 }),
+          section({ slug: 'book/one', title: 'Part One' }),
+        ],
+      }),
+    )
+    const { findByText, getByText, queryByLabelText } = panel()
+
+    await findByText('Part One')
+    getByText('Reorder').click()
+
+    await waitFor(() => expect(getByText('Reorder')).toBeTruthy())
+    expect(queryByLabelText('Move Part One up')).toBeNull()
   })
 })
