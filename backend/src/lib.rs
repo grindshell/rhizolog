@@ -15,6 +15,7 @@ pub mod frontmatter;
 pub mod ideas;
 pub mod index;
 pub mod markdown;
+pub mod pace;
 pub mod page;
 pub mod prose;
 pub mod server;
@@ -38,6 +39,7 @@ pub use ideas::{
     IdeaStore, IdeaStoreError, Owner, Subject,
 };
 pub use index::{Index, IndexError, SyncReport};
+pub use pace::Pace;
 pub use page::{Frontmatter, Page, PageError};
 pub use prose::{Analysis, Finding, ProseError, Rule, Ruleset, Severity};
 pub use server::Server;

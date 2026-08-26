@@ -11,6 +11,7 @@ pub mod extract;
 pub mod graph;
 pub mod ideas;
 pub mod meta;
+pub mod pace;
 pub mod pages;
 pub mod pins;
 pub mod prose;
@@ -227,6 +228,9 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         .routes(routes!(times::list_time_groups))
         .routes(routes!(times::time_statistics))
         .routes(routes!(words::word_statistics))
+        // Beside the word log rather than the compile it also does, because the
+        // log is the half that decides who may ask.
+        .routes(routes!(pace::pace_of))
         .routes(routes!(ideas::list_captures, ideas::create_capture))
         .routes(routes!(
             ideas::read_capture,

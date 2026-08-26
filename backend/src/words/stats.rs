@@ -281,6 +281,38 @@ pub fn zone(offset_minutes: i32) -> FixedOffset {
         .unwrap_or_else(|| FixedOffset::east_opt(0).expect("UTC is a valid offset"))
 }
 
+/// Local midnight at the start of `date`, as an instant.
+///
+/// A fixed offset has no gaps or repeats, so a local time always maps to exactly
+/// one instant. The fallback is unreachable and is there because `single()` is
+/// honest about zones that do have them.
+pub fn local_midnight(date: NaiveDate, zone: FixedOffset) -> DateTime<Utc> {
+    let naive = date
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid time of day");
+
+    naive
+        .and_local_timezone(zone)
+        .single()
+        .map_or_else(|| naive.and_utc(), |local| local.with_timezone(&Utc))
+}
+
+/// The instant the local day holding `at` gives way to the next one.
+///
+/// Shared rather than written twice, which is the whole reason it is here: a
+/// window over the word log and a window over the pace of writing must not cut
+/// "today" in two different places, or the same fortnight can hold different
+/// days depending on which endpoint was asked.
+///
+/// Falling back to `at` covers the last representable day, where there is no
+/// tomorrow to start.
+pub fn end_of_local_day(at: DateTime<Utc>, zone: FixedOffset) -> DateTime<Utc> {
+    at.with_timezone(&zone)
+        .date_naive()
+        .succ_opt()
+        .map_or(at, |tomorrow| local_midnight(tomorrow, zone))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

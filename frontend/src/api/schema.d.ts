@@ -606,6 +606,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/pace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where a manuscript stands, and the arithmetic behind it.
+         * @description Words remaining over days remaining, against words a day over the last
+         *     fortnight. **Refused for a caller who has not signed in**, on a wiki with
+         *     accounts, because half of it is read off the word log and a writing history
+         *     is working state rather than published content.
+         *
+         *     Nothing here is a verdict. Two rates come back in the same unit and the
+         *     reader compares them; there is no streak, no completion badge and no change
+         *     of tone when a number goes up.
+         */
+        get: operations["pace_of"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/pages": {
         parameters: {
             query?: never;
@@ -1232,6 +1259,16 @@ export interface components {
              *     absent for `json`, where each section carries its own text instead.
              */
             content?: string | null;
+            /**
+             * Format: date-time
+             * @description The day the root is due, if its frontmatter names one.
+             *
+             *     Beside `target` because they are the same kind of thing: what the work is
+             *     aiming at, and when. A bare `2027-03-01` in a file reads as midnight UTC,
+             *     so this names a **day** rather than a moment, and rendering it in a
+             *     reader's own zone would show the day before to anybody west of Greenwich.
+             */
+            due?: string | null;
             /** @example book */
             root: string;
             /** @description Every section in order, with where it landed. */
@@ -2140,6 +2177,205 @@ export interface components {
              * @example Pinning
              */
             title?: string | null;
+        };
+        /** @description Where a manuscript is against its target and its deadline. */
+        Pace: {
+            /**
+             * Format: date-time
+             * @description The instant every figure here was computed against.
+             */
+            at: string;
+            /**
+             * Format: int64
+             * @description Whole days from today to the due day, **counting today**.
+             *
+             *     Zero once the day has passed, which is the only thing zero ever means:
+             *     due today is one day, not none. Counted in UTC days, because `due` names
+             *     a UTC day and reading it in a caller's own offset is what would show
+             *     "due 30 September" as the 29th to anybody west of Greenwich. The window
+             *     below is cut in the caller's offset instead, because which day an
+             *     observation fell on is a question about a wall clock and this is not.
+             * @example 56
+             */
+            days_remaining?: number | null;
+            /**
+             * Format: date-time
+             * @description The day the root is due, if its frontmatter names one.
+             */
+            due?: string | null;
+            /**
+             * Format: int32
+             * @description The offset the window's days were cut in, as applied after clamping.
+             * @example -420
+             */
+            offset_minutes: number;
+            /**
+             * Format: int64
+             * @description `ceil(remaining / per_day)`: days at the observed rate.
+             *
+             *     Absent when the target is met, or when the window's net is zero or
+             *     negative. A fortnight of cutting projects no finish at all, and saying so
+             *     is more use than a date arrived at by dividing by nothing.
+             * @example 33
+             */
+            projected_days?: number | null;
+            /**
+             * Format: date-time
+             * @description The day `projected_days` lands on, counting today as the first.
+             *
+             *     Absent past a hundred years out, where a date stops being a figure and
+             *     starts being what dividing by a rate near zero produces. The number above
+             *     stays, so the reason is visible rather than silent.
+             */
+            projected_finish?: string | null;
+            /**
+             * Format: int64
+             * @description `target - words`, **signed**.
+             *
+             *     Negative on a manuscript past its target, which is worth seeing: a target
+             *     is a length somebody is aiming at rather than a ceiling, and overshooting
+             *     it by five thousand words is a fact about the work.
+             * @example 1394
+             */
+            remaining?: number | null;
+            /**
+             * Format: double
+             * @description `remaining / days_remaining`.
+             *
+             *     Absent when there is nothing left to write or no day left to write it in,
+             *     rather than infinite or negative. Compare it with the window's `per_day`,
+             *     which is in the same unit and is the whole reason both are here.
+             * @example 24.892857142857142
+             */
+            required_per_day?: number | null;
+            /** @example book */
+            root: string;
+            /**
+             * @description Always `pace/v1`. Changing how the pace is computed changes this.
+             * @example pace/v1
+             */
+            ruleset: string;
+            /**
+             * Format: int64
+             * @description The root's `target`, if it names one.
+             * @example 2000
+             */
+            target?: number | null;
+            /**
+             * @description Words written in the window on pages this document does **not** carry.
+             *
+             *     A cut scene, a chapter under an excluded part, a page deleted since. They
+             *     were written and the word log counts them; they are not in `words` and
+             *     they are not in the rate, because the rate has to be in the same currency
+             *     as `remaining` or dividing one by the other means nothing: a day spent on
+             *     a scene that is out of the book does not move the compiled total, and
+             *     counting it would project a finish that never arrives.
+             *
+             *     Reported rather than dropped so that contrast is visible. It is the
+             *     commonest way to misread the two numbers.
+             */
+            uncounted: components["schemas"]["PaceUncounted"];
+            /** @description What was written in the manuscript over the trailing window. */
+            window: components["schemas"]["PaceWindow"];
+            /**
+             * Format: int64
+             * @description The compiled total: what a reader would actually get today.
+             *
+             *     Not the sum of what was written. An excluded page's words are in the word
+             *     log and not in the book, which is the one contrast worth knowing about
+             *     here: see `uncounted` below.
+             * @example 606
+             */
+            words: number;
+        };
+        /** @description What was written at one page inside the window. */
+        PacePage: {
+            /** Format: int64 */
+            added: number;
+            /**
+             * Format: int64
+             * @description `added - removed`.
+             */
+            net: number;
+            observations: number;
+            /** Format: int64 */
+            removed: number;
+            /** @example book/one/the-ferry */
+            slug: string;
+            /**
+             * @description The page's title, or absent when this caller may not read it.
+             *
+             *     The row itself stays either way. The slug is the observation's own
+             *     content, and hiding somebody's working history from them would be the
+             *     wrong reading of a rule that exists to protect other people's pages.
+             * @example The Ferry
+             */
+            title?: string | null;
+        };
+        /** @description What was written over some set of pages, and where. */
+        PaceUncounted: {
+            /** Format: int64 */
+            added: number;
+            /**
+             * Format: int64
+             * @description `added - removed`. See the module docs for why a net is the right figure
+             *     here and nowhere else in the word log.
+             */
+            net: number;
+            observations: number;
+            /**
+             * @description The busiest pages first, capped at ten.
+             *
+             *     Provenance rather than the sum: the totals above are over **every** page,
+             *     so a long manuscript does not quietly report a smaller number than it
+             *     measured. `GET /api/word-stats` is where the whole list lives.
+             */
+            pages: components["schemas"]["PacePage"][];
+            /** Format: int64 */
+            removed: number;
+        };
+        /** @description The trailing window the observed rate was measured over. */
+        PaceWindow: {
+            /**
+             * @description Distinct local days something was written on.
+             *
+             *     Not what `per_day` divides by, and here so the other division is
+             *     available to anybody who wants it. A projection is against a calendar, so
+             *     the rate that projects has to be over calendar days; "what I do when I
+             *     sit down" is a different and equally real question.
+             * @example 4
+             */
+            active_days: number;
+            /** Format: int64 */
+            added: number;
+            /**
+             * Format: int32
+             * @description How many days long, after clamping.
+             * @example 14
+             */
+            days: number;
+            /** Format: date-time */
+            from: string;
+            /** Format: int64 */
+            net: number;
+            observations: number;
+            /** @description The busiest pages in the manuscript first, capped at ten. */
+            pages: components["schemas"]["PacePage"][];
+            /**
+             * Format: double
+             * @description `net / days`. Words a day, over the calendar rather than over the days
+             *     somebody worked.
+             * @example 43.285714285714285
+             */
+            per_day: number;
+            /** Format: int64 */
+            removed: number;
+            /**
+             * Format: date-time
+             * @description Exclusive, and the end of the local day holding `at` rather than `at`
+             *     itself, so today counts as a whole day and not a half-finished one.
+             */
+            to: string;
         };
         PageLinksResponse: {
             /** @description Whether the page itself exists. Links can point at pages that do not. */
@@ -5044,6 +5280,93 @@ export interface operations {
             };
             /** @description A page already exists at the destination */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    pace_of: {
+        parameters: {
+            query: {
+                /**
+                 * @description The manuscript to measure. Its `target` and `due` are the ones that
+                 *     count, and its compiled total is what they are measured against.
+                 * @example book
+                 */
+                root: string;
+                /**
+                 * @description The instant to read "now" as. Defaults to the server's clock.
+                 *
+                 *     It decides both the deadline arithmetic and where the window ends, so
+                 *     passing it is what makes a figure reproducible: every number below is a
+                 *     function of this instant and the files on disk.
+                 */
+                at?: string;
+                /**
+                 * @description Minutes east of UTC, which is what `-new Date().getTimezoneOffset()`
+                 *     gives. It decides which local day an observation was written on, and
+                 *     where the trailing window ends.
+                 *
+                 *     It does **not** move the deadline: `due` names a UTC day. See
+                 *     `days_remaining` on the response.
+                 * @example -420
+                 */
+                offset?: number;
+                /**
+                 * @description How many days back to measure the observed rate over. Fourteen by
+                 *     default, clamped to between one and four hundred.
+                 * @example 14
+                 */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where the manuscript stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pace"];
+                };
+            };
+            /** @description The root slug is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This wiki has accounts and the request named none */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No page at the root slug */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Depth, section or byte limit exceeded */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

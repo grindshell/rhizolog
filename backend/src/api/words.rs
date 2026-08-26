@@ -6,7 +6,7 @@
 
 use axum::Json;
 use axum::extract::{Query, State};
-use chrono::{DateTime, Days, FixedOffset, NaiveDate, TimeDelta, Utc};
+use chrono::{DateTime, Days, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -248,35 +248,13 @@ fn window(
     // inside it can never be cut in two different zones.
     let zone = stats::zone(offset_minutes);
 
-    let end_of_today = at
-        .with_timezone(&zone)
-        .date_naive()
-        .succ_opt()
-        .map_or(at, |tomorrow| local_midnight(tomorrow, zone));
-
-    let to = to.unwrap_or(end_of_today);
+    let to = to.unwrap_or_else(|| stats::end_of_local_day(at, zone));
     let from = from.unwrap_or_else(|| to - Days::new(DEFAULT_DAYS));
 
     // Clamp, not refuse: a window this long is a client that has not thought
     // about it rather than a mistake worth an error.
     let earliest = to - TimeDelta::days(MAX_DAYS as i64);
     (from.max(earliest), to)
-}
-
-/// Local midnight at the start of `date`, as an instant.
-///
-/// A fixed offset has no gaps or repeats, so a local time always maps to exactly
-/// one instant. The fallback is unreachable and is there because `single()` is
-/// honest about zones that do have them.
-fn local_midnight(date: NaiveDate, zone: FixedOffset) -> DateTime<Utc> {
-    let naive = date
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight is a valid time of day");
-
-    naive
-        .and_local_timezone(zone)
-        .single()
-        .map_or_else(|| naive.and_utc(), |local| local.with_timezone(&Utc))
 }
 
 #[cfg(test)]

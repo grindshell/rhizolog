@@ -7,6 +7,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
+use chrono::{DateTime, Days, SecondsFormat, Utc};
 use rhizolog::{
     AppState, Assets, IdeaService, IdeaStore, Index, Store, TimeStore, UserStore, WordLog,
 };
@@ -2557,6 +2558,200 @@ async fn a_reindex_counts_log_lines_it_could_not_read() {
     assert_eq!(res.body["words"]["skipped"], 2);
     assert_eq!(res.body["words"]["observations"], 0);
     assert_eq!(res.body["words"]["read"], true);
+}
+
+// ------------------------------------------------------------------ pace
+
+/// Seed a book with a target, a deadline and a scene that was cut.
+///
+/// `due` is derived from the instant the caller will ask about, so the deadline
+/// arithmetic is exact without the test knowing what day it is running on.
+async fn seed_paced_book(app: &App, due: DateTime<Utc>) {
+    app.seed(
+        "book",
+        json!({
+            "content": "# Book\n\nAn epigraph.\n",
+            "contents": ["book/one", "book/cut"],
+            "target": 1000,
+            "due": due.to_rfc3339_opts(SecondsFormat::Secs, true),
+        }),
+    )
+    .await;
+    app.seed(
+        "book/one",
+        json!({ "content": "# Part One\n\nFour words of prose.\n" }),
+    )
+    .await;
+    app.seed(
+        "book/cut",
+        json!({ "content": "# The Argument\n\nCut, and not thrown away.\n", "compile": false }),
+    )
+    .await;
+}
+
+/// Which instant to ask about, as a query parameter.
+///
+/// `Z` rather than `+00:00`: a plus sign in a query string decodes as a space,
+/// which would make the timestamp unparseable and the failure look like a bug in
+/// the handler.
+fn asking_at(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+/// The whole feature over HTTP, and every figure in it recomputed from the ones
+/// beside it, which is the gate this endpoint is measured against.
+#[tokio::test]
+async fn the_pace_is_words_remaining_over_days_remaining() {
+    let app = App::new().await;
+    let at = Utc::now();
+    seed_paced_book(&app, at.checked_add_days(Days::new(9)).expect("a due date")).await;
+
+    let res = app
+        .get(&format!(
+            "/api/pace?root=book&at={}&offset=0",
+            asking_at(at)
+        ))
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["ruleset"], "pace/v1");
+    assert_eq!(res.body["root"], "book");
+
+    // What a reader would get, which is what the target is measured against.
+    let compiled = app.get("/api/compile?root=book").await;
+    let words = compiled.body["words"].as_u64().expect("a compiled total");
+    assert_eq!(res.body["words"], words);
+    assert_eq!(res.body["target"], 1000);
+    assert_eq!(res.body["remaining"], 1000 - words as i64);
+
+    // Everything in the book was written by the seeding above and nothing was
+    // taken away, so the fortnight's net is the book.
+    assert_eq!(res.body["window"]["days"], 14);
+    assert_eq!(res.body["window"]["removed"], 0);
+    assert_eq!(res.body["window"]["net"], words);
+    assert_eq!(res.body["window"]["active_days"], 1);
+    assert_eq!(
+        res.body["window"]["per_day"].as_f64(),
+        Some(words as f64 / 14.0)
+    );
+
+    // Due in nine days' time, and today is one you still have.
+    assert_eq!(res.body["days_remaining"], 10);
+    assert_eq!(
+        res.body["required_per_day"].as_f64(),
+        Some((1000 - words as i64) as f64 / 10.0)
+    );
+}
+
+/// The contrast the `uncounted` block exists for, and the one way these two
+/// numbers get misread. A day spent on a scene that is out of the book is a day
+/// the compiled total did not move.
+#[tokio::test]
+async fn words_written_into_a_cut_scene_are_reported_beside_the_book_and_not_in_it() {
+    let app = App::new().await;
+    let at = Utc::now();
+    seed_paced_book(&app, at.checked_add_days(Days::new(9)).expect("a due date")).await;
+
+    let res = app
+        .get(&format!(
+            "/api/pace?root=book&at={}&offset=0",
+            asking_at(at)
+        ))
+        .await;
+
+    let cut = app.get("/api/pages/book/cut").await;
+    let cut_words = cut.body["words"].as_u64().expect("the cut scene's length");
+
+    assert!(cut_words > 0);
+    assert_eq!(res.body["uncounted"]["net"], cut_words);
+    assert_eq!(res.body["uncounted"]["observations"], 1);
+    assert_eq!(res.body["uncounted"]["pages"][0]["slug"], "book/cut");
+
+    // And nowhere in the rate, which has to be in the same currency as
+    // `remaining` or dividing one by the other means nothing.
+    let counted: Vec<&str> = res.body["window"]["pages"]
+        .as_array()
+        .expect("the pages counted")
+        .iter()
+        .map(|page| page["slug"].as_str().expect("a slug"))
+        .collect();
+    assert!(
+        !counted.contains(&"book/cut"),
+        "the cut scene was in the rate"
+    );
+
+    // The word log still has all of it. The two answer different questions.
+    let series = app.get("/api/word-stats").await;
+    assert_eq!(
+        series.body["totals"]["added"].as_u64(),
+        Some(res.body["window"]["added"].as_u64().expect("added") + cut_words),
+    );
+}
+
+/// The divisor is the window, and the window is what the caller asked for.
+#[tokio::test]
+async fn a_shorter_window_is_a_higher_rate_over_the_same_words() {
+    let app = App::new().await;
+    let at = Utc::now();
+    seed_paced_book(&app, at.checked_add_days(Days::new(9)).expect("a due date")).await;
+
+    let asked = asking_at(at);
+    let fortnight = app
+        .get(&format!("/api/pace?root=book&at={asked}&offset=0"))
+        .await;
+    let week = app
+        .get(&format!("/api/pace?root=book&at={asked}&offset=0&days=7"))
+        .await;
+
+    assert_eq!(week.body["window"]["days"], 7);
+    assert_eq!(week.body["window"]["net"], fortnight.body["window"]["net"]);
+    assert_eq!(
+        week.body["window"]["per_day"].as_f64(),
+        fortnight.body["window"]["per_day"]
+            .as_f64()
+            .map(|rate| rate * 2.0),
+    );
+
+    // Clamped rather than refused, which is what the chart does with a window
+    // nobody thought about.
+    let silly = app
+        .get(&format!("/api/pace?root=book&at={asked}&days=0"))
+        .await;
+    assert_eq!(silly.body["window"]["days"], 1);
+}
+
+/// A manuscript with no first page is not a short manuscript, which is the
+/// answer compile already gives and is why this endpoint borrows its error.
+#[tokio::test]
+async fn the_pace_of_a_manuscript_nobody_has_written_is_a_404() {
+    let app = App::new().await;
+
+    let res = app.get("/api/pace?root=book").await;
+
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    assert_eq!(res.code(), "compile_root_not_found");
+    assert_eq!(res.body["error"]["details"]["slug"], "book");
+}
+
+/// An ordinary page aiming at nothing still answers the half of the question
+/// the log can answer, rather than refusing a question that has an answer.
+#[tokio::test]
+async fn a_page_with_no_target_and_no_deadline_still_reports_what_was_written() {
+    let app = App::new().await;
+    app.seed(
+        "notes",
+        json!({ "content": "# Notes\n\nSix words in this one.\n" }),
+    )
+    .await;
+
+    let res = app.get("/api/pace?root=notes").await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert!(res.body["target"].is_null());
+    assert!(res.body["remaining"].is_null());
+    assert!(res.body["days_remaining"].is_null());
+    assert!(res.body["required_per_day"].is_null());
+    assert!(res.body["window"]["net"].as_i64().expect("a net") > 0);
 }
 
 // ----------------------------------------------------------------- prose

@@ -971,6 +971,11 @@ async fn anonymous_read_grants_no_writes_and_no_side_channels() {
         // A writing history is working state, and the variable that opened this
         // door exists to publish pages marked `public`.
         (Method::GET, "/api/word-stats", None),
+        // Half of a pace is read off that same log, so it is refused on the same
+        // terms even though the page it names is one anybody may read. This is
+        // the whole reason it is not a parameter on `/api/compile`, which stays
+        // open here.
+        (Method::GET, "/api/pace?root=open", None),
         (Method::GET, "/api/users", None),
     ] {
         let res = app.send(method.clone(), path, body, None).await;

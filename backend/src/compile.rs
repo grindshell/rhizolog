@@ -24,6 +24,7 @@
 
 use std::collections::HashSet;
 
+use chrono::{DateTime, Utc};
 use comrak::nodes::NodeValue;
 use comrak::{Arena, Options};
 
@@ -178,6 +179,13 @@ pub struct Compiled {
     pub words: u64,
     /// The root's `target`, if it names one.
     pub target: Option<u64>,
+    /// The root's `due`, if what its frontmatter says is a day.
+    ///
+    /// Here beside `target` for the same reason that one is: it is the root's
+    /// own frontmatter travelling with the document, so a caller holding a
+    /// compile does not have to read the page again to know what the work is
+    /// aiming at and when. Nothing in the assembly consults either.
+    pub due: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +237,7 @@ pub async fn compile(
         return Err(CompileError::RootNotFound { slug: root.clone() });
     };
     let target = root_page.frontmatter.target;
+    let due = root_page.due();
 
     // A preamble is emitted whatever it says about `compile`. That field means
     // "not part of the book", and a style page is not part of the book: it is a
@@ -322,6 +331,7 @@ pub async fn compile(
         sections,
         words,
         target,
+        due,
     })
 }
 

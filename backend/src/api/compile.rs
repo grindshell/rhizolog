@@ -11,6 +11,7 @@
 
 use axum::Json;
 use axum::extract::{Query, State};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -213,6 +214,14 @@ pub struct CompiledView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = 90000)]
     pub target: Option<u64>,
+    /// The day the root is due, if its frontmatter names one.
+    ///
+    /// Beside `target` because they are the same kind of thing: what the work is
+    /// aiming at, and when. A bare `2027-03-01` in a file reads as midnight UTC,
+    /// so this names a **day** rather than a moment, and rendering it in a
+    /// reader's own zone would show the day before to anybody west of Greenwich.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due: Option<DateTime<Utc>>,
 }
 
 /// The version this assembly is. See [`CompiledView::compiler`].
@@ -299,5 +308,6 @@ pub async fn compile_pages(
         sections,
         words: compiled.words,
         target: compiled.target,
+        due: compiled.due,
     }))
 }
