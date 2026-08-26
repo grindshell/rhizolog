@@ -57,10 +57,14 @@ the index is derived, and a field somebody mistyped must not cost them the page.
   this lands than before. Reorder and split are edits to the spine rather than
   facts about a chapter.
 
-  **Pacing was built afterwards, on exactly those terms**: no new fields, and
-  the manifest's `target` and `subtree` were two of its inputs. See
-  [Pacing](pacing.md). The other two are still gaps. This bullet is left as
-  written, like everything else above the record sections.
+  **All three were built afterwards**, and pacing on exactly those terms: no new
+  fields, and the manifest's `target` and `subtree` were two of its inputs. See
+  [Pacing](pacing.md), [Reordering the spine](reordering.md) and
+  [Splitting and merging](split-and-merge.md). The last two turned out to need
+  something this plan did give them, which is why they came after it rather than
+  with it: an edit to the spine has to say **which list** an entry is in, and
+  that is the pair of fields reordering added to the manifest. This bullet is
+  left as written, like everything else above the record sections.
 - **Colour as data.** Scrivener's Label is a colour with a name. Here a stage is
   a word, and the dashboard decides how to paint it. A palette in frontmatter is
   a document about a display.

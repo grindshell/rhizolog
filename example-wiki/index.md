@@ -157,6 +157,21 @@ An entry only moves within the list that names it, so the appendix cannot be
 dragged out of Part Two and the ferry cannot leave Part One. Moving a chapter
 between parts is two lists changing, which is a hand edit.
 
+Adding to that list and taking away from it are the editor's job rather than the
+panel's, because a split needs a cursor. `book/one/the-ferry` is the chapter to
+try it on: three paragraphs, and the last one turns from the water to Marren, so
+there is somewhere real to cut. Splitting it writes a second page, gives it the
+tags and the stage and neither the synopsis nor the target, and puts it into
+`book/one` between the ferry and the appendix. Merging it back leaves the body
+byte for byte what it was.
+
+**Do not split or merge anything while `RHIZOLOG_ROOT` points here** either, and
+this one leaves more behind than a reorder: two pages rewritten, a contents list
+rewritten, and two lines in the word log. The lines are markers, `split` or
+`merged`, zero added and zero removed, so no total on the chart moves; the files
+still change, and a round trip leaves the frontmatter of both reformatted even
+where the prose is identical.
+
 `?assembled=1` on the same page renders the whole thing, with headings shifted by
 depth: the book's `#`, each part's `##`, each chapter's `###`. Nothing is
 inserted, so a part contributes only what it wrote, which is a heading and an
@@ -387,7 +402,7 @@ opinion about your voice.
 `GET /api/prose/rules` reports them with their defaults filled in and a digest
 over the lot, so an assistant handed a finding can reproduce it without reading
 the file. `GET /api/prose?slug=index` runs them over this page and should answer
-**10 errors and 100 warnings**: an em dash for each of the first, and a word used
+**10 errors and 106 warnings**: an em dash for each of the first, and a word used
 twice inside eight of another for each of the second.
 
 The first rule is the one this project holds itself to, and it is written with

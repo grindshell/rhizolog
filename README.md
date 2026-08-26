@@ -344,6 +344,39 @@ Half of it is read off the word log, so like `/api/word-stats` it is refused to 
 caller who has not signed in, even under `RHIZOLOG_ANONYMOUS_READ`. The dashboard
 draws it as a strip under the manuscript's progress bar.
 
+### Cutting a chapter in two, and putting one back
+
+`POST /api/split` takes a page, a byte offset and a slug for the second half. It
+writes both files and puts the new one into every `contents:` list that named the
+first, immediately after it. `POST /api/merge` is the inverse: one page's body
+goes to the end of another, its file is removed, and every list that named it
+loses the entry. Both answer with which lists were rewritten and what each one
+says now.
+
+Doing it by hand is four things that have to agree, and getting the last one
+wrong is a book with a chapter missing and nothing to tell you.
+
+**Neither writes or unwrites a word**, and the log says so: a split records two
+markers and a merge records one, all of them zero added and zero removed, so
+moving a boundary never shows up as a day's work on the chart. That is the same
+reading a signed net would have given, which is the thing the word log exists to
+refuse.
+
+The second half inherits the tags, the stage, the due date and who can read the
+page. It inherits no synopsis and no target: a synopsis is a claim about what a
+chapter does and the half cut off one is not that chapter, and copying a target
+would double what the book is aiming at.
+
+**Neither will touch a page that assembles others.** A merge moves text to where
+you said; a split has to work out where the second half goes, and on a page with
+chapters under it that is after every one of them, which is a document quietly
+restructuring itself.
+
+The editor grows a Split and merge block under the findings strip, on any page
+that exists. It cuts at the cursor and shows the line the new page would start
+with, and both controls wait until there is nothing unsaved, because they act on
+the file rather than on what is in the box.
+
 ### Prose rules you wrote down
 
 `.rhizolog/prose.toml` holds rules; `prose/v1` runs them. It is voice defence

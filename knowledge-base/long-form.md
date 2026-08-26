@@ -1535,6 +1535,14 @@ not now, and what the manifest was missing was two fields saying which contents
 list named each entry and where in it. See
 [Reordering the spine](reordering.md).
 
+Adding to a spine and taking away from one came after that, as
+`POST /api/split` and `POST /api/merge`, and neither is on the panel: a split
+needs a cursor, so it belongs where the body is. See
+[Splitting and merging](split-and-merge.md), and in particular what the log
+needed. Both operations move words between pages without writing any, which is
+neither an observation nor a net, so `Kind` gained `split` and `merged` beside
+`moved` for the same reason `moved` is there.
+
 ### A part edge does not look like a wikilink, and bows the same way
 
 The two questions L1 deferred, answered. Drawn in the second colour and heavier

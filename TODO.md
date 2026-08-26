@@ -406,15 +406,11 @@ failed on `create table` and the index would not have opened at all. Two tests
 guard it now, one comparing the two lists and one opening a database stamped with
 an older version.
 
-Three gaps were found in the survey this plan came out of. **Pacing and
-reordering are built** and have their own pages,
-[Pacing](knowledge-base/pacing.md) and
-[Reordering the spine](knowledge-base/reordering.md), and their own sections
-below. The third is still not:
-
-- **Split and merge.** Splitting a page at an offset and repairing the parent's
-  contents list is mechanical, error-prone by hand, and exactly what an API
-  should do.
+Three gaps were found in the survey this plan came out of. **All three are
+built** and each has a page and a section below:
+[Pacing](knowledge-base/pacing.md),
+[Reordering the spine](knowledge-base/reordering.md) and
+[Splitting and merging](knowledge-base/split-and-merge.md).
 
 Three questions the plan left open and the build did not close:
 
@@ -487,6 +483,37 @@ What is not done:
   move makes it visible rather than silent; closing it properly means conditional
   writes, which this API does not have anywhere and should not grow in one
   corner. The editor has the same window over a larger surface.
+
+## Splitting and merging
+
+**Built**, and recorded in
+[Splitting and merging](knowledge-base/split-and-merge.md). `POST /api/split`
+cuts a page in two at a byte offset and puts the second half into every
+`contents:` list that named the first, immediately after it. `POST /api/merge`
+folds one page into another and takes it out of every list that named it. Both
+answer with which lists were rewritten and what each one says now.
+
+The word log gained two kinds, `split` and `merged`, and that is the part that
+would have been a defect rather than a gap: recorded the ordinary way, a split
+would report a chapter losing two thousand words and another gaining them on a
+day nobody wrote a sentence, which is the signed net this whole feature exists to
+refuse. Both markers are zero and zero and carry the total, which is what stops
+the next scan reporting the same wrong number as a `net`.
+
+Neither endpoint will touch a page that assembles others. A merge moves text to
+where the caller said; a split has to **derive** where the second half goes, and
+on a page with chapters under it that position is after every one of them.
+
+What is not done:
+
+- **Splitting from the Manuscript panel.** There is no cursor there, and a
+  control that cut at the first heading would be a guess at where the seam is.
+- **Merging a chapter into its neighbour in one gesture.** The panel knows which
+  entry precedes which and the editor does not, so it is the one thing a panel
+  control would add. It needs a spine and a page on screen at once, which is a
+  layout question rather than an API one.
+- **The list written back is as old as the read that found it**, exactly as
+  above, and named rather than closed for the same reason.
 
 ## Rough edges
 

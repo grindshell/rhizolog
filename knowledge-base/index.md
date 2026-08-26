@@ -30,6 +30,9 @@ Every page should be reachable from this index.
   actually happened, and why a net is the right number here and nowhere else
 - [Reordering the spine](reordering.md): moving a chapter from the panel that
   draws it, and why the manifest had to say which list named each entry
+- [Splitting and merging](split-and-merge.md): cutting a page in two at an
+  offset, folding one back into another, and the two word-log markers that keep
+  a boundary moving from looking like a day's work
 - [The desktop app](desktop-app.md) — packaging as a portable Tauri app, and
   keeping the server the only interface
 - [The product site](product-site.md) — rhizolog.com: what the landing page is

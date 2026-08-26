@@ -316,10 +316,17 @@ position rather than an error.
 
 ## The editor divides its space three ways
 
-Editor / Split / Preview, chosen from a segmented control in the editor's
+Editor / Both / Preview, chosen from a segmented control in the editor's
 header. Three states rather than one collapse toggle because "give the editor
 the room" and "give the preview the room" are both things you want, and a single
 button that cycled between them would make you guess which way it goes.
+
+The middle one was called Split until the editor grew a control that cuts a page
+in two. Two buttons a hand apart, one saying Split and meaning panes and the
+other saying Split and meaning the page, is a question nobody should have to
+answer. **The stored value is still `split`**, because it is what is in
+somebody's `localStorage` and renaming it would silently reset the pane
+arrangement of everyone who had ever chosen one.
 
 The choice is remembered in `localStorage`, since it is a working preference
 rather than a property of the page: somebody who collapsed the preview to write
@@ -374,6 +381,40 @@ There is no dismiss control, and that is the design rather than a gap. A finding
 is your own rule firing on your own text: if it fires where it should not, the
 rule is wrong, and the fix is one edit to one file. See
 [Long-form writing](long-form.md), "There is no dismissal store".
+
+## Split and merge live under the findings strip, not in the panel
+
+The Reorder view below is in the Manuscript panel because order is what the panel
+draws. Cutting a page in two is not, and the reason is the cursor: a split takes
+an offset into a body, and the only thing that knows where a chapter should stop
+being one chapter is the person reading it. So it is a collapsed block at the
+bottom of the editor, on a page that exists, and merge went with it so that both
+halves of one idea are in one place.
+
+It shows what the split would make rather than a number: the first line with
+anything on it after the cursor. On a chapter cut at a heading that is also the
+title the new page will take, which is why the title field can be left empty and
+says so. The slug field is prefilled with the directory the page sits in and no
+further, because where its siblings live is a fact and what the new one is called
+is not.
+
+The cursor is followed through three events, since no single one covers every way
+a caret moves: `select` for a drag, `click` for a click, `keyup` for the arrow
+keys, and the textarea's own `input` for typing. It reaches the API through
+`indexToByte`, which is `byteToIndex` above turned around and shares its
+arithmetic, for the same reason and with the same consequence if it is wrong.
+
+**Both are disabled while there are unsaved changes**, which is Rename's rule and
+Rename's reason: they act on the file the server holds, so an offset into a body
+with edits pending would cut a page that is not the one being cut. A page that
+assembles others gets the sentence saying why neither will touch it, rather than
+a button that fails when pressed.
+
+A split lands in the editor for the page it made, because that is the half that
+needs a person: no synopsis, no stage, no target, and a title inherited from a
+heading. A merge asks first and then goes to the page that grew, replacing rather
+than pushing, since the page it came from is gone. See
+[Splitting and merging](split-and-merge.md).
 
 ## The Manuscript panel is the only place the spine is drawn
 
@@ -654,6 +695,14 @@ What is covered is the part where the bugs were, not the part that is easy:
   quote is cut from the page, and page content is what agents write. Beside them,
   `byteToIndex` over ASCII, a two-byte character and an astral one, because the
   editor selection is wrong on any page with an accent in it if that is wrong.
+  `indexToByte` beside it, in both directions and round-tripped over every
+  boundary of a string with an accent and an emoji in it, because a page is cut
+  in the wrong place if *that* is wrong.
+- **That a split sends the cursor as a byte offset**, on a page with an accent
+  before it so the two numbers differ; that both controls are disabled while
+  there are unsaved changes, since they act on a file rather than on a textarea;
+  that a page which assembles others gets the sentence and no buttons; and that a
+  merge asks before it deletes anything and does nothing when the answer is no.
 - **That the manuscript panel shows a gap, a duplicate and a mistyped entry in
   position**, since it is the only rendering of the spine and anything hidden
   there is hidden everywhere. Also that an absent contents list and an empty one

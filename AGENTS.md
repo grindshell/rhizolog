@@ -83,16 +83,24 @@ lines agrees with the page it describes, so the startup scan finds nothing to
 record. Before that log was committed, merely starting a server against the
 fixture appended a baseline for every page in it.
 
-Three things still change it. Starting a timer writes a time entry, **editing a
-page writes a word observation**, and **the Manuscript panel's Reorder view
-rewrites a `contents:` list**, which the numbers in `index.md` do not account for.
+Four things still change it. Starting a timer writes a time entry, **editing a
+page writes a word observation**, **the Manuscript panel's Reorder view rewrites
+a `contents:` list**, and **the editor's Split and merge block rewrites two pages
+and every list that named them**. None of the last three is accounted for by the
+numbers in `index.md`.
+
 The third writes no word observation, because the body it rewrites is unchanged
-and the diff is nothing to nothing; it still rewrites the file. Check
-`git status example-wiki` afterwards.
+and the diff is nothing to nothing; it still rewrites the file. The fourth writes
+two lines to the word log, `split` or `merged`, both zero added and zero removed:
+markers rather than work, so no total on the chart moves and the files still
+change. A split and the merge that undoes it put the **body** back byte for byte
+and the contents list back as it was, and leave both files' frontmatter
+reformatted, which is what any write through the API does to hand-written YAML.
+Check `git status example-wiki` after any of them.
 
 Anything that changes `index.md` changes its own word count, which the log's last
 line for `index` has to match or the next scan records the difference as a `net`.
-The chain is baseline 3263, then `+260 -40`, then `+220 -21`, ending at 3682. Fix
+The chain is baseline 3424, then `+260 -40`, then `+220 -21`, ending at 3843. Fix
 it by moving the **baseline**, which carries no churn and so changes no total on
 the chart: it is the final count less 419, and the middle total moves with it.
 Those three numbers rot every time this page's prose changes; the rule is what to

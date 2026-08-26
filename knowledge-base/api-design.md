@@ -15,6 +15,8 @@ storage model it sits on.
 | `PATCH` | `/api/pages/{slug}` | Partial update of title / tags / content |
 | `DELETE` | `/api/pages/{slug}` | Delete |
 | `POST` | `/api/move` | Move a page to a new slug |
+| `POST` | `/api/split` | Cut a page in two at a byte offset, repairing the lists that named it |
+| `POST` | `/api/merge` | Fold one page into another and delete it |
 | `POST` | `/api/render` | Render markdown that has not been saved |
 | `GET` | `/api/links/{slug}` | Links in **both** directions |
 | `GET` | `/api/graph` | The link graph as nodes and edges; `?root=`, `?depth=`, `?prefix=`, `?tag=`, `?wanted=`, `?limit=` |
@@ -101,6 +103,35 @@ produced `/api/move` and `/api/compile`.
 already reported. They are the same kind of thing, what the work is aiming at and
 when, and carrying both means a client holding a compile never has to read the
 page again to draw a deadline. See [Pacing](pacing.md).
+
+### Splitting and merging are two more, beside `/api/move`
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/split` | Cut `from` in two at byte offset `at`, the second half becoming `to` |
+| `POST` | `/api/merge` | Fold `from` into `into` and delete it |
+
+Outside the slug namespace for the catch-all reason below that produced
+`/api/move`, and next to it in the document because all three are edits to where
+a page **is** rather than to what it says.
+
+**The offset is in bytes**, which is the unit a `prose/v1` span already uses and
+is about the same text. A client that can reveal a finding in a textarea can
+already produce one. An offset inside a character is refused, and the refusal
+carries the body's length, which is the one thing the caller cannot work out for
+itself: it computed the offset from a body it may no longer be holding.
+
+Both answer with `repaired`: every `contents:` list that was rewritten and what
+each one says now. A receipt rather than an acknowledgement, because the caller
+asked about one page and two other files changed.
+
+**Neither will touch a page that assembles others**, and that is one rule read in
+two directions. A merge moves text to where the caller *said*; a split has to
+**derive** where the second half goes, and on a page with chapters under it that
+position is after every one of them. `409 page_assembles_others`, a conflict
+rather than a bad request, because the request is well formed and it is the state
+of the page that refuses it. See
+[Splitting and merging](split-and-merge.md).
 
 ### Drafting is no endpoints at all
 
