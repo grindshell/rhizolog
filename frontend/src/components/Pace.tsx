@@ -54,7 +54,10 @@ export default function Pace(props: { page: PageView }) {
 }
 
 function Figures(props: { pace: PaceView }) {
-  const window = () => props.pace.window
+  // `recent` rather than `window`, which would shadow the DOM global inside this
+  // component and make the next person to reach for `window.matchMedia` here
+  // debug something that has nothing to do with what they wrote.
+  const recent = () => props.pace.window
   const uncounted = () => props.pace.uncounted
 
   return (
@@ -62,7 +65,7 @@ function Figures(props: { pace: PaceView }) {
       <Deadline pace={props.pace} />
 
       <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1 opacity-70">
-        <span>Last {window().days} days</span>
+        <span>Last {recent().days} days</span>
         {/*
           Both halves, and never only their difference. The word log refuses to
           store a net for exactly this reason: a rewrite of two thousand words
@@ -72,18 +75,18 @@ function Figures(props: { pace: PaceView }) {
           figures it came from rather than instead of them.
         */}
         <span>
-          <span class="font-mono">{signed(window().net)}</span>{' '}
+          <span class="font-mono">{signed(recent().net)}</span>{' '}
           <span class="opacity-70">
-            ({window().added.toLocaleString()} added,{' '}
-            {window().removed.toLocaleString()} removed)
+            ({recent().added.toLocaleString()} added,{' '}
+            {recent().removed.toLocaleString()} removed)
           </span>{' '}
           {/*
             Beside the totals it describes rather than beside the rate, which
             divides by the window and not by this. Both divisions are worth
             having and only one of them projects against a calendar.
           */}
-          on <span class="font-mono">{window().active_days}</span>{' '}
-          {window().active_days === 1 ? 'day' : 'days'}
+          on <span class="font-mono">{recent().active_days}</span>{' '}
+          {recent().active_days === 1 ? 'day' : 'days'}
         </span>
         <span aria-hidden="true" class="opacity-40">
           ·
@@ -94,7 +97,7 @@ function Figures(props: { pace: PaceView }) {
           says anything about the other.
         */}
         <span>
-          <span class="font-mono">{formatRate(window().per_day)}</span> a day
+          <span class="font-mono">{formatRate(recent().per_day)}</span> a day
         </span>
       </div>
 
@@ -146,9 +149,14 @@ function Deadline(props: { pace: PaceView }) {
           A target is a length somebody is aiming at rather than a ceiling, so
           passing it is worth saying rather than clamping to zero and reading as
           finished.
+
+          Zero belongs on the "to go" side, not the other one. A book of exactly
+          two thousand words against a target of two thousand has nothing left to
+          write, and "0 over target" would be a sentence about an overshoot that
+          did not happen.
         */}
         <Show
-          when={(remaining() ?? 0) > 0}
+          when={(remaining() ?? 0) >= 0}
           fallback={
             <span>
               <span class="font-mono">

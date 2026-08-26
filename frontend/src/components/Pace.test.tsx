@@ -178,6 +178,18 @@ describe('the pace strip', () => {
     expect(text(container)).not.toContain('to make it')
   })
 
+  /** Nothing left to write is nothing to go, not an overshoot of nothing. */
+  it('reads a target met exactly as nothing to go rather than nothing over', async () => {
+    api.manuscriptPace.mockResolvedValue(
+      pace({ words: 2000, remaining: 0, required_per_day: undefined }),
+    )
+    const { container } = strip()
+
+    await waitFor(() => expect(text(container)).toContain('to go'))
+    expect(text(container)).toContain('0 to go')
+    expect(text(container)).not.toContain('over target')
+  })
+
   it('says a deadline has gone rather than counting backwards', async () => {
     api.manuscriptPace.mockResolvedValue(
       pace({ days_remaining: 0, required_per_day: undefined }),

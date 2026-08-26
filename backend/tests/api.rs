@@ -2564,8 +2564,11 @@ async fn a_reindex_counts_log_lines_it_could_not_read() {
 
 /// Seed a book with a target, a deadline and a scene that was cut.
 ///
-/// `due` is derived from the instant the caller will ask about, so the deadline
-/// arithmetic is exact without the test knowing what day it is running on.
+/// The caller asks about an instant taken **after** this returns, so every
+/// observation the seeding writes is inside the window whatever the clock says.
+/// Taking it before would put the writes on the far side of midnight a few times
+/// in a million runs, and a test that fails once a decade is worse than one that
+/// tests slightly less.
 async fn seed_paced_book(app: &App, due: DateTime<Utc>) {
     app.seed(
         "book",
@@ -2603,8 +2606,11 @@ fn asking_at(at: DateTime<Utc>) -> String {
 #[tokio::test]
 async fn the_pace_is_words_remaining_over_days_remaining() {
     let app = App::new().await;
+    let due = Utc::now()
+        .checked_add_days(Days::new(9))
+        .expect("a due date");
+    seed_paced_book(&app, due).await;
     let at = Utc::now();
-    seed_paced_book(&app, at.checked_add_days(Days::new(9)).expect("a due date")).await;
 
     let res = app
         .get(&format!(
@@ -2629,17 +2635,23 @@ async fn the_pace_is_words_remaining_over_days_remaining() {
     assert_eq!(res.body["window"]["days"], 14);
     assert_eq!(res.body["window"]["removed"], 0);
     assert_eq!(res.body["window"]["net"], words);
-    assert_eq!(res.body["window"]["active_days"], 1);
     assert_eq!(
         res.body["window"]["per_day"].as_f64(),
         Some(words as f64 / 14.0)
     );
+    // Which local day each write fell on is `pace::build`'s question and is
+    // pinned there against fixed instants. All this can say is that a run of
+    // writes was not filed under no day at all.
+    assert!(res.body["window"]["active_days"].as_u64().expect("days") >= 1);
 
-    // Due in nine days' time, and today is one you still have.
-    assert_eq!(res.body["days_remaining"], 10);
+    // The deadline half is wired, and the response's own arithmetic holds: the
+    // rate really is the remainder over the days, which is the property the whole
+    // receipt is for. Where the day boundary falls is pinned in `pace::build`.
+    let left = res.body["days_remaining"].as_i64().expect("days remaining");
+    assert!(left > 0, "nine days out is not a deadline that has gone");
     assert_eq!(
         res.body["required_per_day"].as_f64(),
-        Some((1000 - words as i64) as f64 / 10.0)
+        Some((1000 - words as i64) as f64 / left as f64)
     );
 }
 
@@ -2649,8 +2661,11 @@ async fn the_pace_is_words_remaining_over_days_remaining() {
 #[tokio::test]
 async fn words_written_into_a_cut_scene_are_reported_beside_the_book_and_not_in_it() {
     let app = App::new().await;
+    let due = Utc::now()
+        .checked_add_days(Days::new(9))
+        .expect("a due date");
+    seed_paced_book(&app, due).await;
     let at = Utc::now();
-    seed_paced_book(&app, at.checked_add_days(Days::new(9)).expect("a due date")).await;
 
     let res = app
         .get(&format!(
@@ -2692,8 +2707,11 @@ async fn words_written_into_a_cut_scene_are_reported_beside_the_book_and_not_in_
 #[tokio::test]
 async fn a_shorter_window_is_a_higher_rate_over_the_same_words() {
     let app = App::new().await;
+    let due = Utc::now()
+        .checked_add_days(Days::new(9))
+        .expect("a due date");
+    seed_paced_book(&app, due).await;
     let at = Utc::now();
-    seed_paced_book(&app, at.checked_add_days(Days::new(9)).expect("a due date")).await;
 
     let asked = asking_at(at);
     let fortnight = app
@@ -2705,6 +2723,9 @@ async fn a_shorter_window_is_a_higher_rate_over_the_same_words() {
 
     assert_eq!(week.body["window"]["days"], 7);
     assert_eq!(week.body["window"]["net"], fortnight.body["window"]["net"]);
+    // Or the halving below is zero against zero, which every broken version of
+    // this would also satisfy.
+    assert!(week.body["window"]["net"].as_i64().expect("a net") > 0);
     assert_eq!(
         week.body["window"]["per_day"].as_f64(),
         fortnight.body["window"]["per_day"]

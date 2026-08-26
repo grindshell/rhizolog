@@ -316,9 +316,14 @@ pub fn build(question: &Question, compiled: &Compiled, samples: &[Sample]) -> Pa
     }
 
     let per_day = counted.net() as f64 / f64::from(days);
+    // Saturating rather than `as`, which wraps. A hand-written `target:` larger
+    // than an `i64` would otherwise come back as a *negative* remainder, which
+    // reads as a manuscript past its target: precisely the wrong-way-round
+    // failure `Frontmatter::target` is parsed strictly to avoid. An absurd
+    // target should read as an absurd amount left to write.
     let remaining = compiled
         .target
-        .map(|target| target as i64 - compiled.words as i64);
+        .map(|target| saturating(target).saturating_sub(saturating(compiled.words)));
     let days_remaining = compiled.due.map(|due| days_remaining(question.at, due));
 
     let required_per_day = match (remaining, days_remaining) {
@@ -364,6 +369,11 @@ pub fn build(question: &Question, compiled: &Compiled, samples: &[Sample]) -> Pa
             pages: uncounted.ranked(),
         },
     }
+}
+
+/// A word count as a signed number, with anything past the ceiling held there.
+fn saturating(words: u64) -> i64 {
+    i64::try_from(words).unwrap_or(i64::MAX)
 }
 
 /// Whole days from the day holding `at` to the day holding `due`, counting both.
@@ -599,6 +609,38 @@ mod tests {
         assert_eq!(pace.uncounted, PaceUncounted::default());
     }
 
+    /// The case the subtraction is actually for, and the one `duplicate` above is
+    /// not: an appendix under one excluded part and one included part is
+    /// `excluded` at one position and `included` at the other. It is in the
+    /// document, so it is in the rate, and it must not also be reported as words
+    /// the document left behind.
+    #[test]
+    fn a_page_excluded_in_one_position_and_carried_in_another_is_counted_once() {
+        let book = compiled(
+            80,
+            None,
+            None,
+            vec![
+                section("book", Status::Included, 0),
+                section("book/cut-part", Status::Excluded, 0),
+                section("book/appendix", Status::Excluded, 0),
+                section("book/two", Status::Included, 0),
+                section("book/appendix", Status::Included, 80),
+            ],
+        );
+        let samples = [sample("2026-08-06T11:30:00Z", "book/appendix", 81, 1)];
+
+        let pace = build(&question("2026-08-06T18:00:00Z"), &book, &samples);
+
+        assert_eq!(pace.window.net, 80);
+        assert_eq!(pace.window.observations, 1);
+        assert_eq!(
+            pace.uncounted,
+            PaceUncounted::default(),
+            "the appendix is in the book, so it is not also outside it"
+        );
+    }
+
     /// The rate is over the calendar, because the projection is against one.
     /// What somebody does when they sit down is a different question and gets a
     /// different field rather than a different rate.
@@ -665,6 +707,29 @@ mod tests {
         assert_eq!(pace.window.net, -300);
         assert_eq!(pace.projected_days, None);
         assert_eq!(pace.projected_finish, None);
+    }
+
+    /// A `target:` nobody could mean is still not a manuscript that is finished.
+    ///
+    /// `as` would wrap this to a negative remainder, which reads as past its
+    /// target, and reporting a page as finished is the exact failure the strict
+    /// parse on `target` exists to prevent for a negative one.
+    #[test]
+    fn a_target_too_large_for_a_signed_count_is_held_at_the_ceiling() {
+        let book = compiled(
+            0,
+            Some(u64::MAX),
+            None,
+            vec![section("book", Status::Included, 0)],
+        );
+
+        let pace = build(&question("2026-08-06T18:00:00Z"), &book, &[]);
+
+        assert_eq!(pace.remaining, Some(i64::MAX));
+        assert!(
+            pace.remaining.is_some_and(|left| left > 0),
+            "an absurd target is an absurd amount left, not a finished book"
+        );
     }
 
     /// A target is a length somebody is aiming at rather than a ceiling.

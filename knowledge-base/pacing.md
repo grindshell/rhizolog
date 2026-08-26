@@ -149,8 +149,9 @@ more use than saying 1 January 1970.
 
 A projection past a hundred years keeps its number and loses its date, because
 past that the date is not a figure, it is what dividing by a rate near zero
-produces. `projected_days` still says 438,000, so the reason is visible rather
-than silent, and `chrono` is never asked to add a span it cannot represent.
+produces. `projected_days` still carries the count, so the reason is visible
+rather than silent, and `chrono` is never asked to add a span it cannot
+represent.
 
 ### The window is a fortnight
 
@@ -238,9 +239,16 @@ also names a target or a day.
 It was paid rather than avoided. The alternatives were worse: taking a compiled
 total from the client means trusting a client's arithmetic, and hiding the strip
 behind a click would make the one glanceable figure the feature has into
-something you have to ask for. The endpoint is also the cheaper half of the two,
-since the assembly is concatenation and the walk is where the cost is. It goes in
-`TODO.md` beside the existing note rather than being discovered later.
+something you have to ask for. It goes in `TODO.md` beside the existing note
+rather than being discovered later.
+
+**It is the more expensive of the two, not the cheaper one.** `compile::compile`
+assembles the markdown whether or not anybody wants it, so a pace pays the walk,
+the concatenation it then drops, and a word-log query on top. The obvious repair
+is a manifest-only mode, and [Long-form writing](long-form.md) already refused
+that one: "a second code path for the same tree would be a second answer about
+what the book is". Dropping a string that was built anyway is an allocation
+rather than a walk, so if this ever matters the measurement comes first.
 
 ## Open questions
 
@@ -257,3 +265,12 @@ since the assembly is concatenation and the walk is where the cost is. It goes i
   `active_days` is the only thing separating them. A sparkline is the obvious
   answer and `/api/word-stats` already draws one, so the case for repeating it
   here is weak.
+- **A chapter dropped from the spine takes its words out of the rate silently.**
+  `uncounted` covers what the contents list still names and the document does not
+  carry. Delete the entry rather than setting `compile: false` and the page is not
+  in the manifest at all, so a fortnight's work leaves the rate with nothing
+  saying where it went, which is the exact failure `uncounted` exists to prevent.
+  Catching it would need a record of every page that was ever in the spine, and
+  the index keeps the spine as it is rather than as it was. It is also an argument
+  for `compile: false` over deletion, which is the argument that field was added
+  for.
