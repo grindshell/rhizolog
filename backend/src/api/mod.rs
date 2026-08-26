@@ -6,6 +6,7 @@
 //! and a spec that drifts from the routes is worse than no spec at all.
 
 pub mod auth;
+pub mod compile;
 pub mod extract;
 pub mod graph;
 pub mod ideas;
@@ -182,6 +183,7 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         ))
         .routes(routes!(pages::move_page))
         .routes(routes!(pages::render_markdown))
+        .routes(routes!(compile::compile_pages))
         .routes(routes!(search::search))
         .routes(routes!(search::reindex))
         .routes(routes!(graph::links))

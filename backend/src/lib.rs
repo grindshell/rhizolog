@@ -7,6 +7,7 @@
 pub mod api;
 pub mod assets;
 pub mod auth;
+pub mod compile;
 pub mod config;
 pub mod endpoint;
 pub mod error;
@@ -26,6 +27,7 @@ pub use api::usage::UsageTally;
 pub use api::{AppState, router};
 pub use assets::Assets;
 pub use auth::Viewer;
+pub use compile::{CompileError, Compiled, Section};
 pub use config::{Config, Fallbacks, Listen};
 pub use endpoint::Endpoint;
 pub use error::{AppError, AppResult};

@@ -228,6 +228,48 @@ fn visible_link() -> String {
     )
 }
 
+/// A row in the spine this audience can see.
+///
+/// Only the first of [`visible_link`]'s two conditions is needed, and the
+/// asymmetry is worth stating rather than looking like an omission. That second
+/// condition exists to stop a link to a private page appearing as a *wanted*
+/// page in the graph, advertising a slug that is usually its title. Nothing here
+/// draws anything: the only question these rows are asked in this module is
+/// whether a page has a parent, and that is answered from the parent's side.
+fn visible_part() -> String {
+    format!(
+        "exists (
+             select 1 from pages as parent
+             where parent.slug = page_parts.src_slug and {parent}
+         )",
+        parent = audience::visible_as("parent"),
+    )
+}
+
+/// Whether a page is named by something: a link, or a contents list.
+///
+/// A chapter is referenced by the page that assembles it, so a manuscript's
+/// chapters are not orphans. Without this the wiki's own meta-stats would fill
+/// up with them the moment anybody wrote a book, and the orphan count is one of
+/// the two numbers `/api/stats` exists for.
+///
+/// This is the union the plan describes, and it lives in one function because
+/// the count and the list both ask it and must not drift.
+fn referenced() -> String {
+    format!(
+        "exists (
+             select 1 from links
+             where links.target = pages.slug and {link}
+         )
+         or exists (
+             select 1 from page_parts
+             where page_parts.target = pages.slug and {part}
+         )",
+        link = visible_link(),
+        part = visible_part(),
+    )
+}
+
 impl Index {
     /// Every link into and out of a page.
     ///
@@ -668,10 +710,8 @@ impl Index {
                 &format!(
                     "select count(*) from pages
                      where {is_visible_page}
-                       and not exists (
-                         select 1 from links
-                         where links.target = pages.slug and {visible_link}
-                       )"
+                       and not ({referenced})",
+                    referenced = referenced()
                 ),
                 visible.as_slice(),
                 |row| row.get(0),
@@ -704,12 +744,10 @@ impl Index {
                 "select pages.slug, pages.title
                  from pages
                  where {is_visible_page}
-                   and not exists (
-                     select 1 from links
-                     where links.target = pages.slug and {visible_link}
-                   )
+                   and not ({referenced})
                  order by pages.slug
-                 limit :top_n"
+                 limit :top_n",
+                referenced = referenced()
             ))?;
             let orphans = orphan_query
                 .query_map(

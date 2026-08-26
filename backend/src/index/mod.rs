@@ -264,6 +264,11 @@ impl Index {
         let updated = to_nanos(page.updated, "updated")?;
         let size = page.size as i64;
         let words = page.words() as i64;
+        // As written, and unvalidated. A `contents:` entry becomes a `Slug` when
+        // the page is compiled, never on the way in: a mistyped chapter is one
+        // bad entry in a manifest, and parsing it here would make it a malformed
+        // page instead, which costs the title, the tags and every listing.
+        let parts: Vec<String> = page.contents().unwrap_or_default().to_vec();
         // Resolved here rather than stored raw, so the index and the page agree
         // on what an absent field and an unrecognised word mean. `Page` is the
         // one place that decides; see `Visibility::parse`.
@@ -337,6 +342,20 @@ impl Index {
                 }
             }
 
+            // Rewritten wholesale like the tags, and for one extra reason: the
+            // key is the position, so a list that got shorter would otherwise
+            // keep its tail. Deleting first is what makes removing a chapter
+            // remove it.
+            transaction.execute("delete from page_parts where src_slug = ?1", params![&slug])?;
+            {
+                let mut insert = transaction.prepare(
+                    "insert into page_parts (src_slug, ordinal, target) values (?1, ?2, ?3)",
+                )?;
+                for (ordinal, target) in parts.iter().enumerate() {
+                    insert.execute(params![&slug, ordinal as i64, target])?;
+                }
+            }
+
             transaction.execute("delete from links where src_slug = ?1", params![&slug])?;
             {
                 let mut insert = transaction.prepare(
@@ -403,6 +422,9 @@ impl Index {
             // Outbound links go with the page. Inbound ones do not: they belong
             // to the pages that wrote them, and they become wanted links.
             transaction.execute("delete from links where src_slug = ?1", params![&slug])?;
+            // The same rule for the spine: a deleted contents page stops naming
+            // chapters, and a deleted chapter leaves a gap in whatever named it.
+            transaction.execute("delete from page_parts where src_slug = ?1", params![&slug])?;
             if let Some(rowid) = rowid {
                 transaction.execute("delete from pages_fts where rowid = ?1", params![rowid])?;
             }

@@ -254,6 +254,58 @@ async fn the_openapi_document_is_served() {
     assert!(res.body["paths"]["/api/health"]["get"].is_object());
 }
 
+/// Every `$ref` in the document must point at something that is in it.
+///
+/// This is not a style check. `pnpm gen:api` refuses a spec with a dangling
+/// reference outright, so one unresolvable `$ref` means the frontend's types
+/// cannot be regenerated at all, and the failure is silent from the Rust side,
+/// where `cargo test` and the served document are both perfectly happy.
+///
+/// The way to write one by accident is specific and worth naming: a `ToSchema`
+/// enum used only as a query parameter through `IntoParams`. utoipa emits a
+/// reference to it and registers no component, because nothing in a request body
+/// or a response ever named it. `/api/compile`'s `format` was exactly that, and
+/// it got as far as a working endpoint and a served spec before anything noticed.
+#[tokio::test]
+async fn every_reference_in_the_spec_resolves() {
+    let app = App::new().await;
+    let spec = app.get("/api-docs/openapi.json").await.body;
+
+    fn refs(value: &Value, found: &mut Vec<String>) {
+        match value {
+            Value::Object(fields) => {
+                for (key, child) in fields {
+                    if key == "$ref"
+                        && let Some(target) = child.as_str()
+                    {
+                        found.push(target.to_owned());
+                    }
+                    refs(child, found);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| refs(item, found)),
+            _ => {}
+        }
+    }
+
+    let mut found = Vec::new();
+    refs(&spec, &mut found);
+    assert!(
+        !found.is_empty(),
+        "a spec with no references at all is suspect"
+    );
+
+    for reference in found {
+        let pointer = reference
+            .strip_prefix('#')
+            .unwrap_or_else(|| panic!("only local references are expected: {reference}"));
+        assert!(
+            spec.pointer(pointer).is_some(),
+            "{reference} resolves to nothing, so `pnpm gen:api` will refuse the whole document"
+        );
+    }
+}
+
 /// Every route must appear in the spec with a description and responses. If
 /// this fails, agents reading the document will not know the endpoint exists or
 /// what it returns.
@@ -1247,6 +1299,299 @@ async fn a_target_and_a_due_date_round_trip() {
     let read = app.get("/api/pages/book").await;
     assert_eq!(read.body["target"], 90000);
     assert_eq!(read.body["due"], "2027-03-01T00:00:00Z");
+}
+
+// --------------------------------------------------------------- compile
+
+/// Seed a small book: a root, a part, and two chapters under it.
+async fn seed_book(app: &App) {
+    app.seed(
+        "book",
+        json!({ "content": "# The Long Way Round\n\nA note.\n", "contents": ["book/one"], "target": 90000 }),
+    )
+    .await;
+    app.seed(
+        "book/one",
+        json!({ "content": "# Part One\n\n> An epigraph.\n", "contents": ["book/one/opening", "book/one/the-ferry"] }),
+    )
+    .await;
+    app.seed(
+        "book/one/opening",
+        json!({ "content": "# Opening\n\nFirst.\n" }),
+    )
+    .await;
+    app.seed(
+        "book/one/the-ferry",
+        json!({ "content": "# The Ferry\n\nSecond.\n" }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn compiles_a_book_into_one_document_with_a_map_back() {
+    let app = App::new().await;
+    seed_book(&app).await;
+
+    let res = app.get("/api/compile?root=book").await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["compiler"], "compile/v1");
+    assert_eq!(res.body["target"], 90000);
+
+    let document = res.body["content"].as_str().expect("content");
+    // One hierarchy, not four competing ones.
+    assert!(document.contains("# The Long Way Round"));
+    assert!(document.contains("## Part One"));
+    assert!(document.contains("### Opening"));
+    assert!(document.contains("### The Ferry"));
+
+    let sections = res.body["sections"].as_array().expect("sections");
+    assert_eq!(sections.len(), 4);
+    assert_eq!(sections[0]["slug"], "book");
+    assert_eq!(sections[0]["depth"], 0);
+    assert_eq!(sections[3]["slug"], "book/one/the-ferry");
+    assert_eq!(sections[3]["depth"], 2);
+
+    // Every offset indexes into the bytes that came back.
+    for section in sections {
+        if section["status"] != "included" {
+            continue;
+        }
+        let offset = section["offset"].as_u64().unwrap() as usize;
+        let length = section["length"].as_u64().unwrap() as usize;
+        let slice = &document[offset..offset + length];
+        assert!(
+            slice.contains(section["title"].as_str().unwrap()),
+            "{} was not at the offset the manifest claims",
+            section["slug"]
+        );
+    }
+}
+
+/// The order in the frontmatter is the order in the document, which is the whole
+/// reason the spine is its own table keyed by position.
+#[tokio::test]
+async fn the_contents_order_is_the_document_order() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "# Book\n", "contents": ["b", "a", "c"] }),
+    )
+    .await;
+    for slug in ["a", "b", "c"] {
+        app.seed(slug, json!({ "content": format!("# {slug}\n") }))
+            .await;
+    }
+
+    let res = app.get("/api/compile?root=book").await;
+    let slugs: Vec<&str> = res.body["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|section| section["slug"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(slugs, ["book", "b", "a", "c"]);
+}
+
+/// Reordering the list reorders the document, with nothing left behind. A
+/// shorter list is the case a positional key gets wrong if the old rows survive.
+#[tokio::test]
+async fn shortening_a_contents_list_drops_the_chapters_it_removed() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "# Book\n", "contents": ["a", "b", "c"] }),
+    )
+    .await;
+    for slug in ["a", "b", "c"] {
+        app.seed(slug, json!({ "content": format!("# {slug}\n") }))
+            .await;
+    }
+
+    app.put(
+        "/api/pages/book",
+        json!({ "content": "# Book\n", "contents": ["c"] }),
+    )
+    .await;
+
+    let res = app.get("/api/compile?root=book").await;
+    let slugs: Vec<&str> = res.body["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|section| section["slug"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(slugs, ["book", "c"]);
+}
+
+#[tokio::test]
+async fn a_gap_and_a_bad_entry_keep_their_positions() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "# Book\n", "contents": ["a", "book/missing", "../etc/passwd", "b"] }),
+    )
+    .await;
+    app.seed("a", json!({ "content": "# A\n" })).await;
+    app.seed("b", json!({ "content": "# B\n" })).await;
+
+    let res = app.get("/api/compile?root=book").await;
+    let reported: Vec<(&str, &str)> = res.body["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|section| {
+            (
+                section["slug"].as_str().unwrap(),
+                section["status"].as_str().unwrap(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        reported,
+        [
+            ("book", "included"),
+            ("a", "included"),
+            ("book/missing", "wanted"),
+            ("../etc/passwd", "invalid"),
+            ("b", "included"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn html_is_rendered_from_the_assembled_document() {
+    let app = App::new().await;
+    seed_book(&app).await;
+
+    let res = app.get("/api/compile?root=book&format=html").await;
+    let html = res.body["content"].as_str().expect("content");
+
+    assert!(html.contains("<h1>"), "{html}");
+    assert!(
+        html.contains("<h3>"),
+        "the shifted levels did not survive: {html}"
+    );
+}
+
+/// The `json` format hands over the parts rather than the whole, so a caller can
+/// take one chapter without slicing bytes itself.
+#[tokio::test]
+async fn the_json_format_carries_each_section_and_no_document() {
+    let app = App::new().await;
+    seed_book(&app).await;
+
+    let res = app.get("/api/compile?root=book&format=json").await;
+
+    assert!(res.body.get("content").is_none());
+    let sections = res.body["sections"].as_array().unwrap();
+    assert!(sections[0]["content"].as_str().unwrap().contains("A note."));
+}
+
+#[tokio::test]
+async fn a_style_page_is_prepended_and_is_in_the_manifest() {
+    let app = App::new().await;
+    seed_book(&app).await;
+    app.seed(
+        "rules/voice",
+        json!({ "content": "# Voice\n\nPast tense.\n" }),
+    )
+    .await;
+
+    let res = app.get("/api/compile?root=book&style=rules/voice").await;
+
+    assert!(res.body["content"].as_str().unwrap().starts_with("# Voice"));
+    assert_eq!(res.body["sections"][0]["slug"], "rules/voice");
+    assert_eq!(res.body["sections"][1]["slug"], "book");
+}
+
+#[tokio::test]
+async fn compiling_from_nothing_names_the_root_it_looked_for() {
+    let app = App::new().await;
+
+    let res = app.get("/api/compile?root=book").await;
+
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    assert_eq!(res.code(), "compile_root_not_found");
+    assert_eq!(res.body["error"]["details"]["slug"], "book");
+}
+
+#[tokio::test]
+async fn a_compile_root_that_is_not_a_slug_is_refused() {
+    let app = App::new().await;
+    let res = app.get("/api/compile?root=../etc/passwd").await;
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+}
+
+/// A refusal rather than a truncation, and it names the slug: that is the one
+/// thing the caller cannot work out from the limit alone.
+#[tokio::test]
+async fn a_chain_past_the_depth_limit_is_refused_rather_than_cut_short() {
+    let app = App::new().await;
+    for level in 0..20 {
+        app.seed(
+            &format!("p{level}"),
+            json!({ "content": format!("# Level {level}\n"), "contents": [format!("p{}", level + 1)] }),
+        )
+        .await;
+    }
+
+    let res = app.get("/api/compile?root=p0").await;
+
+    assert_eq!(res.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(res.code(), "compile_too_large");
+    assert_eq!(res.body["error"]["details"]["limit"], "depth");
+    assert_eq!(res.body["error"]["details"]["ceiling"], 16);
+    assert_eq!(res.body["error"]["details"]["slug"], "p17");
+}
+
+/// The gate that justifies indexing the spine at all: without it every chapter
+/// in the wiki is unreferenced, and the orphan count is one of the two numbers
+/// `/api/stats` exists for.
+#[tokio::test]
+async fn a_chapter_named_by_a_contents_list_is_not_an_orphan() {
+    let app = App::new().await;
+    seed_book(&app).await;
+    app.seed("loose", json!({ "content": "Nobody points at this.\n" }))
+        .await;
+
+    let stats = app.get("/api/stats").await;
+    let orphans: Vec<&str> = stats.body["orphans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|orphan| orphan["slug"].as_str().unwrap())
+        .collect();
+
+    // The root is an orphan: nothing assembles the book. Its chapters are not.
+    assert!(orphans.contains(&"book"));
+    assert!(orphans.contains(&"loose"));
+    assert!(
+        !orphans.contains(&"book/one"),
+        "a part named by its book was reported as an orphan"
+    );
+    assert!(!orphans.contains(&"book/one/opening"));
+    assert_eq!(stats.body["orphan_count"], 2);
+}
+
+/// A chapter dropped from the list goes back to being unreferenced, which is the
+/// same self-healing the link graph has and needs no reindex of its own.
+#[tokio::test]
+async fn removing_a_chapter_from_the_spine_makes_it_an_orphan_again() {
+    let app = App::new().await;
+    app.seed("book", json!({ "content": "# Book\n", "contents": ["a"] }))
+        .await;
+    app.seed("a", json!({ "content": "# A\n" })).await;
+
+    assert_eq!(app.get("/api/stats").await.body["orphan_count"], 1);
+
+    app.put("/api/pages/book", json!({ "content": "# Book\n" }))
+        .await;
+
+    assert_eq!(app.get("/api/stats").await.body["orphan_count"], 2);
 }
 
 // ---------------------------------------------------------------- search

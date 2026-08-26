@@ -116,6 +116,16 @@ fn base_of(source: Option<&Slug>) -> &str {
     source.and_then(Slug::parent).unwrap_or("")
 }
 
+/// The parser configuration every reader of a page body shares.
+///
+/// Rendering, link extraction, word counting and the heading shift in
+/// [`crate::compile`] all go through this, so all four agree about what is a
+/// fence, a heading and a wikilink. Two of them disagreeing would be a page
+/// whose links come from one reading and whose headings come from another.
+pub fn parser_options() -> Options<'static> {
+    options()
+}
+
 /// Fields are set individually rather than through a struct literal because
 /// comrak's option types are `non_exhaustive` and have been renamed across
 /// releases; touching only the fields we care about survives both.

@@ -889,6 +889,8 @@ numbers.
 
 ### L1: compile and the manifest
 
+**Built.** See [What L1 turned out to be](#what-l1-turned-out-to-be).
+
 Add `page_parts`, and union it into the orphan and graph queries. Implement the
 assembly, the heading shift, gap and duplicate reporting, the three limits, the
 three formats, and the audience predicate.
@@ -1011,6 +1013,107 @@ on the caller's `limit`.
 
 Measured against `example-wiki/`, which is the first real prose it has seen:
 `?prefix=notes` reports 711 words across six pages, and the six add up.
+
+## What L1 turned out to be
+
+`compile.rs` is the assembly, `api/compile.rs` is the seam to HTTP, and
+`page_parts` is the spine at schema version 11. Six things differ from what this
+page said above, and one of them is a bug this project had no guard against.
+
+### The graph waits for L4; the orphan count did not
+
+The plan says L1 unions `page_parts` into "the orphan and graph queries". Only
+the first is built. Orphans are a **number being wrong**: without the union,
+every chapter of every book is reported as unreferenced and one of the two
+figures `/api/stats` exists for fills up with them. Drawing part edges is a
+**display decision** with real questions attached (does a part edge look like a
+wikilink? does it bow the same way?), and answering those before the Manuscript
+panel exists would be guessing. It moves to L4, where the panel is.
+
+One function, `graph::referenced`, holds the union, because the orphan count and
+the orphan list both ask it and two spellings of one rule drift.
+
+`visible_part` is deliberately simpler than `visible_link`: it checks only that
+the parent is visible. The second half of `visible_link` exists to stop a link to
+a private page appearing as a *wanted* page in a drawing, and nothing here draws
+anything.
+
+### The walk reaches storage through a trait, not a pure function
+
+The module seams say `compile.rs` is a pure function of stated inputs that never
+touches the disk. The assembly is; the **walk** cannot be, because what it asks
+for next depends on what the last page said, and pages come off a disk.
+
+So `compile::Pages` is a trait with one async `fetch`, implemented over the store
+in `api/compile.rs` and over a `HashMap` in the tests. Every interesting case
+here is a shape of tree rather than a shape of disk, so the tests build wikis in
+memory: a diamond, a two-page loop, a chain past the depth limit, a chapter
+nobody has written. That is the same testability the plan wanted, bought with a
+trait instead of a function signature.
+
+The audience check lives in the impl rather than in the walk, which is what makes
+"a page you cannot read" and "a page nobody has written" the same answer without
+the assembly having to know that rule exists.
+
+### Two heading rules the plan did not have
+
+Shifting by depth is easy to state and has two edges:
+
+- **Levels clamp at six.** Markdown has no `#######`, so a heading pushed past
+  six stops there rather than silently becoming a paragraph that starts with
+  hashes. A deep book loses hierarchy at the bottom; the alternative loses the
+  heading.
+- **A setext heading becomes an ATX one.** `Opening` over `=======` has no marker
+  to shift, so there is nothing to change without changing the spelling. Its
+  source lines are kept verbatim after the new marker, so emphasis and links
+  inside a heading survive. This happens only in the compiled output.
+
+Both go through comrak rather than a scan for `#`, so a hash inside a fence is
+not a heading. Everything that is not a heading line is passed through byte for
+byte, which is what lets the manifest promise a section's bytes are its own.
+
+### A separator is added, never trimmed
+
+Sections are joined with a blank line, added only where the previous section did
+not already end in one. Nothing is trimmed from a body, so "byte-identical" and
+"appears exactly once at the offset the manifest claims" both survive: what
+changed is what sits *between* sections, and the offsets account for it.
+
+### Too large is a 413, not a 400
+
+The plan named `compile_too_large` and not its status. Nothing about the request
+is malformed, so a `400` would send the caller looking for a typo rather than at
+the size of what they asked for. The details carry the limit, its ceiling and the
+slug it was reached at, since the slug is the one part a caller cannot work out
+for themselves.
+
+### A dangling `$ref` got as far as a working endpoint
+
+`format` was first written as a `ToSchema` enum on the query struct. That
+compiles, serves, passes every test, and produces an OpenAPI document with a
+`$ref` to a component that was never registered, because utoipa registers schemas
+reachable from bodies and responses and `IntoParams` is neither.
+
+The failure is silent from Rust and total from TypeScript: `pnpm gen:api` refuses
+the **whole document**, so the frontend's types cannot be regenerated at all.
+It was caught by running the command and reading its exit code, having missed it
+once by piping the output away.
+
+Two things came out of it. `format` is now a plain string parsed in the handler,
+which is what `sort` and `order` already do and which also gets a caller who
+names a bad format the list of good ones. And
+`every_reference_in_the_spec_resolves` walks the served document and asserts
+every local reference resolves, so the next one fails in `cargo test` rather than
+three commands later.
+
+### Verified against hand-written files
+
+A scratch book of three files, none of them written through the API: a root with
+`target: 90,000` and a chapter that does not exist, a part naming
+`../etc/passwd`, and a chapter whose heading is setext. Compiling it produced one
+document with `#`, `##` and `###` nesting, the setext heading converted, both bad
+entries reported in position at the right depths, offsets that index into the
+returned bytes, and an orphan list holding only the root.
 
 ## Test strategy
 

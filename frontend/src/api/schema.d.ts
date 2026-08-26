@@ -222,6 +222,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/compile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Assemble a manuscript. */
+        get: operations["compile_pages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/graph": {
         parameters: {
             query?: never;
@@ -1099,6 +1116,35 @@ export interface components {
              * @description The file's modification time.
              */
             updated: string;
+        };
+        CompiledView: {
+            /**
+             * @description Which assembly produced this. Changing how a document is put together is
+             *     a version change here, following `tfidf/v1`.
+             * @example compile/v1
+             */
+            compiler: string;
+            /**
+             * @description The assembled document. Markdown or HTML depending on `format`, and
+             *     absent for `json`, where each section carries its own text instead.
+             */
+            content?: string | null;
+            /** @example book */
+            root: string;
+            /** @description Every section in order, with where it landed. */
+            sections: components["schemas"]["SectionView"][];
+            /**
+             * Format: int64
+             * @description The root's `target`, if it names one.
+             * @example 90000
+             */
+            target?: number | null;
+            /**
+             * Format: int64
+             * @description Words across every included section.
+             * @example 41230
+             */
+            words: number;
         };
         /** @description The arithmetic behind a momentum score. */
         Components: {
@@ -2524,6 +2570,56 @@ export interface components {
              */
             total: number;
         };
+        /** @description One entry in the manifest. */
+        SectionView: {
+            /**
+             * @description The section's own text. Only in the `json` format, and only when the
+             *     section was `included`.
+             */
+            content?: string | null;
+            /**
+             * @description How many contents lists deep this page sits. The root is zero.
+             * @example 2
+             */
+            depth: number;
+            /**
+             * @description How many bytes they run for. Zero for anything not `included`.
+             * @example 12903
+             */
+            length: number;
+            /**
+             * @description Where this section's bytes begin in the document.
+             * @example 238
+             */
+            offset: number;
+            /**
+             * @description The slug as the contents list wrote it, so an `invalid` entry can be
+             *     found and fixed.
+             * @example book/one/the-ferry
+             */
+            slug: string;
+            /**
+             * @description One of `included`, `wanted`, `invalid`, `duplicate`, `unreadable`.
+             *
+             *     A section keeps its position whatever this says. A manuscript short of a
+             *     chapter reports where the chapter was going to be, which is the whole
+             *     difference between a gap and an omission.
+             *
+             *     `wanted` covers a slug with nothing written at it **and** a page this
+             *     caller may not read: the two are deliberately indistinguishable.
+             *     `duplicate` is a page already emitted earlier, which covers a cycle and
+             *     the commoner case that is not one, an appendix listed under two parts.
+             * @example included
+             */
+            status: string;
+            /** @description The page's title. Absent for anything that is not `included`. */
+            title?: string | null;
+            /**
+             * Format: int64
+             * @example 2180
+             */
+            words: number;
+        };
         SessionStatus: {
             /**
              * @description Whether this request is signed in. Always true on an open wiki, where
@@ -3473,6 +3569,75 @@ export interface operations {
             };
             /** @description No such capture */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    compile_pages: {
+        parameters: {
+            query: {
+                /**
+                 * @description The page to assemble from. Its body comes first, then the pages its
+                 *     `contents:` list names, recursively.
+                 * @example book
+                 */
+                root: string;
+                /**
+                 * @description `markdown` (the default), `html`, or `json`.
+                 * @example markdown
+                 */
+                format?: string;
+                /**
+                 * @description A page to prepend as a preamble: the rules of the work, handed over in
+                 *     the same request as the work.
+                 *
+                 *     A parameter rather than frontmatter because it is a property of who is
+                 *     asking rather than of the book. It appears in the manifest like anything
+                 *     else that is in the bytes.
+                 * @example rules/voice
+                 */
+                style?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The assembled document and its manifest */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompiledView"];
+                };
+            };
+            /** @description The root or style slug is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No page at the root slug */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Depth, section or byte limit exceeded */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

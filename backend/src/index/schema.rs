@@ -36,13 +36,17 @@
 /// **Changing how a capture is tokenized is a bump too**, because every row here
 /// is the output of that one function.
 ///
+/// Version 11 adds `page_parts`, the ordered spine a `contents:` list names. An
+/// index written before it has none, so every chapter in a manuscript would be
+/// reported as an orphan and nothing could be compiled.
+///
 /// Version 10 adds `pages.words`. An index written before it has none, and a
 /// column defaulting to zero would report every page in an existing wiki as
 /// empty and every prefix total as nothing, which is worse than absent because
 /// it looks like an answer. **Changing how a body is counted is a bump too**,
 /// for `idea_terms`' reason: every row is the output of that one function. See
 /// [`crate::markdown::count_words`] and `knowledge-base/long-form.md`.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -204,6 +208,33 @@ create table links (
 ) strict;
 
 create index links_by_target on links(target);
+
+-- The ordered spine: what a page's `contents:` list names, in the order it
+-- names it. Not rows in `links`, and the reason is the primary key rather than
+-- volume. `links` is keyed (src_slug, target, kind), so one parent cannot list
+-- the same child twice -- and an appendix under two parts is exactly the case
+-- the manifest reports as `duplicate`. Adding an ordinal to that key would make
+-- it representable and would also change what a row *is* for every other kind:
+-- `[[a]]` written twice in a page is one row today, and collapsing repeats is
+-- what makes a backlink panel readable.
+--
+-- So position is the identity here. That is the opposite trade from
+-- `time_pages`, which is kept out of the graph because a page collects hundreds
+-- of them; a page has exactly one parent, so these are edges the graph wants.
+--
+-- `target` is a slug as written, resolved by joining `pages` at read time like
+-- every other target in this schema, so a chapter written later fills its gap
+-- with nothing to reindex. It is not a `references`, for the same reason: a
+-- contents list may name a page that does not exist yet, and that is a gap in
+-- the manuscript rather than an error.
+create table page_parts (
+    src_slug text    not null references pages(slug) on delete cascade,
+    ordinal  integer not null,
+    target   text    not null,
+    primary key (src_slug, ordinal)
+) strict;
+
+create index page_parts_by_target on page_parts(target);
 
 -- Each row's rowid is the rowid of the `pages` row it describes, because that
 -- is the only handle an FTS5 table can be looked up by other than `MATCH`.

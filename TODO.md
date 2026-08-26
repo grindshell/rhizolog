@@ -252,8 +252,12 @@ Five phases, in this order, and L3 may swap with L2:
   a `words` total on the listing summed over the whole filtered set. What the
   plan did not say and the code had to decide is on the plan page under "What L0
   turned out to be".
-- **L1: compile and the manifest.** `contents:` entries indexed as `part` links
-  with an `ordinal`, heading shift, gaps and cycles reported rather than hidden.
+- **L1: compile and the manifest.** **Built.** `page_parts` at schema version 11,
+  `GET /api/compile` in three formats, the heading shift, the five section
+  statuses, and the three limits. **The graph does not draw part edges yet**:
+  orphans are unioned, because a chapter reported as unreferenced is a number
+  being wrong, and drawing is a display decision that belongs with the panel in
+  L4. See "What L1 turned out to be" on the plan page.
 - **L2: `prose/v1`.** Rules in `.rhizolog/prose.toml`, five rule kinds, every
   finding quoting the text it fired on and carrying the arithmetic behind it, and
   `GET /api/prose/rules` so a remote caller can reproduce one. No dismissal

@@ -87,6 +87,29 @@ pub enum AppError {
     #[error("at most {limit} pages may be pinned")]
     TooManyPins { limit: usize },
 
+    /// Nothing at the root of a compile, or nothing this caller may read.
+    ///
+    /// Distinct from `page_not_found` because it names the parameter that was
+    /// wrong. A caller compiling a book has one slug in hand and a generic page
+    /// error would send them looking at chapters.
+    #[error("no page at {slug} to compile from")]
+    CompileRootNotFound { slug: Slug },
+
+    /// A compile ran into one of its three ceilings.
+    ///
+    /// **A refusal rather than a truncation.** A shortened manuscript is a
+    /// complete-looking document that silently stops being the book, and the
+    /// reader most likely to be handed one is an assistant that will then reason
+    /// about an ending that is not there. Naming the slug is what makes the
+    /// refusal actionable, since it is the one thing the caller cannot work out
+    /// from the limit alone.
+    #[error("compiling from {at} exceeded the {limit} limit of {ceiling}")]
+    CompileTooLarge {
+        limit: &'static str,
+        ceiling: usize,
+        at: String,
+    },
+
     #[error("invalid time id {raw:?}: {source}")]
     InvalidTimeId {
         raw: String,
@@ -352,8 +375,14 @@ impl AppError {
             Self::IdeaAnalysisUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::RouteNotFound { .. }
             | Self::PinNotFound { .. }
+            | Self::CompileRootNotFound { .. }
             | Self::IdeaPromotionPageNotFound { .. } => StatusCode::NOT_FOUND,
             Self::TooManyPins { .. } | Self::TimeNotRunning { .. } => StatusCode::CONFLICT,
+            // The request is answerable and the answer is too big to be worth
+            // giving, which is what 413 says. Not a 400: nothing about the
+            // request is malformed, and a caller told so would go looking for a
+            // typo rather than at the size of what they asked for.
+            Self::CompileTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidRecordId { .. }
             | Self::InvalidTimeId { .. }
             | Self::TimeRangeInverted { .. }
@@ -427,6 +456,8 @@ impl AppError {
             Self::RouteNotFound { .. } => "route_not_found",
             Self::PinNotFound { .. } => "pin_not_found",
             Self::TooManyPins { .. } => "too_many_pins",
+            Self::CompileRootNotFound { .. } => "compile_root_not_found",
+            Self::CompileTooLarge { .. } => "compile_too_large",
             Self::InvalidRequestBody { .. } => "invalid_request_body",
             Self::UnknownFields { .. } => "unknown_fields",
             Self::InvalidParameter { .. } => "invalid_parameter",
@@ -478,6 +509,16 @@ impl AppError {
                 "username": raw,
                 "rule": source.code(),
                 "reason": source.to_string(),
+            })),
+            Self::CompileRootNotFound { slug } => Some(json!({ "slug": slug })),
+            // The slug is the part a caller cannot work out for themselves. The
+            // limit and its ceiling are constants they could read in the docs,
+            // and putting all three here means the message does not have to be
+            // parsed to act on.
+            Self::CompileTooLarge { limit, ceiling, at } => Some(json!({
+                "limit": limit,
+                "ceiling": ceiling,
+                "slug": at,
             })),
             Self::Password(error) => Some(json!({
                 "rule": error.code(),
