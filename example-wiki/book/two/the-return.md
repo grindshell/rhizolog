@@ -1,7 +1,11 @@
 ---
 title: The Return
+synopsis: >-
+  Home, two days late, and the name spelled the other way. Wants a decision
+  about which spelling stands before anybody else reads it.
 tags:
   - book
+stage: with-beta-readers
 ---
 
 # The Return

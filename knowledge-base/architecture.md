@@ -176,7 +176,16 @@ Knowledge branches off chaotically. See [[notes/rust/async]].
 - **`owner`** and **`readers`** — optional; who a `private` or `restricted` page
   belongs to and who else may read it. All three do nothing on a wiki with no
   accounts. See [Page visibility](visibility.md).
+- **`target`**, **`due`** and **`contents`**: optional; a word count to aim at, a
+  day, and the ordered list of pages this one assembles. See
+  [Long-form writing](long-form.md).
+- **`synopsis`**, **`stage`** and **`compile`**: optional; what a page is for,
+  what stage of drafting it is at, and whether it belongs in a document compiled
+  from whatever assembles it. See [Drafting](drafting.md).
 - **There is no `updated` field.** It is read from the file's mtime instead.
+
+Every one of those six does nothing on a wiki that does not use it, exactly as
+the three visibility fields do nothing on a wiki with no accounts.
 
 That last one matters: if `updated` lived in frontmatter, every hand-edit and
 every `git checkout` would leave it lying. Deriving it from the filesystem
@@ -335,6 +344,15 @@ typed, because the manifest has to show it in position; what the column records
 is whether anything else should treat it as naming a page. See
 [Long-form writing](long-form.md).
 
+**`compile: false` takes a page out of a document and out of nothing else.** It
+still has its `page_parts` row, so it is not an orphan and the graph still draws
+the line to it; it is still in every listing, still searchable, and the word log
+still holds what was written into it. The spine is what the wiki knows about
+structure, and `compile` is what one document is. Which is why it gets no column:
+nothing queries it, because the only thing that consults it is the compile walk,
+which reads each page from the store and already has its frontmatter. See
+[Drafting](drafting.md).
+
 This is also why page moves do not rewrite backlinks in the MVP: a move turns
 inbound links into wanted pages, which shows up in the stats rather than
 silently rotting. Link-rewriting on move is a post-MVP convenience.
@@ -344,7 +362,8 @@ silently rotting. Link-rewriting on move is a post-MVP convenience.
 Derived from the wiki, and therefore disposable:
 
 ```sql
-pages(slug PK, title, created, updated, size, words, visibility, owner)
+pages(slug PK, title, synopsis, stage, created, updated, size, words,
+      visibility, owner)
 page_tags(slug, tag)
 page_readers(slug, username)            -- who a restricted page admits
 page_segments(slug, segment, depth)     -- the directories a page sits in

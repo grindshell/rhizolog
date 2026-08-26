@@ -304,15 +304,16 @@ Every phase and what it turned out to be:
   page already agrees with the log, so the scan finds nothing to record.
 
 **`example-wiki/` now has a manuscript in it**, which is what the Manuscript panel
-and the assembled view had nothing to be shown against. `book` is seven pages in
-two parts, and its manifest is ten sections: seven assembled, one gap, one page
-listed under both parts and one entry that is not a slug. `index.md` states the
-whole manifest section by section, along with the compiled total, the target and
-what `prose/v1` says about the assembled book, which is where the `names` rule
-finds the one thing it is for and no single page reports it. It cost what was
-predicted: sixteen pages rather than nine, eight more lines in the word log, and
-a rebased `index` baseline. The orphan and wanted counts are unmoved, because the
-book is linked from the index and a contents gap is not a wikilink.
+and the assembled view had nothing to be shown against. `book` is eight pages in
+two parts, and its manifest is eleven sections: seven assembled, one gap, one page
+listed under both parts, one cut scene and one entry that is not a slug.
+`index.md` states the whole manifest section by section, along with the compiled
+total, the target and what `prose/v1` says about the assembled book, which is
+where the `names` rule finds the one thing it is for and no single page reports
+it. It cost what was predicted: sixteen pages rather than nine, eight more lines
+in the word log, and a rebased `index` baseline. Drafting added the eighth book
+page and a ninth log line. The orphan and wanted counts are unmoved throughout,
+because the book is linked from the index and a contents gap is not a wikilink.
 
 What is not done:
 
@@ -373,27 +374,39 @@ the book is the worst thing this endpoint could return.
 
 ## Drafting
 
-**Planned, not started**, in [Drafting](knowledge-base\drafting.md). Long-form
-got a manuscript as far as existing; nothing in it says what a chapter is *for*
-or whether it is done, so a book of forty pages answers those two questions only
-by being read. Four optional frontmatter fields: `synopsis` (authored, never
-inferred from the prose), `stage` (a lenient string, four known names that get a
-colour), `target` on a leaf, and `compile: false` for a page that stays in the
-spine and out of the book. The manifest gains all four plus `subtree`, which is
-what a target actually compares against on a page with children. Four phases, D0
-to D3, and the fixture moves in D3 rather than afterwards.
+**Built**, D0 to D3, and [Drafting](knowledge-base\drafting.md) is now the record
+rather than the plan. Long-form got a manuscript as far as existing; nothing in it
+said what a chapter was *for* or whether it was done, so a book of forty pages
+answered those two questions only by being read.
 
-Two things it deliberately settles by renaming or refusing. `status` loses to
-`stage`, because `SectionView.status` already means what compile did with an
-entry and the manifest is exactly where both would meet. And nothing computes a
-stage or rolls one up: a chapter is drafted when its author says so.
+Three optional frontmatter fields, and the fourth was already there: `synopsis`
+(authored, never inferred from the prose), `stage` (a lenient string, four known
+names that get a colour and anything else shown as itself), `compile: false` for a
+page that stays in the spine and out of the book, and `target`, whose recursive
+definition turned out to need a reader rather than a change. `pages.synopsis` and
+`pages.stage` are columns at schema version 14; `compile` gets none, because
+nothing queries it. The manifest gains all four plus `subtree`, which is what a
+target compares against on a page with children.
 
-Three gaps found in the same survey and **not** in that plan:
+Two things it settles by renaming or refusing. `status` loses to `stage`, because
+`SectionView.status` already means what compile did with an entry and the manifest
+is exactly where both would meet. And nothing computes a stage or rolls one up: a
+chapter is drafted when its author says so, and the panel's summary is a count
+rather than a verdict.
+
+What it turned up on the way: `page_parts` and `page_words` were in
+`CREATE_DERIVED` and not in `DROP_DERIVED`, so the next schema bump would have
+failed on `create table` and the index would not have opened at all. Two tests
+guard it now, one comparing the two lists and one opening a database stamped with
+an older version.
+
+Three gaps found in the survey this plan came out of and still **not** built:
 
 - **Pacing.** Words remaining over days remaining, from `target`, `due`, the
-  compiled total and the word log. It needs no new fields at all, so it is
-  cheaper after Drafting lands than before. The house rule applies: a figure with
-  its arithmetic, not encouragement.
+  compiled total and the word log. It needs no new fields at all, and it is now
+  cheaper than it was: the manifest reports every section's own target and its
+  `subtree`, so the arithmetic has its inputs. The house rule applies: a figure
+  with its arithmetic, not encouragement.
 - **Reordering the spine from the panel.** Today the only way to move a chapter
   is to edit a YAML list in a textarea. Order moved into frontmatter so a
   formatter could not reorder a book, and the panel was meant to pay that back;
@@ -402,6 +415,18 @@ Three gaps found in the same survey and **not** in that plan:
 - **Split and merge.** Splitting a page at an offset and repairing the parent's
   contents list is mechanical, error-prone by hand, and exactly what an API
   should do.
+
+Three questions the plan left open and the build did not close:
+
+- **A synopsis is not searchable.** It is the natural way to find "the chapter
+  where they cross", and `pages_fts` indexes slug, title and body. A fourth
+  column moves `FTS_BODY_COLUMN`, which `snippet()` indexes by position, so it is
+  a real change rather than a line. Deferred, not declined.
+- **There is no wiki-wide stage summary.** `/api/stats` counts orphans, wanted
+  pages and tags. Stages across a whole wiki is a different question from stages
+  across one manuscript, and it is not obvious anybody is asking it.
+- **Promotion from Idea Inbox sets no stage.** `todo` would be defensible and so
+  would nothing, and nothing is the smaller claim, so nothing is what it does.
 
 ## Rough edges
 

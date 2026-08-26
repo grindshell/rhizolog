@@ -1,6 +1,10 @@
 ---
+synopsis: >-
+  He leaves on a Tuesday for no reason he can give. Establishes the narrator as
+  somebody who still expects to be able to explain himself.
 tags:
   - book
+stage: revised
 ---
 
 Opening

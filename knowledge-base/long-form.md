@@ -1645,6 +1645,10 @@ L4 shipped with the Manuscript panel and `?assembled=1` built and nothing in
 fixture could not demonstrate. `example-wiki/book` is that manuscript: seven
 pages, two parts, and ten sections in its manifest.
 
+It is eight pages and eleven sections now. [Drafting](drafting.md) added a cut
+scene, and the counts below describe the book as L4 left it rather than as it
+stands; `example-wiki/index.md` is always the current statement.
+
 It is the only fiction in the fixture, and that is deliberate. Every other page
 there is a note explaining what it demonstrates, which works for a wiki and does
 not work here: what a compile has to be shown assembling is prose, and a chapter

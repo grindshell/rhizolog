@@ -1,7 +1,11 @@
 ---
 title: "Appendix: the timetable"
+synopsis: >-
+  The winter service, reproduced. Both halves of the account lean on it and
+  neither explains it.
 tags:
   - book
+stage: final
 ---
 
 # Appendix: the timetable

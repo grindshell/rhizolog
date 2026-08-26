@@ -294,6 +294,14 @@ save of any page in it, silently, and the manuscript panel is the only place the
 damage would show. It is the owner bug again with a different field, which is
 worth saying out loud because it will happen a third time.
 
+It happened a third time, and it was written down before it could: `synopsis`,
+`stage` and `compile` are round-tripped too. `compile` is the one where the
+default cuts the other way, so it is worth being exact. `true` is what an absent
+field means, so an editor that dropped it would put every cut scene it opened back
+into the book, and an editor that sent `true` back writes nothing into the file,
+which is what keeps an ordinary page's frontmatter from growing a line saying it
+is ordinary.
+
 `contents` needs two pieces of state rather than one, because the API keeps
 absent and empty apart and a textarea can only say one of them. A checkbox says
 whether the page assembles others at all; the textarea holds the list, one slug
@@ -376,11 +384,51 @@ decision was stated when it was made: a contents page opened raw is a YAML list
 rather than a clickable index. This panel is what pays it back, which means
 **anything hidden here is hidden everywhere**.
 
-So a gap, a duplicate and a mistyped entry are all shown in position rather than
-filtered out. A manuscript short of a chapter says where the chapter was going,
-and that is the whole difference between a gap and an omission. `duplicate` is
-deliberately not coloured as a warning: the commonest case is not a cycle at all
-but an appendix listed under two parts.
+So a gap, a duplicate, a cut scene and a mistyped entry are all shown in position
+rather than filtered out. A manuscript short of a chapter says where the chapter
+was going, and that is the whole difference between a gap and an omission.
+`duplicate` is deliberately not coloured as a warning: the commonest case is not a
+cycle at all but an appendix listed under two parts. Neither is `excluded`: a page
+kept in the spine and out of the book is a decision somebody made, not a fault.
+
+### What a row says, and the summary above them
+
+Each row carries the stage as a badge and the synopsis as one clamped line, and a
+section that names a `target` of its own gets a small bar. **The bar is measured
+against `subtree`, not `words`**, which is the whole reason the manifest carries
+two numbers: a part's own body is a heading and an epigraph, so drawing a target
+against it would show every part in every book at a few per cent forever.
+
+Above the list, a count of the stages: "2 drafted, 2 revised, 1 final". A count on
+the same terms the words chart is on, with no completion percentage dressed as an
+achievement, and no rolled-up stage anywhere. A part whose chapters are half
+revised is not "in progress"; it is whatever its own frontmatter says. A
+manuscript with no stages anywhere shows nothing rather than a row of zeroes,
+because an unstaged chapter is not a fifth bucket: it is one nobody has said
+anything about.
+
+The four known stages get a colour and anything else is shown as itself, in an
+outline. That decision lives here rather than in frontmatter on purpose: a stage
+is a word, the dashboard decides how to paint it, and a palette in a page's
+frontmatter would be a document about a display.
+
+A synopsis is rendered as **text, never through `innerHTML`**. It is page content
+and page content is what agents write, which is the rule `Snippet.tsx` exists to
+keep; here it is kept by there being nothing to render, since the field is plain
+text by definition.
+
+### The card view is the corkboard without the coordinates
+
+A toggle beside "Read assembled" swaps the list for one card per section: title,
+stage, synopsis, word count. Freeform arrangement is **not** in it, and that is
+the point rather than a shortcut. Order lives in frontmatter precisely so that
+nothing about a display can reorder a book, and an x and a y per card would be
+exactly that in a different coat.
+
+A card with no synopsis says so rather than showing the first paragraph of the
+prose. An empty card is a chapter nobody has decided about yet, which is exactly
+the thing worth seeing. A section that is not in the document says nothing about
+itself at all, because that is what the manifest reports about one.
 
 Progress is arithmetic over the manifest rather than a field on the page, and
 that is a decision rather than an omission. `target` is measured against the
@@ -519,12 +567,20 @@ What is covered is the part where the bugs were, not the part that is easy:
   there is hidden everywhere. Also that an absent contents list and an empty one
   get different sentences, and that progress is measured against the compiled
   total rather than the page's own.
+- **That a section's target is measured against its `subtree`**, which is the one
+  number a reader cannot check by looking at the row it is on, and **that a
+  synopsis containing markup renders as characters**. Beside them, that the stage
+  summary counts folded spellings as one stage, orders the known ones by
+  lifecycle, and disappears entirely on a manuscript nobody has staged.
 - **That the words chart draws both halves rather than their difference**, with
   one tool, with several and with none. The last is every wiki on its first day
   and has to look quiet rather than broken.
-- **That the editor sends `contents`, `target` and `due` back on every save.**
-  Dropping the first would unmake a book on the first save of any page in it,
-  and an empty list has to survive as an empty list rather than as no list.
+- **That the editor sends `contents`, `target`, `due`, `synopsis`, `stage` and
+  `compile` back on every save.** Dropping the first would unmake a book on the
+  first save of any page in it, and an empty list has to survive as an empty list
+  rather than as no list. Dropping `compile` would put every cut scene back into
+  the book, because `true` is what an absent field means. Beside them, that a page
+  carrying only a stage opens the manuscript block at all.
 - **Duration formatting**, which has three spellings on purpose — a list drops
   seconds, a running clock keeps them, an axis label uses hours — and none of
   them may render a negative.

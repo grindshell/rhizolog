@@ -1,7 +1,11 @@
 ---
 title: The Long Way Round
+synopsis: >-
+  Six weeks up the coast and back again. Two parts, out and home, with the
+  timetable they both lean on sitting between them.
 tags:
   - book
+stage: drafted
 target: 2,000
 due: 2026-09-30
 contents:

@@ -5,8 +5,8 @@ tags:
 
 # Example wiki
 
-Sixteen pages, a week of tracked time and a week of writing, arranged to show
-what Rhizolog does with them. Seven of the pages are a short book, because a
+Seventeen pages, a week of tracked time and a week of writing, arranged to show
+what Rhizolog does with them. Eight of the pages are a short book, because a
 manuscript is a thing a wiki full of notes cannot demonstrate. Run the server
 against this directory and the dashboard reports two orphans and two wanted
 pages — all four on purpose.
@@ -26,7 +26,8 @@ the end of the time log below.
 - [[notes/rust/async]] — nested slugs, and a link to a page nobody has written
 - [[notes/rhizome]] — where the name comes from
 - [[notes/deleuze]] — and where *that* comes from
-- [[book]] — a manuscript, with a gap, a repeat and a bad entry in its contents
+- [[book]] — a manuscript, with a gap, a repeat, a cut scene and a bad entry in
+  its contents
 
 ## Two ways to read a slug
 
@@ -62,40 +63,47 @@ to reach *from inside*.
 orphan, which is also right: nobody has linked to it, you have just been working
 on it.
 
-None of the book's seven pages is an orphan, though only one of them is linked
+None of the book's eight pages is an orphan, though only one of them is linked
 from anywhere. A `contents:` entry counts as a reference, so a chapter has a
 parent even where no wikilink points at it. Without that rule, writing a book
 would fill this statistic with its own chapters and the number would stop being
 worth reading.
 
+That includes the cut scene, which is the point of cutting it that way.
+`book/two/the-argument` says `compile: false` and so is in nobody's document,
+and it is still listed by `book/two`, still has its edge in the graph, and is
+still not an orphan. It is excluded from the book, not from the wiki.
+
 ## The manuscript
 
-[[book]] is a short book in seven pages, and the only fiction here. It exists
+[[book]] is a short book in eight pages, and the only fiction here. It exists
 because a contents page is the one thing a wiki of notes cannot show you. Order
 lives in frontmatter so that reflowing a paragraph cannot reorder a book, and the
 price of that is real: open `book.md` raw and you get a YAML list rather than a
 clickable index. The Manuscript panel on `/pages/book` is what pays it back, and
 it is the only place the spine is drawn.
 
-`GET /api/compile?root=book` should return **606 words in 10 sections**, seven
-assembled and three not:
+`GET /api/compile?root=book` should return **606 words in 11 sections**, seven
+assembled and four not:
 
-| # | Section | Depth | Words | Status |
-|---|---|---|---|---|
-| 1 | `book/one` | 1 | 25 | included |
-| 2 | `book/one/opening` | 2 | 103 | included |
-| 3 | `book/one/the-ferry` | 2 | 188 | included |
-| 4 | `book/appendix` | 2 | 81 | included |
-| 5 | `book/two` | 1 | 29 | included |
-| 6 | `book/two/the-crossing` | 2 | 0 | wanted |
-| 7 | `book/two/the-return` | 2 | 137 | included |
-| 8 | `book/appendix` | 2 | 0 | duplicate |
-| 9 | `../one/the-ferry` | 2 | 0 | invalid |
+| # | Section | Depth | Words | Subtree | Target | Stage | Status |
+|---|---|---|---|---|---|---|---|
+| 1 | `book/one` | 1 | 25 | 397 | 400 | revised | included |
+| 2 | `book/one/opening` | 2 | 103 | 103 | | revised | included |
+| 3 | `book/one/the-ferry` | 2 | 188 | 188 | 200 | drafted | included |
+| 4 | `book/appendix` | 2 | 81 | 81 | | final | included |
+| 5 | `book/two` | 1 | 29 | 166 | | drafted | included |
+| 6 | `book/two/the-crossing` | 2 | 0 | 0 | | | wanted |
+| 7 | `book/two/the-argument` | 2 | 0 | 0 | | | excluded |
+| 8 | `book/two/the-return` | 2 | 137 | 137 | | with-beta-readers | included |
+| 9 | `book/appendix` | 2 | 0 | 0 | | | duplicate |
+| 10 | `../one/the-ferry` | 2 | 0 | 0 | | | invalid |
 
 The root's own 43 words are section zero, which the panel drops because it is the
-page you are already reading.
+page you are already reading. Its subtree is 606, which is the whole book and is
+what its own target of 2,000 is measured against.
 
-The three that are not assembled are why the book is shaped the way it is:
+The four that are not assembled are why the book is shaped the way it is:
 
 - **A chapter nobody has written.** `book/two/the-crossing` holds its position
   rather than being skipped, so the manuscript says where the missing chapter was
@@ -120,6 +128,18 @@ The three that are not assembled are why the book is shaped the way it is:
   drawn in the graph and it is not a third wanted page, because a wanted page is
   somewhere the dashboard suggests you write, and no wiki should be invited to
   write `../one/the-ferry`.
+- **A scene that was cut.** `book/two/the-argument` says `compile: false`, so it
+  is `excluded`: in the contents list, in its position between the crossing and
+  the return, and in no document. Dropping the entry instead would also say "not
+  in the book", and would throw away *where it went*, which is the one thing a
+  contents list knows and a wikilink does not. A scene you have cut and not
+  decided about is exactly the unfinished thought this wiki says it keeps.
+
+  Its 107 words are not in the 606, and its stage and synopsis are not in the
+  manifest either: nothing that is not `included` says anything about itself
+  there, because a card describing a chapter the reader will not get is a card
+  about nothing. The page itself still has both, and `/pages/book/two/the-argument`
+  still shows them.
 
 `?assembled=1` on the same page renders the whole thing, with headings shifted by
 depth: the book's `#`, each part's `##`, each chapter's `###`. Nothing is
@@ -133,6 +153,40 @@ The target is 2,000 words against 606, so the panel reads 30 per cent. That is a
 figure and nothing else: no streak, nothing that congratulates you, and no change
 of tone when it goes up. The due date is fixed like every other date here, and is
 not a deadline anybody is keeping.
+
+### What each chapter is for, and how far along it is
+
+Every one of the eight pages carries a `synopsis` and a `stage`, which are the
+two questions a book of forty word counts cannot answer. Neither is derived from
+anything: a synopsis is a claim about what a chapter does, and no page has one
+until somebody writes it, so the cards here are cards somebody wrote.
+
+Two of them carry a target of their own, and between them they are why the
+manifest reports two counts rather than one:
+
+- `book/one/the-ferry` is a leaf, so its `words` and its `subtree` are the same
+  188, against a target of 200.
+- `book/one` is a part, so its `words` is 25, which is a heading and an epigraph
+  and is everything a part contributes, while its `subtree` is 397: the whole
+  part, including the two chapters and the appendix beneath it. The bar is drawn
+  against the second. Against the first, every part in every book would sit at
+  six per cent forever.
+
+The Manuscript panel counts the stages above the list: **2 drafted, 2 revised,
+1 final, 1 with-beta-readers**. It is a count and not a verdict. Nothing rolls a
+stage up, so Part One is `revised` because its frontmatter says so and not
+because of what its chapters say, and the four sections with no stage are not a
+fifth bucket: a chapter nobody has staged is one nobody has said anything about.
+
+`with-beta-readers` is the one that matters most here. `todo`, `drafted`,
+`revised` and `final` are the four the dashboard knows how to colour, and
+anything else is shown as itself in an outline. The vocabulary is not fixed,
+because these are your notes and a schema is a poor place to hold an argument
+about somebody's process.
+
+The cut scene's stage is `todo`, and it is nowhere in that summary, which is the
+manifest's rule rather than an oversight: it is not `included`, so it reports
+nothing about itself.
 
 ## The time log
 
@@ -189,7 +243,7 @@ example-wiki` afterwards says whether it happened.
 
 ## The word log
 
-`.rhizolog/words/` holds **26 lines across two months**, pinned to the same week
+`.rhizolog/words/` holds **27 lines across two months**, pinned to the same week
 as the time entries. Six of them are the startup scan finding pages that were
 already there; the rest are a week of writing, most of it the book, plus a rename
 and a delete.
@@ -205,16 +259,16 @@ Ask for the moment the log was written for:
 /api/word-stats?at=2026-08-06T18:00:00Z&offset=0
 ```
 
-which should answer **1787 added, 234 removed** across 18 observations and 15
+which should answer **1894 added, 234 removed** across 19 observations and 16
 pages, split by the tool that made each write:
 
 | Tool | Added | Removed |
 |---|---|---|
-| file | 910 | 26 |
+| file | 1017 | 26 |
 | web | 551 | 48 |
 | claude-code | 326 | 160 |
 
-Five of the lines exist to show something that is easy to get wrong:
+Six of the lines exist to show something that is easy to get wrong:
 
 - **A rewrite that wrote nothing.** On 6 August `scratch/rust/from-a-talk` is
   `added 24, removed 24`. A net figure would call that day empty; it was a
@@ -233,6 +287,12 @@ Five of the lines exist to show something that is easy to get wrong:
   and deleted on the 6th. Its 48 words are still in the totals, because they were
   written and deleting the file does not unwrite them. The marker is what stops a
   page later written at that slug from continuing this one's series.
+- **A page that was cut and still counts.** `book/two/the-argument` is 107 words
+  written on 5 August, and they are in the totals above even though the page says
+  `compile: false` and contributes nothing to the book. The two numbers answer
+  different questions: `target` measures what a reader would get, and the word log
+  measures what somebody wrote. Cutting a scene moves the first and must not
+  touch the second, for the same reason deleting a page does not unwrite it.
 - **Bookkeeping is not writing.** The six `baseline` lines carry `added 0,
   removed 0`. Without them, pointing the server at an existing wiki would report
   the whole thing as written on a Tuesday; counting them would do the same.
@@ -251,7 +311,7 @@ opinion about your voice.
 `GET /api/prose/rules` reports them with their defaults filled in and a digest
 over the lot, so an assistant handed a finding can reproduce it without reading
 the file. `GET /api/prose?slug=index` runs them over this page and should answer
-**10 errors and 69 warnings**: an em dash for each of the first, and a word used
+**10 errors and 93 warnings**: an em dash for each of the first, and a word used
 twice inside eight of another for each of the second.
 
 The first rule is the one this project holds itself to, and it is written with
@@ -299,3 +359,9 @@ The one error is an em dash in [[book/two/the-return]], which is the same rule
 firing on the same character as above. A finding is your own rule on your own
 text, so there is nothing to dismiss and nowhere to dismiss it to: either the
 sentence changes or the rule does.
+
+The cut scene is not checked, and there is no rule about that anywhere: it is not
+in the assembled document, so there is nothing of it for a rule to fire on. Ask
+for `/api/prose?slug=book/two/the-argument` and it answers 2 warnings of its own,
+which is the page being a page. Excluding it from the book excluded it from the
+book and from nothing else.

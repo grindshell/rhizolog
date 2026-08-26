@@ -1,7 +1,12 @@
 ---
 title: "Part One: Leaving"
+synopsis: >-
+  Going out. The decision nobody can account for, and the crossing that would
+  not be hurried.
 tags:
   - book
+stage: revised
+target: 400
 contents:
   - book/one/opening
   - book/one/the-ferry

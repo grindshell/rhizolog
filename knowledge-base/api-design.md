@@ -8,7 +8,7 @@ storage model it sits on.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/pages` | List pages; `?tag=`, `?prefix=`, `?segment=`, `?q=`, `?limit=`, `?offset=`, `?sort=` |
+| `GET` | `/api/pages` | List pages; `?tag=`, `?prefix=`, `?segment=`, `?stage=`, `?q=`, `?limit=`, `?offset=`, `?sort=` |
 | `POST` | `/api/pages` | Create; `409` if the slug exists |
 | `GET` | `/api/pages/{slug}` | Read; `?render=true` adds rendered HTML |
 | `PUT` | `/api/pages/{slug}` | Create or replace |
@@ -57,6 +57,26 @@ storage model it sits on.
 
 Plus fields rather than endpoints: `words` on the page listing and the page read,
 and `target`, `due` and `contents` on a page that carries them.
+
+### Drafting is no endpoints at all
+
+Three more fields and one more query parameter, which is the measure of whether a
+feature fits: `synopsis` and `stage` on the listing and the read, `compile` on the
+read, all three writable through `POST`, `PUT` and `PATCH`, and the manifest
+gaining `synopsis`, `stage`, `target` and `subtree` per section. `?stage=` filters
+the listing and `?sort=stage` orders it.
+
+**`?stage=` matches a string the author chose**, so it matches exactly apart from
+case, and a stage nobody uses answers an empty listing rather than an error.
+Asking which chapters are `final` on a wiki where nothing is final is a question
+with an empty answer, not a mistake, and `?tag=` has always behaved the same way.
+
+**`stage` is strict at the boundary and lenient in a file.** A `stage` that is not
+a string is a `400`, because JSON has types and a client that sent a number meant
+something; the same value written into frontmatter by hand names no known stage,
+is shown as typed, and does not take the page down with it. That is the split
+slugs already get and the one [Long-form writing](long-form.md) settled for `due`.
+See [Drafting](drafting.md).
 
 **The slug is a query parameter, not a path segment**, on all three of the first
 kind. That is the catch-all rule below biting for the third time, after

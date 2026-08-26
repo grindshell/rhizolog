@@ -61,13 +61,20 @@ itself. See `knowledge-base/desktop-app.md`.
 fixture, and changing it changes what the docs claim.
 
 That now includes three trees under `example-wiki/.rhizolog/`, each with numbers
-`example-wiki/index.md` states exactly: `times/` is 18 entries, `words/` is 26
+`example-wiki/index.md` states exactly: `times/` is 18 entries, `words/` is 27
 logged lines, and `prose.toml` is five rules.
 
-Seven of the sixteen pages are `book`, a manuscript, and `index.md` states its
+Eight of the seventeen pages are `book`, a manuscript, and `index.md` states its
 manifest section by section. It is the only thing in the fixture that exercises
-`contents:`, so it carries a gap, a page listed under two parents and an entry
-that is not a slug on purpose, and none of the three is a mistake to tidy up.
+`contents:`, so it carries a gap, a page listed under two parents, a page kept in
+the spine and out of the book by `compile: false`, and an entry that is not a
+slug. All four are on purpose and none is a mistake to tidy up.
+
+Every one of those eight pages carries a `synopsis` and a `stage`, and two of
+them carry a `target` of their own, which is what makes the fixture exercise the
+manifest's `subtree` as well as its `words`. One stage is deliberately a word
+nothing recognises, because the vocabulary is not fixed and a fixture where every
+stage was known would not show it. See `knowledge-base/drafting.md`.
 
 **Pointing `RHIZOLOG_ROOT` at the example wiki to *look* at it writes nothing**,
 which is what the README tells people to do and is now a property rather than a
@@ -82,7 +89,7 @@ for. Check `git status example-wiki` afterwards.
 
 Anything that changes `index.md` changes its own word count, which the log's last
 line for `index` has to match or the next scan records the difference as a `net`.
-The chain is baseline 1909, then `+260 -40`, then `+220 -21`, ending at 2328. Fix
+The chain is baseline 2659, then `+260 -40`, then `+220 -21`, ending at 3078. Fix
 it by moving the **baseline**, which carries no churn and so changes no total on
 the chart: it is the final count less 419, and the middle total moves with it.
 

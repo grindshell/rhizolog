@@ -1,7 +1,14 @@
 ---
 title: The Ferry
+synopsis: |-
+  He misses the crossing and decides not to mind.
+
+  First time the narrator chooses to be late for something, and the first
+  sighting of Marren.
 tags:
   - book
+stage: drafted
+target: 200
 ---
 
 # The Ferry
