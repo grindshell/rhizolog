@@ -1901,7 +1901,10 @@ so there is one field rather than a flag and a list that could disagree.
 ## Open questions
 
 **Whether `target` on a leaf page is useful**, or whether the recursive
-definition is buying consistency nobody needs.
+definition is buying consistency nobody needs. Answered in
+[Drafting](drafting.md), and the answer is that the definition was right and had
+no reader: a chapter's own target is invisible from the book assembling it until
+the manifest reports it. Nothing about the rule changes.
 
 **Whether the word log wants pruning**, and what would be safe to prune. It is
 authored data now, so the answer is not "delete the old rows"; it is closer to

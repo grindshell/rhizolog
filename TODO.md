@@ -363,11 +363,45 @@ became `page_parts.is_slug` at schema version 13, decided once by `Slug::parse`
 at index time, because a wanted page is named on the dashboard as somewhere to
 write and a query that forgot to filter would have put `../etc/passwd` there.
 
-Two decisions are still open and both are cheap: whether `target` on a leaf page
-earns the recursive definition, and whether the word log ever wants pruning.
+One decision is still open and it is cheap: whether the word log ever wants
+pruning. The other, whether `target` on a leaf page earns the recursive
+definition, is answered in [Drafting](knowledge-base\drafting.md): it does, and
+what it was missing was a reader rather than a different rule.
 Compile's limits are no longer among them: depth 16, 2,000 sections, 8 MiB, each
 a refusal rather than a truncation, because a manuscript that quietly stops being
 the book is the worst thing this endpoint could return.
+
+## Drafting
+
+**Planned, not started**, in [Drafting](knowledge-base\drafting.md). Long-form
+got a manuscript as far as existing; nothing in it says what a chapter is *for*
+or whether it is done, so a book of forty pages answers those two questions only
+by being read. Four optional frontmatter fields: `synopsis` (authored, never
+inferred from the prose), `stage` (a lenient string, four known names that get a
+colour), `target` on a leaf, and `compile: false` for a page that stays in the
+spine and out of the book. The manifest gains all four plus `subtree`, which is
+what a target actually compares against on a page with children. Four phases, D0
+to D3, and the fixture moves in D3 rather than afterwards.
+
+Two things it deliberately settles by renaming or refusing. `status` loses to
+`stage`, because `SectionView.status` already means what compile did with an
+entry and the manifest is exactly where both would meet. And nothing computes a
+stage or rolls one up: a chapter is drafted when its author says so.
+
+Three gaps found in the same survey and **not** in that plan:
+
+- **Pacing.** Words remaining over days remaining, from `target`, `due`, the
+  compiled total and the word log. It needs no new fields at all, so it is
+  cheaper after Drafting lands than before. The house rule applies: a figure with
+  its arithmetic, not encouragement.
+- **Reordering the spine from the panel.** Today the only way to move a chapter
+  is to edit a YAML list in a textarea. Order moved into frontmatter so a
+  formatter could not reorder a book, and the panel was meant to pay that back;
+  it pays back reading and not editing. A drag that ends in a `PATCH` of
+  `contents` is the shape.
+- **Split and merge.** Splitting a page at an offset and repairing the parent's
+  contents list is mechanical, error-prone by hand, and exactly what an API
+  should do.
 
 ## Rough edges
 
