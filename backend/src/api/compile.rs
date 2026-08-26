@@ -126,18 +126,52 @@ pub struct SectionView {
     /// The page's title. Absent for anything that is not `included`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// What the page says it is for, in the author's words.
+    ///
+    /// Plain text and never derived from the prose. Absent when the page says
+    /// nothing, and absent for anything that is not `included`, exactly as
+    /// `title` is. Render it as characters, never as HTML.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "He misses the crossing and decides not to mind.")]
+    pub synopsis: Option<String>,
+    /// What stage of drafting the page is at, as the author wrote it. Absent on
+    /// the same terms as `synopsis`, and the vocabulary is not fixed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "drafted")]
+    pub stage: Option<String>,
+    /// The page's own `target`, if it names one.
+    ///
+    /// Measured against `subtree` rather than `words`: one rule, recursive. On a
+    /// chapter the two numbers are equal; on a part page `words` is the epigraph
+    /// and the target means the whole part.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 3000)]
+    pub target: Option<u64>,
     /// How many contents lists deep this page sits. The root is zero.
     #[schema(example = 2)]
     pub depth: usize,
+    /// This section's **own** body, in words. Zero for anything not `included`.
+    ///
+    /// On a part page that is its heading and its epigraph and nothing else,
+    /// which is why comparing it against a `target` would draw every part at two
+    /// per cent forever. `subtree` is the number that answers that question.
     #[schema(example = 2180)]
     pub words: u64,
+    /// This section's words plus everything emitted beneath it.
+    ///
+    /// Equal to `words` on a leaf. A `duplicate` or `excluded` section
+    /// contributes nothing to any ancestor's total, because it contributed
+    /// nothing to the document, so this always describes what a reader gets.
+    #[schema(example = 41230)]
+    pub subtree: u64,
     /// Where this section's bytes begin in the document.
     #[schema(example = 238)]
     pub offset: usize,
     /// How many bytes they run for. Zero for anything not `included`.
     #[schema(example = 12903)]
     pub length: usize,
-    /// One of `included`, `wanted`, `invalid`, `duplicate`, `unreadable`.
+    /// One of `included`, `wanted`, `invalid`, `duplicate`, `unreadable`,
+    /// `excluded`.
     ///
     /// A section keeps its position whatever this says. A manuscript short of a
     /// chapter reports where the chapter was going to be, which is the whole
@@ -147,6 +181,9 @@ pub struct SectionView {
     /// caller may not read: the two are deliberately indistinguishable.
     /// `duplicate` is a page already emitted earlier, which covers a cycle and
     /// the commoner case that is not one, an appendix listed under two parts.
+    /// `excluded` is a page carrying `compile: false`, or anything listed
+    /// beneath one: it is out of this document and still in the wiki, still in
+    /// the spine, and still drawn in the graph.
     #[schema(example = "included")]
     pub status: String,
     /// The section's own text. Only in the `json` format, and only when the
@@ -225,8 +262,12 @@ pub async fn compile_pages(
         .map(|section| SectionView {
             slug: section.slug.clone(),
             title: section.title.clone(),
+            synopsis: section.synopsis.clone(),
+            stage: section.stage.clone(),
+            target: section.target,
             depth: section.depth,
             words: section.words,
+            subtree: section.subtree,
             offset: section.offset,
             length: section.length,
             status: section.status.as_str().to_owned(),

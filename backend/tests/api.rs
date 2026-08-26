@@ -1747,6 +1747,130 @@ async fn compiles_a_book_into_one_document_with_a_map_back() {
     }
 }
 
+/// The card, the badge and the two numbers, over HTTP. Everything an included
+/// section says about itself is in the manifest; a gap says nothing, because
+/// there is nothing there to say it.
+#[tokio::test]
+async fn the_manifest_carries_the_synopsis_the_stage_and_both_counts() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "# Book\n", "contents": ["book/one", "book/missing"] }),
+    )
+    .await;
+    app.seed(
+        "book/one",
+        json!({
+            "content": "# Part One\n\n> Four words of epigraph.\n",
+            "contents": ["book/one/the-ferry"],
+            "target": 5000,
+        }),
+    )
+    .await;
+    app.seed(
+        "book/one/the-ferry",
+        json!({
+            "content": "# The Ferry\n\none two three four five\n",
+            "synopsis": "He misses the crossing and decides not to mind.",
+            "stage": "drafted",
+            "target": 3000,
+        }),
+    )
+    .await;
+
+    let sections = app.get("/api/compile?root=book").await.body["sections"].clone();
+    let at = |index: usize| sections[index].clone();
+
+    let ferry = at(2);
+    assert_eq!(ferry["slug"], "book/one/the-ferry");
+    assert_eq!(
+        ferry["synopsis"],
+        "He misses the crossing and decides not to mind."
+    );
+    assert_eq!(ferry["stage"], "drafted");
+    assert_eq!(ferry["target"], 3000);
+    assert_eq!(
+        ferry["words"], ferry["subtree"],
+        "on a leaf the two counts are one number"
+    );
+
+    // The part's own words are its heading and its epigraph; its subtree is what
+    // the target actually means.
+    let part = at(1);
+    assert_eq!(part["words"], 2 + 4);
+    assert_eq!(part["subtree"], (2 + 4) + (2 + 5));
+    assert_eq!(part["target"], 5000);
+
+    let gap = at(3);
+    assert_eq!(gap["status"], "wanted");
+    assert!(gap.get("synopsis").is_none());
+    assert!(gap.get("stage").is_none());
+    assert!(gap.get("target").is_none());
+    assert_eq!(gap["words"], 0);
+    assert_eq!(gap["subtree"], 0);
+}
+
+/// `compile: false` is a sixth status rather than an absence, it takes the whole
+/// subtree with it, and none of that changes what the wiki knows about structure.
+#[tokio::test]
+async fn an_excluded_chapter_leaves_the_book_and_stays_in_the_wiki() {
+    let app = App::new().await;
+    seed_book(&app).await;
+    app.patch("/api/pages/book/one/opening", json!({ "compile": false }))
+        .await;
+
+    let compiled = app.get("/api/compile?root=book").await;
+    let sections = compiled.body["sections"].as_array().expect("sections");
+    let by_slug: Vec<(&str, &str)> = sections
+        .iter()
+        .map(|section| {
+            (
+                section["slug"].as_str().unwrap(),
+                section["status"].as_str().unwrap(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        by_slug,
+        [
+            ("book", "included"),
+            ("book/one", "included"),
+            ("book/one/opening", "excluded"),
+            ("book/one/the-ferry", "included"),
+        ],
+        "the cut chapter left the manifest instead of holding its position"
+    );
+    assert!(
+        !compiled.body["content"]
+            .as_str()
+            .unwrap()
+            .contains("Opening")
+    );
+
+    // Excluded from the book, not from the wiki. Still not an orphan, because a
+    // `page_parts` row is what the spine is and `compile` is what this document
+    // is; the two are different questions.
+    let stats = app.get("/api/stats").await;
+    let orphans: Vec<&str> = stats.body["orphans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|orphan| orphan["slug"].as_str().unwrap())
+        .collect();
+    assert!(
+        !orphans.contains(&"book/one/opening"),
+        "a cut chapter fell out of the wiki: {orphans:?}"
+    );
+
+    // And the graph still draws the line to it.
+    let edges = app.get("/api/graph").await.body["edges"].clone();
+    let drawn = edges.as_array().unwrap().iter().any(|edge| {
+        edge["source"] == "book/one" && edge["target"] == "book/one/opening" && edge["part"] == true
+    });
+    assert!(drawn, "the spine stopped drawing an excluded chapter");
+}
+
 /// The order in the frontmatter is the order in the document, which is the whole
 /// reason the spine is its own table keyed by position.
 #[tokio::test]

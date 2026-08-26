@@ -3047,7 +3047,14 @@ export interface components {
              */
             slug: string;
             /**
-             * @description One of `included`, `wanted`, `invalid`, `duplicate`, `unreadable`.
+             * @description What stage of drafting the page is at, as the author wrote it. Absent on
+             *     the same terms as `synopsis`, and the vocabulary is not fixed.
+             * @example drafted
+             */
+            stage?: string | null;
+            /**
+             * @description One of `included`, `wanted`, `invalid`, `duplicate`, `unreadable`,
+             *     `excluded`.
              *
              *     A section keeps its position whatever this says. A manuscript short of a
              *     chapter reports where the chapter was going to be, which is the whole
@@ -3057,13 +3064,50 @@ export interface components {
              *     caller may not read: the two are deliberately indistinguishable.
              *     `duplicate` is a page already emitted earlier, which covers a cycle and
              *     the commoner case that is not one, an appendix listed under two parts.
+             *     `excluded` is a page carrying `compile: false`, or anything listed
+             *     beneath one: it is out of this document and still in the wiki, still in
+             *     the spine, and still drawn in the graph.
              * @example included
              */
             status: string;
+            /**
+             * Format: int64
+             * @description This section's words plus everything emitted beneath it.
+             *
+             *     Equal to `words` on a leaf. A `duplicate` or `excluded` section
+             *     contributes nothing to any ancestor's total, because it contributed
+             *     nothing to the document, so this always describes what a reader gets.
+             * @example 41230
+             */
+            subtree: number;
+            /**
+             * @description What the page says it is for, in the author's words.
+             *
+             *     Plain text and never derived from the prose. Absent when the page says
+             *     nothing, and absent for anything that is not `included`, exactly as
+             *     `title` is. Render it as characters, never as HTML.
+             * @example He misses the crossing and decides not to mind.
+             */
+            synopsis?: string | null;
+            /**
+             * Format: int64
+             * @description The page's own `target`, if it names one.
+             *
+             *     Measured against `subtree` rather than `words`: one rule, recursive. On a
+             *     chapter the two numbers are equal; on a part page `words` is the epigraph
+             *     and the target means the whole part.
+             * @example 3000
+             */
+            target?: number | null;
             /** @description The page's title. Absent for anything that is not `included`. */
             title?: string | null;
             /**
              * Format: int64
+             * @description This section's **own** body, in words. Zero for anything not `included`.
+             *
+             *     On a part page that is its heading and its epigraph and nothing else,
+             *     which is why comparing it against a `target` would draw every part at two
+             *     per cent forever. `subtree` is the number that answers that question.
              * @example 2180
              */
             words: number;

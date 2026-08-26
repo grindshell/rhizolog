@@ -98,6 +98,21 @@ pub enum Status {
     /// is already reported to anybody who asks for it: saying so here discloses
     /// nothing new, and hiding it would swallow a real fault.
     Unreadable,
+    /// The page says `compile: false`, or something above it does.
+    ///
+    /// A sixth status rather than an absence, for the reason all five others
+    /// are one: a section keeps its position whatever happened to it. Removing
+    /// the entry from `contents:` would also say "not in the book", and would
+    /// throw away **where it went**, which is the one thing the contents list
+    /// knows and a wikilink does not.
+    ///
+    /// **Excluding a contents page excludes everything under it.** Scrivener
+    /// takes the other option, where a folder's children compile according to
+    /// their own setting, and it is wrong here because of headings: a part
+    /// contributes its heading and its epigraph, so dropping only its body would
+    /// leave its chapters in the document with the part's heading gone, silently
+    /// promoting them under the previous part.
+    Excluded,
 }
 
 impl Status {
@@ -108,6 +123,7 @@ impl Status {
             Self::Invalid => "invalid",
             Self::Duplicate => "duplicate",
             Self::Unreadable => "unreadable",
+            Self::Excluded => "excluded",
         }
     }
 }
@@ -123,9 +139,29 @@ pub struct Section {
     /// found and fixed.
     pub slug: String,
     pub title: Option<String>,
+    /// What the page says it is for. Absent when it says nothing, and absent
+    /// for anything that is not `included`, exactly as `title` is.
+    pub synopsis: Option<String>,
+    /// What stage of drafting the page is at, as written. Absent on the same
+    /// terms as `synopsis`.
+    pub stage: Option<String>,
+    /// The page's own `target`, from its frontmatter.
+    ///
+    /// Measured against [`Section::subtree`] rather than [`Section::words`],
+    /// which is the whole reason the second number exists: one rule, recursive,
+    /// no second concept. On a leaf the two are equal; on a part page `words` is
+    /// the epigraph and `target` means the part.
+    pub target: Option<u64>,
     /// How many contents lists deep this page sits. The root is zero.
     pub depth: usize,
+    /// This section's own body, in words. Zero for everything but `included`.
     pub words: u64,
+    /// This section's words plus everything emitted beneath it.
+    ///
+    /// A `duplicate` or `excluded` section contributes nothing to any ancestor's
+    /// subtree, because it contributed nothing to the document, so this always
+    /// describes what a reader would actually get.
+    pub subtree: u64,
     /// Where this section's bytes begin in the output.
     pub offset: usize,
     /// How many bytes they run for. Zero for everything but `included`.
@@ -194,6 +230,10 @@ pub async fn compile(
     };
     let target = root_page.frontmatter.target;
 
+    // A preamble is emitted whatever it says about `compile`. That field means
+    // "not part of the book", and a style page is not part of the book: it is a
+    // page this caller named in this request, and dropping it silently would
+    // leave them without the preamble they asked for and no reason given.
     if let Some(style) = style
         && let Fetched::Page(page) = pages.fetch(style).await
     {
@@ -203,10 +243,20 @@ pub async fn compile(
     // An explicit stack rather than recursion, which for an async walk would
     // mean boxing every level. Children are pushed in reverse so they come off
     // in the order the contents list names them.
-    let mut stack: Vec<(String, usize)> = vec![(root.to_string(), 0)];
+    //
+    // The flag is whether this entry is inside a subtree something excluded.
+    // It is carried down rather than looked up, because "excluded" is a fact
+    // about a path through the tree and not about a page: the same appendix can
+    // be excluded under one part and included under another.
+    let mut stack: Vec<(String, usize, bool)> = vec![(root.to_string(), 0, false)];
     let mut emitted: HashSet<String> = HashSet::new();
+    // Pages already walked while excluded. Nothing else can end an excluded
+    // cycle: `emitted` is deliberately not consulted or written on that path, so
+    // without this a two-page loop below a `compile: false` part would descend
+    // until it hit the depth limit and turn a harmless mistake into a refusal.
+    let mut skipped: HashSet<String> = HashSet::new();
 
-    while let Some((raw, depth)) = stack.pop() {
+    while let Some((raw, depth, inherited)) = stack.pop() {
         if sections.len() >= MAX_SECTIONS {
             return Err(CompileError::TooLarge {
                 limit: Limit::Sections,
@@ -225,7 +275,12 @@ pub async fn compile(
             continue;
         };
 
-        if !emitted.insert(slug.to_string()) {
+        // Only on the included path. An excluded page is never emitted, so it
+        // can never be the thing a later entry is a duplicate *of*, which is
+        // what makes an appendix listed under an excluded part and an included
+        // one come out `included` once and `duplicate` nowhere. No special case:
+        // the rule is that `duplicate` means already emitted.
+        if !inherited && emitted.contains(slug.as_str()) {
             sections.push(gap(raw, depth, out.len(), Status::Duplicate));
             continue;
         }
@@ -234,14 +289,33 @@ pub async fn compile(
             Fetched::Missing => sections.push(gap(raw, depth, out.len(), Status::Wanted)),
             Fetched::Unreadable => sections.push(gap(raw, depth, out.len(), Status::Unreadable)),
             Fetched::Page(page) => {
+                let excluded = inherited || !page.compiled();
+
+                if excluded {
+                    sections.push(gap(raw, depth, out.len(), Status::Excluded));
+
+                    // Still walked, so every chapter under a cut part keeps its
+                    // position in the manifest rather than vanishing with it.
+                    // Seen twice, it stops: see `skipped` above.
+                    if skipped.insert(slug.to_string()) {
+                        for child in page.contents().unwrap_or_default().iter().rev() {
+                            stack.push((child.clone(), depth + 1, true));
+                        }
+                    }
+                    continue;
+                }
+
+                emitted.insert(slug.to_string());
                 emit(&mut out, &mut sections, &mut words, &page, depth)?;
 
                 for child in page.contents().unwrap_or_default().iter().rev() {
-                    stack.push((child.clone(), depth + 1));
+                    stack.push((child.clone(), depth + 1, false));
                 }
             }
         }
     }
+
+    accumulate_subtrees(&mut sections);
 
     Ok(Compiled {
         markdown: out,
@@ -249,6 +323,35 @@ pub async fn compile(
         words,
         target,
     })
+}
+
+/// Fill in each section's `subtree` from the sections beneath it.
+///
+/// The walk is depth-first and pre-order, so a section's descendants are exactly
+/// the run of entries after it whose depth is greater than its own, and the run
+/// ends at the first entry that is not. That makes this one pass over a list
+/// rather than a second traversal, and it is why the walk itself does not have
+/// to carry a parent along.
+///
+/// A `style` page sits at depth zero beside the root and is not its ancestor,
+/// which this gets right for free: the root is the first entry after it at depth
+/// zero, so the run is empty and the preamble's subtree is its own words.
+fn accumulate_subtrees(sections: &mut [Section]) {
+    for index in 0..sections.len() {
+        let depth = sections[index].depth;
+        let mut total = sections[index].words;
+
+        for below in &sections[index + 1..] {
+            if below.depth <= depth {
+                break;
+            }
+            // Anything not `included` carries zero words, so a gap, a repeat and
+            // a cut chapter all add nothing rather than each needing a case.
+            total += below.words;
+        }
+
+        sections[index].subtree = total;
+    }
 }
 
 /// Append one page's body and record where it landed.
@@ -278,8 +381,14 @@ fn emit(
     sections.push(Section {
         slug: page.slug.to_string(),
         title: Some(page.title()),
+        synopsis: page.synopsis().map(str::to_owned),
+        stage: page.stage().map(str::to_owned),
+        target: page.frontmatter.target,
         depth,
         words: counted,
+        // Filled in by `accumulate_subtrees` once the whole tree is known, since
+        // this is a number about what comes after.
+        subtree: 0,
         offset,
         length: body.len(),
         status: Status::Included,
@@ -288,12 +397,22 @@ fn emit(
     Ok(())
 }
 
+/// A section that is in the manifest and not in the document.
+///
+/// Everything a page would have said about itself is absent, which is the rule
+/// `title` already followed: what a caller is being told is that nothing was
+/// emitted here, and a card for a chapter that is not in the book would be
+/// describing something the reader will not get.
 fn gap(slug: String, depth: usize, offset: usize, status: Status) -> Section {
     Section {
         slug,
         title: None,
+        synopsis: None,
+        stage: None,
+        target: None,
         depth,
         words: 0,
+        subtree: 0,
         offset,
         length: 0,
         status,
@@ -784,6 +903,374 @@ mod tests {
         assert_eq!(
             &result.markdown[book.offset..book.offset + book.length],
             "# Book\n\nProse.\n"
+        );
+    }
+
+    // ----------------------------------------------------------- drafting
+
+    fn find<'a>(compiled: &'a Compiled, slug: &str) -> &'a Section {
+        compiled
+            .sections
+            .iter()
+            .find(|section| section.slug == slug)
+            .unwrap_or_else(|| panic!("{slug} is not in the manifest"))
+    }
+
+    /// What the card needs, and the rule for when it is there. Everything a page
+    /// says about itself reaches the manifest, and nothing that is not
+    /// `included` says anything, exactly as `title` already worked.
+    #[tokio::test]
+    async fn a_section_carries_what_the_page_says_about_itself() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/one/opening, book/one/missing]\n---\n\n# Book\n",
+            )
+            .page(
+                "book/one/opening",
+                "---\nsynopsis: They leave, and nobody says why.\nstage: drafted\ntarget: 3000\n---\n\n# Opening\n\nProse here.\n",
+            );
+
+        let result = compiled(&wiki, "book").await;
+
+        let opening = find(&result, "book/one/opening");
+        assert_eq!(
+            opening.synopsis.as_deref(),
+            Some("They leave, and nobody says why.")
+        );
+        assert_eq!(opening.stage.as_deref(), Some("drafted"));
+        assert_eq!(opening.target, Some(3000));
+
+        // The root says none of the three, so it reports none of the three.
+        let root = find(&result, "book");
+        assert_eq!(root.synopsis, None);
+        assert_eq!(root.stage, None);
+        assert_eq!(root.target, None);
+
+        // And a gap says nothing at all, since there is nothing there to say it.
+        let gap = find(&result, "book/one/missing");
+        assert_eq!(gap.status, Status::Wanted);
+        assert_eq!(gap.title, None);
+        assert_eq!(gap.synopsis, None);
+        assert_eq!(gap.stage, None);
+    }
+
+    /// The number the plan would have missed. A part page's own body is its
+    /// heading and its epigraph, so comparing that against a `target` meaning
+    /// the whole part would draw it at two per cent forever.
+    #[tokio::test]
+    async fn a_subtree_is_the_sum_beneath_it_and_words_stay_the_bodys_own() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/one, book/two]\n---\n\n# Book\n",
+            )
+            .page(
+                "book/one",
+                "---\ntarget: 5000\ncontents: [book/one/opening, book/one/the-ferry]\n---\n\n# Part One\n\n> Four words of epigraph.\n",
+            )
+            .page("book/one/opening", "# Opening\n\none two three four five\n")
+            .page("book/one/the-ferry", "# The Ferry\n\nsix seven eight\n")
+            .page("book/two", "# Part Two\n\nnine ten\n");
+
+        let result = compiled(&wiki, "book").await;
+
+        let part = find(&result, "book/one");
+        assert_eq!(
+            part.words,
+            2 + 4,
+            "a part's own words are its heading and its epigraph"
+        );
+        assert_eq!(
+            part.subtree,
+            (2 + 4) + (1 + 5) + (2 + 3),
+            "a part's subtree is everything emitted beneath it"
+        );
+        assert_eq!(part.target, Some(5000));
+
+        // On a leaf the two numbers are the same, which is what makes the
+        // recursive definition one rule rather than two.
+        let leaf = find(&result, "book/one/opening");
+        assert_eq!(leaf.words, leaf.subtree);
+
+        // And the root's subtree is the whole document.
+        assert_eq!(find(&result, "book").subtree, result.words);
+    }
+
+    /// A preamble sits at depth zero beside the root rather than above it, so it
+    /// must not swallow the book into its own subtree.
+    #[tokio::test]
+    async fn a_style_page_subtree_is_only_its_own() {
+        let wiki = Wiki::new()
+            .page("book", "---\ncontents: [book/one]\n---\n\n# Book\n")
+            .page("book/one", "# One\n\none two three\n")
+            .page("rules/voice", "# Voice\n\nPast tense throughout.\n");
+
+        let result = compile(
+            &Slug::parse("book").unwrap(),
+            Some(&Slug::parse("rules/voice").unwrap()),
+            &wiki,
+        )
+        .await
+        .expect("compiles");
+
+        let style = find(&result, "rules/voice");
+        assert_eq!(style.subtree, style.words);
+        assert!(find(&result, "book").subtree > 0);
+    }
+
+    /// The load-bearing consequence: excluding a part takes its chapters with
+    /// it, because a part contributes its heading and dropping only its body
+    /// would silently promote its chapters under the previous part. Every one of
+    /// them keeps its position in the manifest.
+    #[tokio::test]
+    async fn excluding_a_part_excludes_everything_under_it_and_keeps_the_positions() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/one, book/two]\n---\n\n# Book\n",
+            )
+            .page(
+                "book/one",
+                "---\ncompile: false\ncontents: [book/one/opening]\n---\n\n# Part One\n\ncut cut cut\n",
+            )
+            .page("book/one/opening", "# Opening\n\none two three four\n")
+            .page("book/two", "# Part Two\n\nfive six\n");
+
+        let result = compiled(&wiki, "book").await;
+
+        assert_eq!(
+            statuses(&result),
+            [
+                ("book", Status::Included),
+                ("book/one", Status::Excluded),
+                ("book/one/opening", Status::Excluded),
+                ("book/two", Status::Included),
+            ],
+            "an excluded subtree left the manifest instead of staying in place"
+        );
+
+        assert!(!result.markdown.contains("Part One"));
+        assert!(!result.markdown.contains("Opening"));
+        assert!(result.markdown.contains("Part Two"));
+
+        // Excluded words do not count, in the totals or in any ancestor's
+        // subtree. Cutting a chapter moves the book's progress down, and that is
+        // the number moving for the right reason.
+        assert_eq!(find(&result, "book/one").words, 0);
+        assert_eq!(find(&result, "book/one").subtree, 0);
+        assert_eq!(result.words, find(&result, "book").subtree);
+        assert_eq!(
+            result.words,
+            1 + (2 + 2),
+            "excluded words reached a total: only the root and part two are in"
+        );
+    }
+
+    /// A chapter that says `compile: false` for itself, with nothing above it
+    /// saying anything.
+    #[tokio::test]
+    async fn a_single_excluded_chapter_leaves_the_rest_of_the_book_alone() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/one, book/cut, book/two]\n---\n\n# Book\n",
+            )
+            .page("book/one", "# One\n")
+            .page("book/cut", "---\ncompile: false\n---\n\n# A cut scene\n")
+            .page("book/two", "# Two\n");
+
+        let result = compiled(&wiki, "book").await;
+
+        assert_eq!(
+            statuses(&result),
+            [
+                ("book", Status::Included),
+                ("book/one", Status::Included),
+                ("book/cut", Status::Excluded),
+                ("book/two", Status::Included),
+            ]
+        );
+        assert!(!result.markdown.contains("cut scene"));
+        // The gap holds a position and no bytes, so it sits exactly where the
+        // next chapter picks up and the offsets either side still index what
+        // they claim. The separator between sections is added afterwards, which
+        // is why this trims: nothing was emitted *at* the gap.
+        let cut = find(&result, "book/cut");
+        assert_eq!(cut.length, 0);
+        assert!(
+            result.markdown[cut.offset..]
+                .trim_start()
+                .starts_with("## Two"),
+            "{:?}",
+            &result.markdown[cut.offset..]
+        );
+    }
+
+    /// It interacts with `duplicate` better than expected, and no special case
+    /// was needed: the rule is that `duplicate` means already emitted, and
+    /// nothing excluded was.
+    #[tokio::test]
+    async fn an_appendix_under_an_excluded_part_is_included_once_and_duplicate_nowhere() {
+        // The excluded part comes first, so the appendix is met while excluded
+        // and then met again on a path that includes it.
+        let cut_first = Wiki::new()
+            .page("book", "---\ncontents: [one, two]\n---\n\n# Book\n")
+            .page(
+                "one",
+                "---\ncompile: false\ncontents: [appendix]\n---\n\n# One\n",
+            )
+            .page("two", "---\ncontents: [appendix]\n---\n\n# Two\n")
+            .page("appendix", "# Appendix\n\nfour words are here\n");
+
+        let result = compiled(&cut_first, "book").await;
+        assert_eq!(
+            statuses(&result),
+            [
+                ("book", Status::Included),
+                ("one", Status::Excluded),
+                ("appendix", Status::Excluded),
+                ("two", Status::Included),
+                ("appendix", Status::Included),
+            ]
+        );
+        assert_eq!(result.markdown.matches("# Appendix").count(), 1);
+        assert!(
+            !result
+                .sections
+                .iter()
+                .any(|s| s.status == Status::Duplicate),
+            "a page emitted exactly once was reported as a duplicate"
+        );
+
+        // The other order, which is the one that would tempt an implementation
+        // into reporting `duplicate` for a position that emitted nothing.
+        let cut_second = Wiki::new()
+            .page("book", "---\ncontents: [one, two]\n---\n\n# Book\n")
+            .page("one", "---\ncontents: [appendix]\n---\n\n# One\n")
+            .page(
+                "two",
+                "---\ncompile: false\ncontents: [appendix]\n---\n\n# Two\n",
+            )
+            .page("appendix", "# Appendix\n\nfour words are here\n");
+
+        assert_eq!(
+            statuses(&compiled(&cut_second, "book").await),
+            [
+                ("book", Status::Included),
+                ("one", Status::Included),
+                ("appendix", Status::Included),
+                ("two", Status::Excluded),
+                ("appendix", Status::Excluded),
+            ]
+        );
+    }
+
+    /// Nothing consults `emitted` on the excluded path, so nothing else can end
+    /// a loop down there. Without its own guard this walks to the depth limit
+    /// and turns a harmless mistake into a refusal.
+    #[tokio::test]
+    async fn a_cycle_inside_an_excluded_subtree_terminates() {
+        let wiki = Wiki::new()
+            .page("book", "---\ncontents: [a]\n---\n\n# Book\n")
+            .page("a", "---\ncompile: false\ncontents: [b]\n---\n\n# A\n")
+            .page("b", "---\ncontents: [a]\n---\n\n# B\n");
+
+        let result = compile(&Slug::parse("book").unwrap(), None, &wiki)
+            .await
+            .expect("an excluded loop is not a refusal");
+
+        assert_eq!(
+            statuses(&result),
+            [
+                ("book", Status::Included),
+                ("a", Status::Excluded),
+                ("b", Status::Excluded),
+                ("a", Status::Excluded),
+            ]
+        );
+    }
+
+    /// A page listed twice under a parent that is itself excluded. The second
+    /// one is excluded rather than duplicate, because nothing was emitted at
+    /// either position.
+    #[tokio::test]
+    async fn the_same_child_twice_under_an_excluded_parent_is_excluded_twice() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncompile: false\ncontents: [one, one]\n---\n\n# Book\n",
+            )
+            .page("one", "# One\n");
+
+        assert_eq!(
+            statuses(&compiled(&wiki, "book").await),
+            [
+                ("book", Status::Excluded),
+                ("one", Status::Excluded),
+                ("one", Status::Excluded),
+            ]
+        );
+    }
+
+    /// An exclusion changes what is in the document, so it had better not change
+    /// what is in it from one compile to the next.
+    #[tokio::test]
+    async fn compiling_a_book_with_a_cut_chapter_twice_is_byte_identical() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncontents: [book/one, book/cut, book/two]\n---\n\n# Book\n",
+            )
+            .page("book/one", "# One\n\nFirst.\n")
+            .page("book/cut", "---\ncompile: false\n---\n\n# Cut\n")
+            .page("book/two", "# Two\n\nSecond.\n");
+
+        assert_eq!(
+            compiled(&wiki, "book").await,
+            compiled(&wiki, "book").await,
+            "two compiles of one book disagreed"
+        );
+    }
+
+    /// Compiling a page that says it is not compiled. An odd thing to ask for,
+    /// and the answer says so rather than pretending otherwise.
+    #[tokio::test]
+    async fn an_excluded_root_compiles_to_nothing_and_says_why() {
+        let wiki = Wiki::new()
+            .page(
+                "book",
+                "---\ncompile: false\ncontents: [book/one]\n---\n\n# Book\n",
+            )
+            .page("book/one", "# One\n");
+
+        let result = compiled(&wiki, "book").await;
+
+        assert_eq!(result.markdown, "");
+        assert_eq!(result.words, 0);
+        assert_eq!(
+            statuses(&result),
+            [("book", Status::Excluded), ("book/one", Status::Excluded)]
+        );
+    }
+
+    /// Two gaps at two positions, rather than a gap and a `duplicate` pointing
+    /// at nothing. `duplicate` means already emitted, and a page nobody has
+    /// written was never emitted once.
+    #[tokio::test]
+    async fn a_chapter_nobody_has_written_is_wanted_at_every_position() {
+        let wiki = Wiki::new().page(
+            "book",
+            "---\ncontents: [book/missing, book/missing]\n---\n\n# Book\n",
+        );
+
+        assert_eq!(
+            statuses(&compiled(&wiki, "book").await),
+            [
+                ("book", Status::Included),
+                ("book/missing", Status::Wanted),
+                ("book/missing", Status::Wanted),
+            ]
         );
     }
 

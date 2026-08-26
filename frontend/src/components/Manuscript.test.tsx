@@ -18,6 +18,8 @@ function section(over: Partial<SectionView> = {}): SectionView {
     title: 'The Opening',
     depth: 1,
     words: 2180,
+    // Equal to `words` on a leaf, which is what most of these fixtures are.
+    subtree: 2180,
     offset: 238,
     length: 12903,
     status: 'included',
