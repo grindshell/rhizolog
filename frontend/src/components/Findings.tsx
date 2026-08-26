@@ -280,6 +280,33 @@ export function byteToIndex(text: string, offset: number): number {
   return index
 }
 
+/**
+ * A position in a JavaScript string, as a byte offset.
+ *
+ * The other direction, and it is here because the two have to agree and because
+ * they share the arithmetic below. It is what a cursor position becomes on its
+ * way to `POST /api/split`, which takes bytes for the same reason a span is
+ * bytes: the server counts a page in the units the file is written in.
+ *
+ * An index that lands inside a surrogate pair rounds **forward** past the whole
+ * character, which is the safe direction: the result is still a boundary the
+ * server will accept rather than an offset that cuts an emoji in half.
+ */
+export function indexToByte(text: string, index: number): number {
+  if (index <= 0) return 0
+
+  let bytes = 0
+  let units = 0
+
+  for (const character of text) {
+    if (units >= index) break
+    bytes += utf8Length(character.codePointAt(0) ?? 0)
+    units += character.length
+  }
+
+  return bytes
+}
+
 function utf8Length(codePoint: number): number {
   if (codePoint < 0x80) return 1
   if (codePoint < 0x800) return 2

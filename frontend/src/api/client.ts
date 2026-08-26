@@ -18,6 +18,11 @@ export type CreatePage = Schemas['CreatePage']
 export type ReplacePage = Schemas['ReplacePage']
 export type PatchPage = Schemas['PatchPage']
 export type MovePage = Schemas['MovePage']
+export type SplitPage = Schemas['SplitPage']
+export type SplitResult = Schemas['SplitResult']
+export type MergePages = Schemas['MergePages']
+export type MergeResult = Schemas['MergeResult']
+export type Repair = Schemas['Repair']
 export type SearchResponse = Schemas['SearchResponse']
 export type SearchHitView = Schemas['SearchHitView']
 export type PageLinksResponse = Schemas['PageLinksResponse']
@@ -426,6 +431,33 @@ export function deletePage(slug: string, signal?: AbortSignal): Promise<void> {
 /** `POST /api/move` — move a page to a new slug. Inbound links are left alone. */
 export function movePage(body: MovePage, signal?: AbortSignal): Promise<PageView> {
   return request<PageView>('/move', { method: 'POST', body, signal })
+}
+
+/**
+ * `POST /api/split`: cut a page in two at a byte offset.
+ *
+ * `at` is a **byte** offset into the body, which is not a JavaScript string
+ * index: one `é` is one unit and two bytes. Take it through `indexToByte` on the
+ * way out, exactly as a finding's span comes back through `byteToIndex` on the
+ * way in.
+ *
+ * The second half is inserted into every `contents:` list that named the first,
+ * immediately after it, and the response says which lists changed and what each
+ * one says now.
+ */
+export function splitPage(body: SplitPage, signal?: AbortSignal): Promise<SplitResult> {
+  return request<SplitResult>('/split', { method: 'POST', body, signal })
+}
+
+/**
+ * `POST /api/merge`: fold one page into another and delete it.
+ *
+ * `into` keeps its own frontmatter and gains the body, and every `contents:`
+ * entry naming `from` is removed. Nothing is written and nothing is unwritten,
+ * so the word log records a marker rather than a day's work.
+ */
+export function mergePages(body: MergePages, signal?: AbortSignal): Promise<MergeResult> {
+  return request<MergeResult>('/merge', { method: 'POST', body, signal })
 }
 
 /**

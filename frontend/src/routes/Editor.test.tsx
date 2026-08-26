@@ -8,6 +8,8 @@ const api = vi.hoisted(() => ({
   replacePage: vi.fn(),
   createPage: vi.fn(),
   renderMarkdown: vi.fn(),
+  splitPage: vi.fn(),
+  mergePages: vi.fn(),
   // The editor reads the session to decide whether to show the visibility
   // control. Left real it would fire a `fetch` at module load, which in jsdom
   // has no origin to resolve `/api/auth/session` against — so every test in
@@ -26,7 +28,8 @@ vi.mock('../api/client', async (importOriginal) => {
   return { ...actual, ...api }
 })
 
-const { default: Editor, parseDue, parseLines, parseTarget } = await import('./Editor')
+const { default: Editor, directoryOf, opening, parseDue, parseLines, parseTarget } =
+  await import('./Editor')
 
 function page(overrides: Partial<PageView> = {}): PageView {
   return {
@@ -91,6 +94,16 @@ beforeEach(() => {
   api.replacePage.mockResolvedValue(page())
   api.createPage.mockResolvedValue(page())
   api.getPage.mockResolvedValue(page())
+  api.splitPage.mockResolvedValue({
+    head: page(),
+    tail: page({ slug: 'notes/rust/later' }),
+    repaired: [],
+  })
+  api.mergePages.mockResolvedValue({
+    page: page({ slug: 'notes/rust/pinning' }),
+    removed: 'notes/rust/async',
+    repaired: [],
+  })
 })
 
 afterEach(() => {
@@ -379,6 +392,175 @@ describe('the manuscript block', () => {
 
     await waitFor(() => expect(fields(container).slug.value).toBe('notes/rust/async'))
     expect(block(container).open).toBe(false)
+  })
+})
+
+describe('splitting and merging', () => {
+  /** A chapter with an accent in it, so the byte arithmetic has something to do. */
+  const CHAPTER = '# Café\n\n## Later\n\nMore.\n'
+  /** Where `## Later` starts: index 8 in the string, byte 9 in the file. */
+  const LATER = CHAPTER.indexOf('## Later')
+
+  const divide = (getByText: (text: string) => HTMLElement) =>
+    getByText('Split and merge').closest('details') as HTMLDetailsElement
+
+  function placeCursor(body: HTMLTextAreaElement, at: number) {
+    body.setSelectionRange(at, at)
+    body.dispatchEvent(new Event('select', { bubbles: true }))
+  }
+
+  async function openChapter(overrides: Partial<PageView> = {}) {
+    api.getPage.mockResolvedValue(
+      page({ slug: 'notes/rust/async', content: CHAPTER, ...overrides }),
+    )
+    const view = openEditor('/edit/notes/rust/async')
+    await waitFor(() => expect(fields(view.container).body.value).toBe(CHAPTER))
+    return view
+  }
+
+  /**
+   * The one piece of arithmetic here that is invisible when it is wrong. A page
+   * with an accent in it has more bytes than characters, and a cursor handed
+   * over raw would cut the file somewhere else, further out the longer the page
+   * runs.
+   */
+  it('sends the cursor as a byte offset rather than a string index', async () => {
+    const { container, getByText } = await openChapter()
+
+    placeCursor(fields(container).body, LATER)
+    getByText('Split here').click()
+
+    await waitFor(() => expect(api.splitPage).toHaveBeenCalled())
+    const [request] = api.splitPage.mock.calls[0] as [
+      { from: string; at: number; to: string; title: string | null },
+    ]
+    expect(request.from).toBe('notes/rust/async')
+    expect(LATER).toBe(8)
+    expect(request.at).toBe(9)
+    // The directory is a head start; the name is the caller's, and an empty
+    // title means the new page takes the heading it opens with.
+    expect(request.to).toBe('notes/rust/')
+    expect(request.title).toBeNull()
+  })
+
+  /** What a split would make, shown rather than described. */
+  it('shows the line the new page would start with', async () => {
+    const { container, getByText } = await openChapter()
+
+    placeCursor(fields(container).body, LATER)
+
+    await waitFor(() => expect(divide(getByText).textContent).toContain('## Later'))
+  })
+
+  /**
+   * The half that needs a person is the new one: no synopsis, no stage and no
+   * target on it. The half left behind is finished and saved.
+   */
+  it('lands in the editor for the page it made', async () => {
+    const { container, getByText } = await openChapter()
+
+    placeCursor(fields(container).body, LATER)
+    getByText('Split here').click()
+
+    await waitFor(() =>
+      expect(api.getPage.mock.calls.map(([slug]) => slug)).toContain('notes/rust/later'),
+    )
+  })
+
+  /**
+   * Both act on the file the server holds, so an offset into a body with
+   * unsaved edits in it would cut a page that is not the one being cut. The
+   * same rule Rename follows, for the same reason.
+   */
+  it('refuses both while there are unsaved changes', async () => {
+    const { container, getByText } = await openChapter()
+
+    placeCursor(fields(container).body, LATER)
+    type(fields(container).title, 'Later')
+
+    expect((getByText('Split here') as HTMLButtonElement).disabled).toBe(true)
+    expect((getByText('Merge and delete this page') as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+  })
+
+  /** Nothing on one side of the cut is not a split; it is a rename. */
+  it('refuses a cursor with nothing on one side of it', async () => {
+    const { container, getByText } = await openChapter()
+
+    for (const at of [0, CHAPTER.length]) {
+      placeCursor(fields(container).body, at)
+      await waitFor(() =>
+        expect((getByText('Split here') as HTMLButtonElement).disabled).toBe(true),
+      )
+    }
+  })
+
+  /**
+   * Refused by the server, and said here rather than left to be discovered by
+   * pressing a button that fails.
+   */
+  it('says why neither will touch a page that assembles others', async () => {
+    const { getByText } = await openChapter({ contents: ['notes/rust/async/one'] })
+
+    expect(divide(getByText).textContent).toContain('This page assembles others')
+    expect(() => getByText('Split here')).toThrow()
+  })
+
+  it('merges after a confirmation, and goes to the page that grew', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const { container, getByText, findByTestId } = await openChapter()
+
+    type(
+      container.querySelector(
+        'input[placeholder="book/one/the-ferry"]',
+      ) as HTMLInputElement,
+      'notes/rust/pinning',
+    )
+    getByText('Merge and delete this page').click()
+
+    await waitFor(() => expect(api.mergePages).toHaveBeenCalled())
+    expect(api.mergePages.mock.calls[0]?.[0]).toEqual({
+      from: 'notes/rust/async',
+      into: 'notes/rust/pinning',
+    })
+    // The page being edited is gone, so this is a `replace` and Back does not
+    // return to a 404.
+    expect(await findByTestId('elsewhere')).toBeTruthy()
+    expect(confirm).toHaveBeenCalled()
+  })
+
+  it('does nothing when the confirmation is declined', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const { container, getByText } = await openChapter()
+
+    type(
+      container.querySelector(
+        'input[placeholder="book/one/the-ferry"]',
+      ) as HTMLInputElement,
+      'notes/rust/pinning',
+    )
+    getByText('Merge and delete this page').click()
+
+    expect(api.mergePages).not.toHaveBeenCalled()
+  })
+
+  it('has neither on a page that does not exist yet', () => {
+    const { queryByText } = openEditor('/new')
+
+    expect(queryByText('Split and merge')).toBeNull()
+  })
+
+  it('reads the directory a page sits in, and nothing more', () => {
+    expect(directoryOf('book/one/the-ferry')).toBe('book/one/')
+    expect(directoryOf('index')).toBe('')
+  })
+
+  it('finds the first line with anything on it', () => {
+    expect(opening('One.\n\n\n## Two\n', 4)).toBe('## Two')
+    expect(opening('One.\n', 0)).toBe('One.')
+    expect(opening('One.\n\n  \n', 5)).toBe('')
+    expect(opening('One.\n', -3)).toBe('One.')
   })
 })
 

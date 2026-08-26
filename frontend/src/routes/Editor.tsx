@@ -8,14 +8,16 @@ import {
   deletePage,
   editHref,
   getPage,
+  mergePages,
   movePage,
   pageHref,
   renderMarkdown,
   replacePage,
+  splitPage,
 } from '../api/client'
 import { sessionState } from '../api/session'
 import { ErrorNotice } from '../components/Async'
-import Findings, { byteToIndex } from '../components/Findings'
+import Findings, { byteToIndex, indexToByte } from '../components/Findings'
 import Markdown from '../components/Markdown'
 import { KNOWN_STAGES } from '../components/Stages'
 
@@ -56,9 +58,19 @@ const PREVIEW_DELAY_MS = 300
 /** The three ways the editor can divide its space. */
 export type Layout = 'editor' | 'split' | 'preview'
 
+/**
+ * The middle one is labelled "Both" and its value is still `split`.
+ *
+ * The label changed the day this editor grew a control that cuts a page in two:
+ * two buttons a hand apart, one saying Split and meaning panes and the other
+ * saying Split and meaning the page, is a question nobody should have to answer.
+ * The **value** did not change, because it is what is in somebody's
+ * `localStorage`, and renaming it would silently reset the pane arrangement of
+ * everyone who had chosen one.
+ */
 const LAYOUTS: { value: Layout; label: string; title: string }[] = [
   { value: 'editor', label: 'Editor', title: 'Collapse the preview' },
-  { value: 'split', label: 'Split', title: 'Show the editor and the preview' },
+  { value: 'split', label: 'Both', title: 'Show the editor and the preview' },
   { value: 'preview', label: 'Preview', title: 'Maximise the preview' },
 ]
 
@@ -161,6 +173,20 @@ export default function Editor() {
   const [busy, setBusy] = createSignal(false)
   const [failure, setFailure] = createSignal<unknown>()
 
+  /**
+   * Where the cursor is in the body, and where the two pages this page can
+   * become would be cut apart.
+   *
+   * A JavaScript string index, which is not what the API takes: `at` is a byte
+   * offset, because the server counts a page in the units its file is written
+   * in. `indexToByte` is the crossing, and it is the same arithmetic a finding's
+   * span already comes back through in the other direction.
+   */
+  const [cursor, setCursor] = createSignal(0)
+  const [tailSlug, setTailSlug] = createSignal('')
+  const [tailTitle, setTailTitle] = createSignal('')
+  const [mergeInto, setMergeInto] = createSignal('')
+
   const [loaded] = createResource(editing, (target) => getPage(target))
 
   createEffect(() => {
@@ -192,6 +218,13 @@ export default function Editor() {
     setSynopsis(page.synopsis ?? '')
     setStage(page.stage ?? '')
     setCompile(page.compile)
+    // The directory this page sits in, which is where a chapter cut off it or a
+    // page it joins almost always lives. A head start rather than a guess at a
+    // name: the rest of the slug is the one part nothing else knows.
+    setTailSlug(directoryOf(page.slug))
+    setMergeInto(directoryOf(page.slug))
+    setTailTitle('')
+    setCursor(0)
     setDirty(false)
     setFailure(undefined)
   })
@@ -282,6 +315,17 @@ export default function Editor() {
     )
   }
 
+  /**
+   * Follow the caret, which is where a split would cut.
+   *
+   * Three events rather than one, because no single one covers every way a
+   * caret moves: `select` fires for a drag, `click` for a click, and `keyup`
+   * for the arrow keys, Home and End. Typing is covered by the textarea's own
+   * `input` handler.
+   */
+  const follow = (event: { currentTarget: HTMLTextAreaElement }) =>
+    setCursor(event.currentTarget.selectionStart)
+
   /* ------------------------------------------------------------- actions -- */
 
   const save = async () => {
@@ -371,6 +415,78 @@ export default function Editor() {
       // Replace rather than push: the old slug is gone, so leaving it in the
       // history would put a 404 behind the back button.
       navigate(editHref(page.slug), { replace: true })
+    } catch (error) {
+      setFailure(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /* ----------------------------------------------------- split and merge -- */
+
+  /**
+   * Both act on the **saved file**, never on what is in the textarea.
+   *
+   * That is the rule Rename already follows and it is the same rule: the server
+   * cuts the body it holds, so a split with edits pending would cut a page at an
+   * offset into a body that is not the one being cut. Disabled while dirty
+   * rather than saving first on somebody's behalf, because a save is a write and
+   * nobody asked for two.
+   */
+  const dividable = () => editing() !== undefined && !busy() && !dirty() && !assembles()
+
+  const canSplit = () =>
+    dividable() && tailSlug().trim() !== '' && cursor() > 0 && cursor() < content().length
+
+  const split = async () => {
+    const source = editing()
+    if (!source || !canSplit()) return
+
+    setBusy(true)
+    setFailure(undefined)
+    try {
+      const result = await splitPage({
+        from: source,
+        at: indexToByte(content(), cursor()),
+        to: tailSlug().trim(),
+        // Empty means "derive it", which on a chapter cut off at a heading is
+        // that heading. The API distinguishes null from a blank string, exactly
+        // as the title field above does.
+        title: tailTitle().trim() || null,
+      })
+      setDirty(false)
+      // To the new page rather than back to this one. The half that needs a
+      // person is the one with no synopsis, no stage and no target on it, and
+      // the half that was left behind is finished and saved. Pushed rather than
+      // replaced: the page this came from is still there, so Back works.
+      navigate(editHref(result.tail.slug))
+    } catch (error) {
+      setFailure(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const merge = async () => {
+    const source = editing()
+    const into = mergeInto().trim()
+    if (!source || !into || !dividable()) return
+    if (
+      !window.confirm(
+        `Merge ${source} into ${into}? Its words go to the end of that page and its file is removed.`,
+      )
+    ) {
+      return
+    }
+
+    setBusy(true)
+    setFailure(undefined)
+    try {
+      const result = await mergePages({ from: source, into })
+      setDirty(false)
+      // Replace rather than push, for the reason Rename does it: this page is
+      // gone, so leaving it in the history would put a 404 behind Back.
+      navigate(pageHref(result.page.slug), { replace: true })
     } catch (error) {
       setFailure(error)
     } finally {
@@ -819,8 +935,12 @@ export default function Editor() {
                 placeholder="# Heading&#10;&#10;Link to another page with [[notes/rhizome]]."
                 onInput={(event) => {
                   setContent(event.currentTarget.value)
+                  setCursor(event.currentTarget.selectionStart)
                   setDirty(true)
                 }}
+                onSelect={follow}
+                onClick={follow}
+                onKeyUp={follow}
               />
             </label>
 
@@ -830,6 +950,124 @@ export default function Editor() {
               like. It runs your own rules; there is nothing here from a model.
             */}
             <Findings content={content()} onReveal={reveal} />
+
+            {/*
+              Only for a page that exists. Both act on a file, and a page being
+              created has none yet.
+            */}
+            <Show when={editing()}>
+              {(source) => (
+                <details class="collapse-arrow border-base-300 collapse border">
+                  <summary class="collapse-title px-4 py-2 text-sm font-medium">
+                    Split and merge
+                  </summary>
+                  <div class="collapse-content flex flex-col gap-3">
+                    <Show
+                      when={!assembles()}
+                      fallback={
+                        <p class="text-sm opacity-70">
+                          This page assembles others, so neither will touch it.
+                          The half cut off a split would compile after every one
+                          of them, and merging it away would leave them named by
+                          nothing. Editing the contents lists by hand is how to
+                          mean either.
+                        </p>
+                      }
+                    >
+                      <p class="text-xs opacity-60">
+                        Both act on the saved file rather than on what is in the
+                        box, so save first. Neither writes or unwrites a word:
+                        the log records a marker, and the chart does not move.
+                      </p>
+
+                      <div class="flex flex-col gap-2">
+                        <div class="text-sm">
+                          <span class="font-medium">Split at the cursor</span>{' '}
+                          <span class="opacity-60">
+                            position {cursor()} of {content().length}
+                          </span>
+                        </div>
+                        <Show
+                          when={opening(content(), cursor())}
+                          fallback={
+                            <p class="text-xs opacity-60">
+                              Put the cursor where the second page should start.
+                            </p>
+                          }
+                        >
+                          {(line) => (
+                            <p class="truncate font-mono text-xs opacity-70">
+                              New page starts: {line()}
+                            </p>
+                          )}
+                        </Show>
+
+                        <div class="grid gap-2 sm:grid-cols-2">
+                          <input
+                            class="input input-bordered input-sm w-full font-mono"
+                            value={tailSlug()}
+                            placeholder="book/one/the-crossing"
+                            aria-label="Slug for the second half"
+                            onInput={(event) => setTailSlug(event.currentTarget.value)}
+                          />
+                          <input
+                            class="input input-bordered input-sm w-full"
+                            value={tailTitle()}
+                            placeholder="follows the first heading"
+                            aria-label="Title for the second half"
+                            onInput={(event) => setTailTitle(event.currentTarget.value)}
+                          />
+                        </div>
+
+                        <button
+                          class="btn btn-outline btn-sm self-start"
+                          disabled={!canSplit()}
+                          title={dirty() ? 'Save your changes first' : undefined}
+                          onClick={() => void split()}
+                        >
+                          Split here
+                        </button>
+                        <span class="text-xs opacity-60">
+                          The new page inherits the tags, the stage and who can
+                          read this one. It inherits no synopsis and no target:
+                          a synopsis is a claim about what a chapter does, and a
+                          target copied would double what the book aims at.
+                        </span>
+                      </div>
+
+                      <div class="divider my-0" />
+
+                      <div class="flex flex-col gap-2">
+                        <div class="text-sm font-medium">
+                          Merge this page into another
+                        </div>
+                        <p class="text-xs opacity-60">
+                          Its body goes to the end of that page and its file is
+                          removed. Every contents list that named it loses the
+                          entry. The other page keeps its own title, synopsis
+                          and target.
+                        </p>
+                        <input
+                          class="input input-bordered input-sm w-full font-mono"
+                          value={mergeInto()}
+                          placeholder="book/one/the-ferry"
+                          aria-label={`Page to merge ${source()} into`}
+                          onInput={(event) => setMergeInto(event.currentTarget.value)}
+                        />
+                        <button
+                          class="btn btn-error btn-outline btn-sm self-start"
+                          disabled={!dividable() || mergeInto().trim() === ''}
+                          title={dirty() ? 'Save your changes first' : undefined}
+                          onClick={() => void merge()}
+                        >
+                          Merge and delete this page
+                        </button>
+                      </div>
+                    </Show>
+                  </div>
+                </details>
+              )}
+            </Show>
           </div>
         </section>
         </Show>
@@ -918,6 +1156,35 @@ export function parseTarget(raw: string): number | null {
  */
 export function parseDue(raw: string): string | null {
   return raw ? `${raw}T00:00:00Z` : null
+}
+
+/**
+ * The directory a slug sits in, separator included: `book/one/` for
+ * `book/one/the-ferry`, and nothing at all for a page at the root.
+ *
+ * What a page cut off this one, or a page this one joins, almost always shares.
+ * It is a fact about where this page is rather than a guess at what the other
+ * one should be called, which is the half nothing here can know.
+ */
+export function directoryOf(slug: string): string {
+  const cut = slug.lastIndexOf('/')
+  return cut === -1 ? '' : slug.slice(0, cut + 1)
+}
+
+/**
+ * The first line with anything on it from `index` onward.
+ *
+ * What the page a split would make begins with, shown rather than described,
+ * because "position 412" says nothing about whether it is the right 412. On a
+ * chapter cut at a heading it is also the title the new page will take, which is
+ * why the title field can be left empty.
+ */
+export function opening(text: string, index: number): string {
+  for (const line of text.slice(Math.max(0, index)).split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed !== '') return trimmed
+  }
+  return ''
 }
 
 /** Split a field written one entry per line, dropping blanks. */

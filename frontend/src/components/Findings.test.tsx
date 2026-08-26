@@ -9,7 +9,7 @@ vi.mock('../api/client', async (importOriginal) => {
   return { ...actual, ...api }
 })
 
-const { default: Findings, byteToIndex } = await import('./Findings')
+const { default: Findings, byteToIndex, indexToByte } = await import('./Findings')
 
 function finding(over: Partial<FindingView> = {}): FindingView {
   return {
@@ -185,5 +185,52 @@ describe('byte offsets as string positions', () => {
 
   it('never runs past the end of the text', () => {
     expect(byteToIndex('café', 99)).toBe(4)
+  })
+})
+
+/**
+ * The other direction, which is what a cursor becomes on its way to a split. The
+ * server cuts a file at a byte offset, so a caller that sent a string index
+ * would cut somewhere else, and further out the longer the page runs.
+ */
+describe('string positions as byte offsets', () => {
+  it('is the identity over ASCII', () => {
+    expect(indexToByte('the ferry was late', 4)).toBe(4)
+    expect(indexToByte('the ferry was late', 0)).toBe(0)
+  })
+
+  it('counts a two-byte character as two bytes', () => {
+    const text = 'café was late'
+    expect(indexToByte(text, 5)).toBe(6)
+  })
+
+  it('counts an astral character as two positions and four bytes', () => {
+    expect(indexToByte('🚢 was late', 2)).toBe(4)
+  })
+
+  /**
+   * Forward, past the whole character, which is the safe direction: the result
+   * is still an offset the server will accept rather than one that cuts an emoji
+   * in half.
+   */
+  it('rounds a position inside a surrogate pair forward', () => {
+    expect(indexToByte('🚢 was late', 1)).toBe(4)
+  })
+
+  it('never runs past the end of the text', () => {
+    expect(indexToByte('café', 99)).toBe(5)
+    expect(indexToByte('café', -3)).toBe(0)
+  })
+
+  /** Round-tripping any boundary has to land back where it started. */
+  it('undoes byteToIndex over the same text', () => {
+    const text = '# Café\n\n## Later 🚢\n\nMore.\n'
+    for (let index = 0; index <= text.length; index += 1) {
+      expect(byteToIndex(text, indexToByte(text, index))).toBe(
+        // A position inside a surrogate pair rounds forward to the pair's end,
+        // which is the only boundary there is between those two units.
+        index === text.indexOf('🚢') + 1 ? index + 1 : index,
+      )
+    }
   })
 })
