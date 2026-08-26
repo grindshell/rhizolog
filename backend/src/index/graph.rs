@@ -348,6 +348,48 @@ fn named_but_unwritten() -> String {
 }
 
 impl Index {
+    /// Every page whose `contents:` list names this slug, in slug order.
+    ///
+    /// The match is on the entry **as written**, which is the only spelling
+    /// anything can rewrite: `page_parts.target` keeps whatever somebody typed,
+    /// so an entry with a stray space in it is a different entry and is left
+    /// alone rather than quietly corrected on its owner's behalf.
+    ///
+    /// **No audience predicate**, unlike everything else in this module, and the
+    /// difference is what the answer is for. Every other query here produces
+    /// rows somebody is shown. This one produces a list of pages to go and open,
+    /// and the caller reads each file and checks that, which is the rule
+    /// `GET /api/pages/{slug}` follows and is stricter than the index can be: a
+    /// page whose frontmatter changed a moment ago is judged on what it says now.
+    ///
+    /// `distinct`, because a parent that names the same child twice is one page
+    /// to read and one file to write.
+    pub async fn parents_naming(&self, slug: &Slug) -> Result<Vec<Slug>, IndexError> {
+        let slug = slug.to_string();
+
+        self.with_connection(move |connection| {
+            let mut query = connection.prepare(
+                "select distinct src_slug from page_parts
+                 where target = ?1
+                 order by src_slug",
+            )?;
+
+            let rows = query.query_map(params![slug], |row| row.get::<_, String>(0))?;
+
+            let mut parents = Vec::new();
+            for row in rows {
+                // A row whose source no longer parses names no page anything
+                // could open, so there is nothing to repair there.
+                if let Ok(parent) = Slug::parse(&row?) {
+                    parents.push(parent);
+                }
+            }
+
+            Ok(parents)
+        })
+        .await
+    }
+
     /// Every link into and out of a page.
     ///
     /// The page itself need not exist: asking about a wanted page returns the
@@ -1692,6 +1734,58 @@ mod tests {
             .find(|node| node.slug == "book/appendix")
             .unwrap();
         assert_eq!(appendix.inbound, 2);
+    }
+
+    /// What a split or a merge has to open before it can repair anything. The
+    /// appendix is the case worth having: a page listed under two parts has two
+    /// files to write, and a rewrite that found only the first would leave the
+    /// second naming a page that is gone.
+    #[tokio::test]
+    async fn every_list_that_names_a_page_can_be_found_from_the_page() {
+        let index = book().await;
+
+        assert_eq!(
+            index
+                .parents_naming(&Slug::parse("book/appendix").unwrap())
+                .await
+                .unwrap()
+                .iter()
+                .map(Slug::to_string)
+                .collect::<Vec<_>>(),
+            ["book/one", "book/two"]
+        );
+        assert!(
+            index
+                .parents_naming(&Slug::parse("book").unwrap())
+                .await
+                .unwrap()
+                .is_empty(),
+            "nothing assembles the root"
+        );
+    }
+
+    /// A parent that names the same child twice is one page to read and one file
+    /// to write, whatever the repair turns out to be.
+    #[tokio::test]
+    async fn a_parent_that_names_a_page_twice_is_named_once() {
+        let index = book().await;
+        index
+            .upsert(&contents(
+                "book/two",
+                &["book/appendix", "book/appendix"],
+                "## Part two\n",
+            ))
+            .await
+            .expect("upsert");
+
+        assert_eq!(
+            index
+                .parents_naming(&Slug::parse("book/appendix").unwrap())
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     /// A gap in a manuscript is a branch somebody gestured at, which is exactly

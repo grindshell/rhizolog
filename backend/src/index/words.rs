@@ -478,6 +478,77 @@ mod tests {
         );
     }
 
+    /// A split names a second slug the way a move does and vacates neither,
+    /// which is the whole difference between the two markers. Getting it wrong
+    /// would break a chapter's series in half every time somebody cut one, and
+    /// the next edit to the page that was split would come back as a baseline.
+    #[tokio::test]
+    async fn a_split_leaves_the_page_it_cut_and_opens_the_one_it_made() {
+        let index = index().await;
+
+        index
+            .record_words(&observation(
+                "2026-08-01T00:00:00Z",
+                "a",
+                Kind::Observed,
+                400,
+            ))
+            .await
+            .expect("record");
+        index
+            .record_words(&observation("2026-08-02T00:00:00Z", "a", Kind::Split, 240))
+            .await
+            .expect("record");
+        index
+            .record_words(&Observation {
+                from: Some(slug("a")),
+                ..observation("2026-08-02T00:00:00Z", "b", Kind::Split, 160)
+            })
+            .await
+            .expect("record");
+
+        assert_eq!(
+            index.last_word_total(&slug("a")).await.unwrap(),
+            Some(240),
+            "the page that was split is still that page"
+        );
+        assert_eq!(index.last_word_total(&slug("b")).await.unwrap(), Some(160));
+    }
+
+    /// The page that grew carries on from its new total; the page that was
+    /// folded in is closed by the delete that removed it, not by the merge.
+    #[tokio::test]
+    async fn a_merge_carries_one_series_on_and_closes_the_other() {
+        let index = index().await;
+
+        for (page, kind, total) in [
+            ("a", Kind::Observed, 400),
+            ("b", Kind::Observed, 160),
+            ("a", Kind::Merged, 560),
+        ] {
+            index
+                .record_words(&Observation {
+                    from: (kind == Kind::Merged).then(|| slug("b")),
+                    ..observation("2026-08-02T00:00:00Z", page, kind, total)
+                })
+                .await
+                .expect("record");
+        }
+
+        assert_eq!(index.last_word_total(&slug("a")).await.unwrap(), Some(560));
+        assert_eq!(
+            index.last_word_total(&slug("b")).await.unwrap(),
+            Some(160),
+            "the merge alone says nothing about the slug the words came from"
+        );
+
+        index
+            .record_words(&observation("2026-08-02T00:00:01Z", "b", Kind::Deleted, 0))
+            .await
+            .expect("record");
+        assert_eq!(index.last_word_total(&slug("b")).await.unwrap(), None);
+    }
+
     /// Writing at a closed slug opens a new series, and the one after that is an
     /// ordinary edit again.
     #[tokio::test]

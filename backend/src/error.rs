@@ -111,6 +111,46 @@ pub enum AppError {
         at: String,
     },
 
+    /// A split whose offset does not divide the body.
+    ///
+    /// The length comes back with it, because the caller's offset was computed
+    /// from a body it may no longer be holding, and "how long is it now" is the
+    /// one thing it cannot work out from the refusal.
+    #[error("{at} is not a place to split {slug}: {reason}")]
+    SplitOffsetInvalid {
+        slug: Slug,
+        at: usize,
+        /// The body's length in bytes.
+        length: usize,
+        reason: &'static str,
+    },
+
+    /// Splitting a page that assembles others, or merging one away.
+    ///
+    /// Both are refused and the reason is the same one in two directions. A
+    /// merge puts text where the caller **said**; a split puts the second half
+    /// where the first half is, which on a page with chapters under it is after
+    /// every one of them. So a split has to derive a position and cannot, and a
+    /// merge would leave a subtree named by nothing.
+    ///
+    /// A document that quietly restructures itself is what compile's limits
+    /// already refuse to produce, and editing the two lists by hand is the way
+    /// to mean it.
+    #[error("{slug} assembles other pages, and {consequence}")]
+    PageAssemblesOthers {
+        slug: Slug,
+        consequence: &'static str,
+    },
+
+    /// Merging a page into itself.
+    ///
+    /// Refused rather than treated as nothing to do. Left to run it would append
+    /// a page to itself and then delete it, so a caller that got the two fields
+    /// the same way round would lose the page, and that is exactly the caller
+    /// likely to send this.
+    #[error("{slug} cannot be merged into itself")]
+    MergeIntoItself { slug: Slug },
+
     /// `.rhizolog/prose.toml` is there and will not be read.
     ///
     /// A 422 rather than a 500, because it is the same shape of failure as a
@@ -413,11 +453,18 @@ impl AppError {
             // request is malformed, and a caller told so would go looking for a
             // typo rather than at the size of what they asked for.
             Self::CompileTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+            // A conflict rather than a bad request: the request is well formed
+            // and it is the state of the page that refuses it, which is the
+            // distinction a caller needs to know whether to fix the request or
+            // the wiki.
+            Self::PageAssemblesOthers { .. } => StatusCode::CONFLICT,
             // The same status a page whose frontmatter will not parse gets, and
             // for the same reason: the request is well formed and the authored
             // file it reaches for is not.
             Self::ProseRulesInvalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::InvalidActor { .. }
+            | Self::SplitOffsetInvalid { .. }
+            | Self::MergeIntoItself { .. }
             | Self::InvalidRecordId { .. }
             | Self::InvalidTimeId { .. }
             | Self::TimeRangeInverted { .. }
@@ -493,6 +540,9 @@ impl AppError {
             Self::TooManyPins { .. } => "too_many_pins",
             Self::CompileRootNotFound { .. } => "compile_root_not_found",
             Self::CompileTooLarge { .. } => "compile_too_large",
+            Self::SplitOffsetInvalid { .. } => "split_offset_invalid",
+            Self::PageAssemblesOthers { .. } => "page_assembles_others",
+            Self::MergeIntoItself { .. } => "merge_into_itself",
             Self::ProseRulesInvalid { .. } => "prose_rules_invalid",
             Self::InvalidActor { .. } => "invalid_actor",
             Self::InvalidRequestBody { .. } => "invalid_request_body",
@@ -557,6 +607,24 @@ impl AppError {
                 "ceiling": ceiling,
                 "slug": at,
             })),
+            // Every number the caller needs to try again: what they sent, what
+            // the body turned out to be, and which rule it broke.
+            Self::SplitOffsetInvalid {
+                slug,
+                at,
+                length,
+                reason,
+            } => Some(json!({
+                "slug": slug,
+                "at": at,
+                "length": length,
+                "reason": reason,
+            })),
+            Self::PageAssemblesOthers { slug, consequence } => Some(json!({
+                "slug": slug,
+                "consequence": consequence,
+            })),
+            Self::MergeIntoItself { slug } => Some(json!({ "slug": slug })),
             // Names the file as well as the reason, because the one thing a
             // remote caller cannot do is go and look for it.
             Self::ProseRulesInvalid { reason } => Some(json!({

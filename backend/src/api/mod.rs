@@ -16,6 +16,7 @@ pub mod pages;
 pub mod pins;
 pub mod prose;
 pub mod search;
+pub mod spine;
 pub mod times;
 pub mod usage;
 pub mod users;
@@ -201,6 +202,11 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
             pages::delete
         ))
         .routes(routes!(pages::move_page))
+        // Beside `/api/move` and outside the slug namespace for the same routing
+        // reason, and next to it in the document because all three are edits to
+        // where a page is rather than to what it says.
+        .routes(routes!(spine::split_page))
+        .routes(routes!(spine::merge_pages))
         .routes(routes!(pages::render_markdown))
         .routes(routes!(compile::compile_pages))
         .routes(routes!(prose::read_prose, prose::check_prose))

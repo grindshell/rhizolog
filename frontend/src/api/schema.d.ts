@@ -585,6 +585,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fold one page into another and delete it.
+         * @description The destination's body comes first, then a blank line, then the source's. The
+         *     destination's frontmatter is untouched: its target still says what it said,
+         *     now over more words, which is a thing for its author to decide about rather
+         *     than for two numbers to be added together behind them.
+         *
+         *     Every `contents:` entry naming the source is removed, in every list, because
+         *     a page listed twice is gone twice once it is gone.
+         *
+         *     **A merge moves text to where the caller said**, which is the difference
+         *     between it and a split: a split derives the second half's position, and a
+         *     derived position that would silently restructure a document is refused.
+         */
+        post: operations["merge_pages"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/move": {
         parameters: {
             query?: never;
@@ -832,6 +862,34 @@ export interface paths {
         get: operations["search"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cut a page in two at an offset.
+         * @description The second half becomes a page of its own and is inserted into every
+         *     `contents:` list that named the first, immediately after it. A list that
+         *     already names the destination is left alone: splitting into a chapter
+         *     somebody outlined and never wrote is filling their gap, and a second entry
+         *     for it would be a `duplicate` for them to clean up.
+         *
+         *     Nothing is written and nothing is unwritten, so the word log records two
+         *     markers rather than a chapter losing two thousand words and another gaining
+         *     them.
+         */
+        post: operations["split_page"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2087,6 +2145,28 @@ export interface components {
             /** @description The account that was signed in. */
             user: components["schemas"]["UserView"];
         };
+        /** @description Which page is folded into which. */
+        MergePages: {
+            /**
+             * @description The page to fold in. It is deleted, and every `contents:` entry naming it
+             *     goes with it.
+             */
+            from: components["schemas"]["Slug"];
+            /** @description The page it joins. Its body comes first and its frontmatter is untouched. */
+            into: components["schemas"]["Slug"];
+        };
+        /** @description A page that grew by a merge, and what it cost. */
+        MergeResult: {
+            /**
+             * @description The page that grew, with both bodies in it and its own frontmatter
+             *     unchanged.
+             */
+            page: components["schemas"]["PageView"];
+            /** @description The page that is gone. */
+            removed: components["schemas"]["Slug"];
+            /** @description Every list that lost an entry, and what each says now. */
+            repaired: components["schemas"]["Repair"][];
+        };
         MovePage: {
             /** @description The page to move. `404` if there is nothing there. */
             from: components["schemas"]["Slug"];
@@ -3079,6 +3159,20 @@ export interface components {
              */
             html: string;
         };
+        /** @description A `contents:` list that was rewritten to keep a document in one piece. */
+        Repair: {
+            /**
+             * @description What its `contents:` list says now, in order, as written.
+             * @example [
+             *       "book/one/opening",
+             *       "book/one/the-ferry",
+             *       "book/one/the-crossing"
+             *     ]
+             */
+            contents: string[];
+            /** @description The page whose list changed. */
+            slug: components["schemas"]["Slug"];
+        };
         /** @description A whole page. Every field is replaced, including the ones left out. */
         ReplacePage: {
             /**
@@ -3435,6 +3529,54 @@ export interface components {
              * @example 1840
              */
             start: number;
+        };
+        /** @description Where to cut a page, and where the second half goes. */
+        SplitPage: {
+            /**
+             * @description Where to cut it: a **byte** offset into the body, not a character index
+             *     and not a line.
+             *
+             *     The same unit a `prose/v1` finding's span uses, so a client that can
+             *     reveal a finding in an editor can already produce one of these. It has to
+             *     fall between characters and leave text on both sides, or the request is
+             *     refused with the body's length so the offset can be worked out again.
+             * @example 1840
+             */
+            at: number;
+            /** @description The page to cut. `404` if there is nothing there. */
+            from: components["schemas"]["Slug"];
+            /**
+             * @description A title for the new page. Without one it falls back to the first heading
+             *     of the half that was cut off, and then to the slug, exactly as any other
+             *     page does.
+             * @example The Crossing
+             */
+            title?: string | null;
+            /** @description Where the second half goes. `409` if a page is already there. */
+            to: components["schemas"]["Slug"];
+        };
+        /** @description Both halves of a page that was cut in two. */
+        SplitResult: {
+            /** @description The page that was split. Its body is everything before the offset. */
+            head: components["schemas"]["PageView"];
+            /**
+             * @description Every list that gained the new page, and what each says now.
+             *
+             *     Empty when nothing assembled the page that was split, which is the
+             *     ordinary case for a page that is not part of a manuscript.
+             */
+            repaired: components["schemas"]["Repair"][];
+            /**
+             * @description The page that was made. Its body is everything after.
+             *
+             *     It inherits the tags, the visibility, the owner, the readers, the due
+             *     date, the stage and the compile flag, and it inherits **no** synopsis and
+             *     **no** target. A synopsis is a claim about what a chapter does and the
+             *     half cut off it is not that chapter; a target is a quantity, and halving
+             *     one would be arithmetic nobody did while copying one would double what the
+             *     book is aiming at.
+             */
+            tail: components["schemas"]["PageView"];
         };
         StatsResponse: {
             /** @description API calls per route since the wiki was created, busiest first. */
@@ -5260,6 +5402,57 @@ export interface operations {
             };
         };
     };
+    merge_pages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergePages"];
+            };
+        };
+        responses: {
+            /** @description The page that grew, and every list that was repaired */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeResult"];
+                };
+            };
+            /** @description A page cannot be merged into itself */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No page at one of the slugs */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The page being merged away assembles other pages */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     move_page: {
         parameters: {
             query?: never;
@@ -6077,6 +6270,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+        };
+    };
+    split_page: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SplitPage"];
+            };
+        };
+        responses: {
+            /** @description Both halves, and every list that was repaired */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SplitResult"];
+                };
+            };
+            /** @description The offset does not divide the body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No page at the source slug */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The destination is taken, or the source assembles other pages */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

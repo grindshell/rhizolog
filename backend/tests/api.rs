@@ -2648,6 +2648,463 @@ async fn reordering_a_spine_is_a_patch_of_its_contents() {
     assert_eq!(root.body["contents"][0], "book/gone");
 }
 
+// -------------------------------------------------------- split and merge
+
+/// A chapter with two scenes in it, in a book that lists it once.
+const TWO_SCENES: &str = "# The Ferry\n\nHe missed the crossing.\n\n# The Return\n\nHe came back \
+                          in the dark.\n";
+
+/// Where the second scene begins, as a byte offset into the body.
+fn second_scene() -> usize {
+    TWO_SCENES.find("# The Return").expect("a second heading")
+}
+
+async fn seed_two_scenes(app: &App) {
+    app.seed(
+        "book",
+        json!({
+            "content": "# Book\n",
+            "contents": ["book/the-ferry", "book/gone", "../nope"],
+        }),
+    )
+    .await;
+    app.seed("book/the-ferry", json!({ "content": TWO_SCENES }))
+        .await;
+}
+
+/// The whole of what the endpoint is for: two pages where there was one, and the
+/// list that named the first now naming both, in order.
+#[tokio::test]
+async fn splitting_a_chapter_puts_the_second_half_into_the_spine_after_it() {
+    let app = App::new().await;
+    seed_two_scenes(&app).await;
+
+    let res = app
+        .post(
+            "/api/split",
+            json!({
+                "from": "book/the-ferry",
+                "at": second_scene(),
+                "to": "book/the-return",
+                "title": "The Return",
+            }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK, "{:?}", res.body);
+    assert_eq!(
+        res.body["head"]["content"],
+        "# The Ferry\n\nHe missed the crossing.\n"
+    );
+    assert_eq!(
+        res.body["tail"]["content"],
+        "# The Return\n\nHe came back in the dark.\n"
+    );
+    assert_eq!(res.body["tail"]["title"], "The Return");
+
+    // One list repaired, reported as it now reads, with the entries a compile
+    // can make nothing of still in their places.
+    assert_eq!(res.body["repaired"].as_array().expect("repairs").len(), 1);
+    assert_eq!(res.body["repaired"][0]["slug"], "book");
+    assert_eq!(
+        res.body["repaired"][0]["contents"],
+        json!(["book/the-ferry", "book/the-return", "book/gone", "../nope"])
+    );
+
+    let compiled = app.get("/api/compile?root=book").await;
+    let order: Vec<&str> = compiled.body["sections"]
+        .as_array()
+        .expect("sections")
+        .iter()
+        .map(|section| section["slug"].as_str().expect("a slug"))
+        .collect();
+
+    assert_eq!(
+        order,
+        vec![
+            "book",
+            "book/the-ferry",
+            "book/the-return",
+            "book/gone",
+            "../nope"
+        ]
+    );
+}
+
+/// Nothing was written and nothing was unwritten, so the log says so with two
+/// markers rather than reporting a chapter losing half itself and another
+/// gaining the same words on a day nobody wrote a sentence.
+#[tokio::test]
+async fn a_split_records_two_markers_and_no_words() {
+    let app = App::new().await;
+    seed_two_scenes(&app).await;
+    let before = app.log().len();
+
+    app.post(
+        "/api/split",
+        json!({ "from": "book/the-ferry", "at": second_scene(), "to": "book/the-return" }),
+    )
+    .await;
+
+    let lines = app.log();
+    assert_eq!(lines.len(), before + 2, "one line a page, and no more");
+
+    let [head, tail] = &lines[before..] else {
+        panic!("expected two lines, got {:?}", &lines[before..]);
+    };
+
+    for line in [head, tail] {
+        assert_eq!(line[4], "split");
+        assert_eq!((&line[5], &line[6]), (&"0".to_owned(), &"0".to_owned()));
+    }
+    // Each one's total is checkable against the page it names, which is what
+    // stops the next startup scan reporting the difference as a `net`.
+    assert_eq!(
+        (head[1].as_str(), head[7].as_str()),
+        ("book/the-ferry", "6")
+    );
+    assert_eq!(
+        (tail[1].as_str(), tail[7].as_str()),
+        ("book/the-return", "8")
+    );
+    // And the half that was cut off says where it came from, so one chapter's
+    // history can be followed across the cut.
+    assert_eq!(head[8], "");
+    assert_eq!(tail[8], "book/the-ferry");
+}
+
+/// What describes the **page** carries over and what describes the **chapter**
+/// does not. The visibility is the one that would be a defect rather than a
+/// surprise.
+#[tokio::test]
+async fn a_split_inherits_the_page_and_not_the_claims_made_about_it() {
+    let app = App::new().await;
+    app.seed(
+        "book/the-ferry",
+        json!({
+            "content": TWO_SCENES,
+            "tags": ["fiction"],
+            "visibility": "private",
+            "stage": "drafted",
+            "due": "2027-03-01T00:00:00Z",
+            "synopsis": "He misses the crossing.",
+            "target": 3000,
+            "compile": false,
+        }),
+    )
+    .await;
+
+    let res = app
+        .post(
+            "/api/split",
+            json!({ "from": "book/the-ferry", "at": second_scene(), "to": "book/the-return" }),
+        )
+        .await;
+    let tail = &res.body["tail"];
+
+    assert_eq!(tail["tags"], json!(["fiction"]));
+    assert_eq!(tail["visibility"], "private");
+    assert_eq!(tail["stage"], "drafted");
+    assert_eq!(tail["due"], "2027-03-01T00:00:00Z");
+    assert_eq!(tail["compile"], false);
+
+    // A synopsis is a claim about what a chapter does, and this is not that
+    // chapter. A target is a quantity, and copying one would double what the
+    // book is aiming at.
+    assert!(tail.get("synopsis").is_none());
+    assert!(tail.get("target").is_none());
+    // Both stay where they were said.
+    assert_eq!(res.body["head"]["synopsis"], "He misses the crossing.");
+    assert_eq!(res.body["head"]["target"], 3000);
+}
+
+/// Splitting into a chapter somebody outlined and never wrote fills their gap. A
+/// second entry for it would be a `duplicate` for them to clean up.
+#[tokio::test]
+async fn splitting_into_a_gap_fills_it_rather_than_doubling_it() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({
+            "content": "# Book\n",
+            "contents": ["book/the-ferry", "book/the-return"],
+        }),
+    )
+    .await;
+    app.seed("book/the-ferry", json!({ "content": TWO_SCENES }))
+        .await;
+
+    let res = app
+        .post(
+            "/api/split",
+            json!({ "from": "book/the-ferry", "at": second_scene(), "to": "book/the-return" }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK, "{:?}", res.body);
+    assert!(
+        res.body["repaired"].as_array().expect("repairs").is_empty(),
+        "the list already said where the chapter goes"
+    );
+    assert_eq!(
+        app.get("/api/pages/book").await.body["contents"],
+        json!(["book/the-ferry", "book/the-return"])
+    );
+}
+
+/// The offset came from a body the caller may no longer be holding, so the
+/// refusal carries the length as well as the rule.
+#[tokio::test]
+async fn an_offset_that_will_not_divide_a_body_is_refused_with_its_length() {
+    let app = App::new().await;
+    app.seed("notes/one", json!({ "content": "café\n\nau lait\n" }))
+        .await;
+
+    for at in [0, 4, 99] {
+        let res = app
+            .post(
+                "/api/split",
+                json!({ "from": "notes/one", "at": at, "to": "notes/two" }),
+            )
+            .await;
+
+        assert_eq!(res.status, StatusCode::BAD_REQUEST, "at {at}");
+        assert_eq!(res.body["error"]["code"], "split_offset_invalid");
+        assert_eq!(res.body["error"]["details"]["at"], at);
+        // Fifteen bytes and fourteen characters, which is the whole reason an
+        // offset can land inside one.
+        assert_eq!(res.body["error"]["details"]["length"], 15);
+        assert!(res.body["error"]["details"]["reason"].is_string());
+    }
+
+    // Nothing was written on the way to any of those refusals.
+    assert_eq!(
+        app.get("/api/pages/notes/one").await.body["content"],
+        "café\n\nau lait\n"
+    );
+    assert_eq!(
+        app.get("/api/pages/notes/two").await.status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// The second half of a part's epigraph would compile after every chapter the
+/// part assembles, which is a document quietly restructuring itself.
+#[tokio::test]
+async fn splitting_a_page_that_assembles_others_is_refused() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": TWO_SCENES, "contents": ["book/the-ferry"] }),
+    )
+    .await;
+
+    let res = app
+        .post(
+            "/api/split",
+            json!({ "from": "book", "at": second_scene(), "to": "book/the-return" }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::CONFLICT);
+    assert_eq!(res.body["error"]["code"], "page_assembles_others");
+    assert_eq!(res.body["error"]["details"]["slug"], "book");
+    assert_eq!(app.get("/api/pages/book").await.body["content"], TWO_SCENES);
+}
+
+/// A destination that is taken is refused before the source has been touched,
+/// which is why the create comes first: the other order would truncate a page
+/// and lose the half nothing else has a copy of.
+#[tokio::test]
+async fn splitting_onto_a_slug_that_is_taken_changes_nothing() {
+    let app = App::new().await;
+    app.seed("book/the-ferry", json!({ "content": TWO_SCENES }))
+        .await;
+    app.seed("book/the-return", json!({ "content": "Already here.\n" }))
+        .await;
+
+    let res = app
+        .post(
+            "/api/split",
+            json!({ "from": "book/the-ferry", "at": second_scene(), "to": "book/the-return" }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::CONFLICT);
+    assert_eq!(res.body["error"]["code"], "page_already_exists");
+    assert_eq!(
+        app.get("/api/pages/book/the-ferry").await.body["content"],
+        TWO_SCENES
+    );
+    assert_eq!(
+        app.get("/api/pages/book/the-return").await.body["content"],
+        "Already here.\n"
+    );
+}
+
+/// The inverse: one page where there were two, and every list that named the
+/// one that is gone rewritten without it.
+#[tokio::test]
+async fn merging_a_chapter_folds_its_words_in_and_takes_it_out_of_the_spine() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({
+            "content": "# Book\n",
+            "contents": ["book/the-ferry", "book/the-return", "book/the-return"],
+        }),
+    )
+    .await;
+    app.seed(
+        "book/the-ferry",
+        json!({ "content": "# The Ferry\n\nHe missed the crossing.\n", "target": 3000 }),
+    )
+    .await;
+    app.seed(
+        "book/the-return",
+        json!({ "content": "# The Return\n\nHe came back in the dark.\n" }),
+    )
+    .await;
+
+    let res = app
+        .post(
+            "/api/merge",
+            json!({ "from": "book/the-return", "into": "book/the-ferry" }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK, "{:?}", res.body);
+    assert_eq!(res.body["page"]["content"], TWO_SCENES);
+    assert_eq!(res.body["removed"], "book/the-return");
+    // The destination's own frontmatter is untouched. Its target still says what
+    // it said, now over more words, which is a thing for its author to decide
+    // about rather than for two numbers to be added together behind them.
+    assert_eq!(res.body["page"]["target"], 3000);
+
+    // Listed twice, gone twice.
+    assert_eq!(
+        res.body["repaired"][0]["contents"],
+        json!(["book/the-ferry"])
+    );
+    assert_eq!(
+        app.get("/api/pages/book/the-return").await.status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn a_merge_records_a_marker_and_a_delete_and_no_words() {
+    let app = App::new().await;
+    app.seed("notes/one", json!({ "content": "One two three.\n" }))
+        .await;
+    app.seed("notes/two", json!({ "content": "Four five.\n" }))
+        .await;
+    let before = app.log().len();
+
+    app.post(
+        "/api/merge",
+        json!({ "from": "notes/two", "into": "notes/one" }),
+    )
+    .await;
+
+    let lines = app.log();
+    let [merged, deleted] = &lines[before..] else {
+        panic!("expected two lines, got {:?}", &lines[before..]);
+    };
+
+    assert_eq!(
+        (merged[1].as_str(), merged[4].as_str()),
+        ("notes/one", "merged")
+    );
+    assert_eq!((merged[5].as_str(), merged[6].as_str()), ("0", "0"));
+    assert_eq!(merged[7], "5", "three words and two, and none of them new");
+    assert_eq!(merged[8], "notes/two");
+
+    // The ordinary delete marker, which is what closes the series at the slug
+    // that is now empty.
+    assert_eq!(
+        (deleted[1].as_str(), deleted[4].as_str()),
+        ("notes/two", "deleted")
+    );
+}
+
+/// Left to run it would append a page to itself and then delete it, so the
+/// caller most likely to send this is the one who can least afford it.
+#[tokio::test]
+async fn merging_a_page_into_itself_is_refused() {
+    let app = App::new().await;
+    app.seed("notes/one", json!({ "content": "One two three.\n" }))
+        .await;
+
+    let res = app
+        .post(
+            "/api/merge",
+            json!({ "from": "notes/one", "into": "notes/one" }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.body["error"]["code"], "merge_into_itself");
+    assert_eq!(
+        app.get("/api/pages/notes/one").await.body["content"],
+        "One two three.\n"
+    );
+}
+
+/// Merging away a part would leave every chapter under it named by nothing.
+#[tokio::test]
+async fn merging_away_a_page_that_assembles_others_is_refused() {
+    let app = App::new().await;
+    app.seed(
+        "book/one",
+        json!({ "content": "## Part one\n", "contents": ["book/the-ferry"] }),
+    )
+    .await;
+    app.seed("book", json!({ "content": "# Book\n" })).await;
+
+    let res = app
+        .post("/api/merge", json!({ "from": "book/one", "into": "book" }))
+        .await;
+
+    assert_eq!(res.status, StatusCode::CONFLICT);
+    assert_eq!(res.body["error"]["code"], "page_assembles_others");
+    assert_eq!(
+        app.get("/api/pages/book/one").await.status,
+        StatusCode::OK,
+        "and the page is still there"
+    );
+}
+
+/// The property the pair is worth having: a split and the merge that undoes it
+/// leave the document exactly as it was, spine and bytes alike.
+#[tokio::test]
+async fn a_split_and_the_merge_that_undoes_it_compile_to_the_same_document() {
+    let app = App::new().await;
+    seed_two_scenes(&app).await;
+    let before = app.get("/api/compile?root=book").await;
+
+    app.post(
+        "/api/split",
+        json!({ "from": "book/the-ferry", "at": second_scene(), "to": "book/the-return" }),
+    )
+    .await;
+    let res = app
+        .post(
+            "/api/merge",
+            json!({ "from": "book/the-return", "into": "book/the-ferry" }),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{:?}", res.body);
+
+    let after = app.get("/api/compile?root=book").await;
+    assert_eq!(after.body["markdown"], before.body["markdown"]);
+    assert_eq!(after.body["words"], before.body["words"]);
+    assert_eq!(
+        app.get("/api/pages/book").await.body["contents"],
+        json!(["book/the-ferry", "book/gone", "../nope"])
+    );
+}
+
 // ------------------------------------------------------------------ pace
 
 /// Seed a book with a target, a deadline and a scene that was cut.

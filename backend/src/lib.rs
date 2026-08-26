@@ -20,6 +20,7 @@ pub mod page;
 pub mod prose;
 pub mod server;
 pub mod slug;
+pub mod spine;
 pub mod store;
 pub mod times;
 pub mod users;

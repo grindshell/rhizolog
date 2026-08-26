@@ -134,6 +134,26 @@ pub enum Kind {
     /// A marker rather than a churn: nothing was written. It closes the series
     /// at the old slug and continues it at the new one.
     Moved,
+    /// The page was cut in two, or is the half that was cut off. The second
+    /// carries the slug it came from.
+    ///
+    /// A marker for the same reason [`Kind::Moved`] is one: moving the boundary
+    /// between two pages writes nothing and unwrites nothing. Recorded as an
+    /// ordinary observation instead, a split would report a chapter losing two
+    /// thousand words and another gaining them on a day nobody wrote a sentence,
+    /// which is exactly the reading this log exists to refuse.
+    ///
+    /// Unlike a move it closes **no** series. The page that was split is still
+    /// that page and its history runs straight through; the half that was cut off
+    /// begins one.
+    Split,
+    /// Another page's words were folded into this one. Carries the slug they
+    /// came from, which is gone.
+    ///
+    /// The other half of [`Kind::Split`] and a marker on the same terms. The page
+    /// that was merged away gets its own [`Kind::Deleted`] line, which is what
+    /// closes its series.
+    Merged,
     /// The page is gone.
     ///
     /// `removed` is **zero**, deliberately. The words were written and deleting
@@ -150,6 +170,8 @@ impl Kind {
             Self::Observed => "observed",
             Self::Net => "net",
             Self::Moved => "moved",
+            Self::Split => "split",
+            Self::Merged => "merged",
             Self::Deleted => "deleted",
         }
     }
@@ -160,6 +182,8 @@ impl Kind {
             "observed" => Some(Self::Observed),
             "net" => Some(Self::Net),
             "moved" => Some(Self::Moved),
+            "split" => Some(Self::Split),
+            "merged" => Some(Self::Merged),
             "deleted" => Some(Self::Deleted),
             _ => None,
         }
@@ -171,6 +195,11 @@ impl Kind {
     }
 
     /// Whether this line ends whatever series came before it at a slug.
+    ///
+    /// Neither [`Kind::Split`] nor [`Kind::Merged`] does. Both name a second slug
+    /// the way a move does and neither vacates one: a page that was split is
+    /// still there, and a page that grew by a merge was already there. The page
+    /// that was merged away is closed by its own [`Kind::Deleted`] line.
     pub fn closes_a_series(self) -> bool {
         matches!(self, Self::Deleted | Self::Moved)
     }
@@ -495,6 +524,91 @@ pub async fn moved(
     .await;
 }
 
+/// One side of a split: which slug, and what it came to.
+///
+/// A pair rather than four loose arguments, because the two halves take the same
+/// two values and a call site that got them crossed would write each page's total
+/// against the other's slug.
+#[derive(Debug, Clone, Copy)]
+pub struct Half<'a> {
+    pub slug: &'a Slug,
+    /// The page's own count after the cut. See [`Observation::total`].
+    pub total: u64,
+}
+
+/// Record that a page was cut in two.
+///
+/// Two lines, one at each slug, both with `added` and `removed` at zero. The
+/// words on either side of the cut are the words that were there a moment ago,
+/// so a split is a boundary moving rather than a day's work: recorded as
+/// ordinary observations the two lines would say that somebody unwrote half a
+/// chapter and wrote another one, on a day they moved a cursor.
+///
+/// What the lines are for is [`Observation::total`], which every slug's series
+/// is checked against. Without them the next startup scan would find both files
+/// disagreeing with the log and report the difference as a [`Kind::Net`], which
+/// is the same wrong number with a worse label on it.
+pub async fn split(
+    log: &WordLog,
+    index: &Index,
+    head: Half<'_>,
+    tail: Half<'_>,
+    by: &By,
+    at: DateTime<Utc>,
+) {
+    let line = |half: Half<'_>, from| Observation {
+        at,
+        slug: half.slug.clone(),
+        actor: by.actor.clone(),
+        account: by.account.clone(),
+        kind: Kind::Split,
+        added: 0,
+        removed: 0,
+        total: half.total,
+        from,
+    };
+
+    record(log, index, line(head, None)).await;
+    // The tail names where it came from, exactly as a move does, so a reader
+    // following one page's history back can cross the cut.
+    record(log, index, line(tail, Some(head.slug.clone()))).await;
+}
+
+/// Record that one page's words were folded into another.
+///
+/// One line, at the page that grew, naming the page that is gone. A marker on
+/// [`split`]'s terms and for its reason: the words arrived from somewhere else
+/// and were not written today.
+///
+/// The page they came from is closed by the [`deleted`] marker its removal
+/// writes, which is the ordinary one and is not this function's to write.
+pub async fn merged(
+    log: &WordLog,
+    index: &Index,
+    from: &Slug,
+    into: &Slug,
+    by: &By,
+    at: DateTime<Utc>,
+    total: u64,
+) {
+    record(
+        log,
+        index,
+        Observation {
+            at,
+            slug: into.clone(),
+            actor: by.actor.clone(),
+            account: by.account.clone(),
+            kind: Kind::Merged,
+            added: 0,
+            removed: 0,
+            total,
+            from: Some(from.clone()),
+        },
+    )
+    .await;
+}
+
 /// Record that a page is gone.
 ///
 /// The history outlives it. What the marker is for is the next page written at
@@ -590,6 +704,52 @@ mod tests {
         };
 
         assert_eq!(Observation::parse(&written.line()), Some(written));
+    }
+
+    /// The half cut off a page names where it came from, which is what lets a
+    /// reader follow one chapter's history across the cut.
+    #[test]
+    fn a_split_carries_the_slug_it_was_cut_from() {
+        let written = Observation {
+            kind: Kind::Split,
+            from: Some(slug("book/one/opening")),
+            added: 0,
+            removed: 0,
+            ..observation()
+        };
+
+        assert_eq!(Observation::parse(&written.line()), Some(written));
+    }
+
+    #[test]
+    fn a_merge_carries_the_slug_the_words_came_from() {
+        let written = Observation {
+            kind: Kind::Merged,
+            from: Some(slug("book/one/opening")),
+            added: 0,
+            removed: 0,
+            ..observation()
+        };
+
+        assert_eq!(Observation::parse(&written.line()), Some(written));
+    }
+
+    /// Neither is a day's work and neither vacates a slug. Getting the second
+    /// wrong would break a page's series in half every time it was split.
+    #[test]
+    fn neither_marker_is_work_and_neither_closes_a_series() {
+        for kind in [Kind::Split, Kind::Merged] {
+            assert!(
+                !kind.is_work(),
+                "{} counted as words written",
+                kind.as_str()
+            );
+            assert!(
+                !kind.closes_a_series(),
+                "{} vacated the slug it was written at",
+                kind.as_str()
+            );
+        }
     }
 
     /// A log written by a later version has to stay readable by this one, and an

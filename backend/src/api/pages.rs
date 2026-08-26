@@ -215,7 +215,7 @@ pub struct PageView {
 }
 
 impl PageView {
-    fn new(page: &Page, render: bool) -> Self {
+    pub(crate) fn new(page: &Page, render: bool) -> Self {
         Self {
             slug: page.slug.clone(),
             title: page.title(),
@@ -1235,7 +1235,7 @@ fn created(page: &Page) -> Response {
 /// was made as. The label comes off a header and is a claim; the account comes
 /// off the session and is not, which is why a label can never be used to say you
 /// are somebody else.
-fn by(actor: &Actor, viewer: &Viewer) -> By {
+pub(crate) fn by(actor: &Actor, viewer: &Viewer) -> By {
     By {
         actor: actor.0.clone(),
         account: viewer.username().cloned(),
