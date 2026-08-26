@@ -169,7 +169,12 @@ pub fn build(samples: &[Sample], at: DateTime<Utc>, offset_minutes: i32) -> Time
 /// Anything outside ±24 hours is nonsense a client should not have sent, and UTC
 /// is a better answer to it than a panic.
 fn zone(offset_minutes: i32) -> FixedOffset {
-    FixedOffset::east_opt(offset_minutes * 60)
+    // The multiplication is checked as well as the result. A large enough number
+    // of minutes overflows on the way to seconds, which in a debug build panics
+    // before there is anything for `east_opt` to reject.
+    offset_minutes
+        .checked_mul(60)
+        .and_then(FixedOffset::east_opt)
         .unwrap_or_else(|| FixedOffset::east_opt(0).expect("UTC is a valid offset"))
 }
 

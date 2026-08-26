@@ -262,15 +262,41 @@ pub fn extract_links(source: &Slug, markdown: &str) -> Vec<Link> {
 /// A word is a whitespace-separated run holding at least one alphanumeric
 /// character, so `--` and `|` in a table rule are not words and `it's` is one.
 pub fn count_words(markdown: &str) -> u64 {
+    readable_text(markdown)
+        .split_whitespace()
+        .filter(is_word)
+        .count() as u64
+}
+
+/// The same words, as words.
+///
+/// What [`count_words`] counts, kept rather than tallied, for
+/// [`crate::words::diff`] to compare two versions of a page with. Separate from
+/// the counter rather than the counter being written over it, because counting
+/// is what runs on every page of a twenty-thousand-page rebuild and it should
+/// not start allocating a string per word to do it.
+pub fn words(markdown: &str) -> Vec<String> {
+    readable_text(markdown)
+        .split_whitespace()
+        .filter(is_word)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A word is a whitespace-separated run holding at least one alphanumeric
+/// character, so `--` and `|` in a table rule are not words and `it's` is one.
+fn is_word(run: &&str) -> bool {
+    run.chars().any(char::is_alphanumeric)
+}
+
+/// Everything on the page that is read, as one string.
+fn readable_text(markdown: &str) -> String {
     let arena = Arena::new();
     let root = comrak::parse_document(&arena, markdown, &options());
 
     let mut text = String::new();
     collect_text(root, &mut text);
-
-    text.split_whitespace()
-        .filter(|word| word.chars().any(char::is_alphanumeric))
-        .count() as u64
+    text
 }
 
 /// What one node contributes to the readable text of a page.

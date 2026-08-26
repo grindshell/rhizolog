@@ -24,6 +24,7 @@ use crate::ideas::IdeaStore;
 use crate::index::{Index, IndexError};
 use crate::store::Store;
 use crate::times::TimeStore;
+use crate::words::{self, By, WordLog};
 
 /// What one scan of one tree found.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -88,14 +89,22 @@ pub async fn sync(
     store: &Store,
     times: &TimeStore,
     ideas: &IdeaStore,
+    words: &WordLog,
     index: &Index,
 ) -> Result<SyncReport, IndexError> {
+    // **Before the pages**, and the order is load-bearing rather than tidy. The
+    // page scan asks the index what each page's last recorded total was, to tell
+    // a first sighting from an edit. On a database that has just been deleted
+    // the answer is nothing at all until the log has been read back in, and
+    // every page in the wiki would be reported as written today.
+    sync_words(words, index).await?;
+
     // Captures, then threads, then events, which is the order that folds each
     // idea the fewest times. Correctness does not depend on it: every write
     // recomputes what it bears on, so an event read before the thread it names
     // folds again when that thread arrives. See [`crate::index::ideas`].
     let report = SyncReport {
-        pages: sync_pages(store, index).await?,
+        pages: sync_pages(store, words, index).await?,
         times: sync_times(times, index).await?,
         captures: sync_captures(ideas, index).await?,
         ideas: sync_idea_threads(ideas, index).await?,
@@ -106,7 +115,41 @@ pub async fn sync(
     Ok(report)
 }
 
-async fn sync_pages(store: &Store, index: &Index) -> Result<SyncCounts, IndexError> {
+/// Read the word log back into `page_words`.
+///
+/// Wholesale, every time, rather than compared file by file like the five trees
+/// below. The log is a few hundred kilobytes a year and a partial rebuild has
+/// states a whole one cannot get into, so the cheap and obviously correct
+/// operation is the right one. It is also what makes deleting the database cost
+/// nothing but a read.
+///
+/// Not an error if the log is unreadable: a wiki whose word history cannot be
+/// loaded should still be served, with the series empty, exactly as a wiki that
+/// cannot be watched is still served. It is loud about it.
+async fn sync_words(words: &WordLog, index: &Index) -> Result<(), IndexError> {
+    let (observations, skipped) = match words.read().await {
+        Ok(read) => read,
+        Err(error) => {
+            tracing::error!(%error, "could not read the word log; the series will be empty");
+            return Ok(());
+        }
+    };
+
+    if skipped > 0 {
+        tracing::warn!(skipped, "skipped word log lines that would not parse");
+    }
+
+    index.rebuild_words(&observations).await?;
+    tracing::debug!(observations = observations.len(), "loaded the word log");
+
+    Ok(())
+}
+
+async fn sync_pages(
+    store: &Store,
+    words: &WordLog,
+    index: &Index,
+) -> Result<SyncCounts, IndexError> {
     let walker = store.clone();
     let entries = tokio::task::spawn_blocking(move || walker.walk())
         .await
@@ -121,6 +164,11 @@ async fn sync_pages(store: &Store, index: &Index) -> Result<SyncCounts, IndexErr
         ..SyncCounts::default()
     };
 
+    // One instant for the whole scan. A scan of twenty thousand pages that
+    // stamped each observation with its own `now` would spread one restart
+    // across several minutes of the chart.
+    let now = Utc::now();
+
     for entry in entries {
         let previous = stale.remove(&entry.slug);
 
@@ -132,7 +180,11 @@ async fn sync_pages(store: &Store, index: &Index) -> Result<SyncCounts, IndexErr
 
         match store.read(&entry.slug).await {
             Ok(page) => {
-                index.upsert(&page).await?;
+                let change = index.upsert(&page).await?;
+                // A page nobody touched produces nothing here, which is what
+                // makes a rebuild free: the file's count and the log's last
+                // total agree, so there is nothing to record.
+                words::observe(words, index, &page.slug, &By::scan(), now, change).await;
                 counts.indexed += 1;
             }
             Err(error) => {
@@ -140,6 +192,10 @@ async fn sync_pages(store: &Store, index: &Index) -> Result<SyncCounts, IndexErr
                 // cannot be read cannot be served, and a search hit that 404s
                 // is worse than no hit at all. Its stamp is gone too, so a
                 // transient failure simply reindexes on the next scan.
+                //
+                // No word log entry: the file is still there and is still
+                // somebody's writing. Only a page that has actually gone gets a
+                // `deleted` marker, which is the loop below.
                 tracing::warn!(slug = %entry.slug, %error, "could not index page");
                 index.remove(&entry.slug).await?;
                 counts.failed += 1;
@@ -148,7 +204,10 @@ async fn sync_pages(store: &Store, index: &Index) -> Result<SyncCounts, IndexErr
     }
 
     for slug in stale.keys() {
+        // Gone from disk while nothing was watching. The marker is what stops a
+        // page later written at the same slug from continuing this one's series.
         index.remove(slug).await?;
+        words::deleted(words, index, slug, &By::scan(), now).await;
         counts.removed += 1;
     }
 
@@ -339,10 +398,11 @@ pub async fn rebuild(
     store: &Store,
     times: &TimeStore,
     ideas: &IdeaStore,
+    words: &WordLog,
     index: &Index,
 ) -> Result<SyncReport, IndexError> {
     index.clear().await?;
-    sync(store, times, ideas, index).await
+    sync(store, times, ideas, words, index).await
 }
 
 #[cfg(test)]
@@ -367,7 +427,7 @@ mod tests {
     use crate::times::store::TimeDraft;
     use std::collections::HashMap;
 
-    async fn fixture() -> (TempDir, Store, TimeStore, IdeaStore, Index) {
+    async fn fixture() -> (TempDir, Store, TimeStore, IdeaStore, WordLog, Index) {
         let directory = TempDir::new().expect("temp dir");
         let store = Store::open(directory.path()).await.expect("open store");
         let times = TimeStore::open(directory.path())
@@ -376,8 +436,11 @@ mod tests {
         let ideas = IdeaStore::open(directory.path())
             .await
             .expect("open idea inbox");
+        let words = WordLog::open(directory.path())
+            .await
+            .expect("open word log");
         let index = Index::open(None).await.expect("open index");
-        (directory, store, times, ideas, index)
+        (directory, store, times, ideas, words, index)
     }
 
     fn slug(raw: &str) -> Slug {
@@ -424,12 +487,12 @@ mod tests {
 
     #[tokio::test]
     async fn indexes_everything_on_a_first_scan() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         for n in 0..3 {
             write(&store, &format!("page-{n}"), "A page about rhizomes.\n").await;
         }
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.pages.scanned, 3);
         assert_eq!(report.pages.indexed, 3);
@@ -447,15 +510,15 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_scan_reindexes_nothing() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         write(&store, "page-0", "Body.\n").await;
         times
             .create(draft("Deep work", "2026-08-06T09:00:00Z"))
             .await
             .unwrap();
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.pages.unchanged, 1);
         assert_eq!(report.times.unchanged, 1);
@@ -466,9 +529,9 @@ mod tests {
 
     #[tokio::test]
     async fn picks_up_a_page_edited_outside_the_api() {
-        let (directory, store, times, ideas, index) = fixture().await;
+        let (directory, store, times, ideas, words, index) = fixture().await;
         write(&store, "page-0", "Original body.\n").await;
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         // Edited behind the server's back, as an external editor would.
         tokio::fs::write(
@@ -478,7 +541,7 @@ mod tests {
         .await
         .expect("external edit");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.pages.indexed, 1);
         assert_eq!(
@@ -501,16 +564,16 @@ mod tests {
 
     #[tokio::test]
     async fn drops_a_page_deleted_outside_the_api() {
-        let (directory, store, times, ideas, index) = fixture().await;
+        let (directory, store, times, ideas, words, index) = fixture().await;
         write(&store, "page-0", "Body.\n").await;
         write(&store, "page-1", "Body.\n").await;
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         tokio::fs::remove_file(directory.path().join("page-0.md"))
             .await
             .expect("external delete");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.pages.removed, 1);
         assert_eq!(index.count(&EVERYONE).await.unwrap(), 1);
@@ -520,7 +583,7 @@ mod tests {
     /// The time log is files too, so hand-editing it has to work the same way.
     #[tokio::test]
     async fn picks_up_a_time_entry_written_by_hand() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         let month = times.root().join("2026-08");
         tokio::fs::create_dir_all(&month).await.expect("month");
         tokio::fs::write(
@@ -530,7 +593,7 @@ mod tests {
         .await
         .expect("hand-written entry");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.times.scanned, 1);
         assert_eq!(report.times.indexed, 1);
@@ -541,19 +604,19 @@ mod tests {
 
     #[tokio::test]
     async fn drops_a_time_entry_deleted_outside_the_api() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         let written = times
             .create(draft("Deep work", "2026-08-06T09:00:00Z"))
             .await
             .unwrap();
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
         assert_eq!(index.count_times().await.unwrap(), 1);
 
         tokio::fs::remove_file(written.id.to_path(times.root()))
             .await
             .expect("external delete");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.times.removed, 1);
         assert_eq!(index.count_times().await.unwrap(), 0);
@@ -562,7 +625,7 @@ mod tests {
     /// One unreadable file must not stop the wiki from indexing.
     #[tokio::test]
     async fn a_malformed_page_is_skipped_not_fatal() {
-        let (directory, store, times, ideas, index) = fixture().await;
+        let (directory, store, times, ideas, words, index) = fixture().await;
         write(&store, "good", "A page about rhizomes.\n").await;
         tokio::fs::write(
             directory.path().join("broken.md"),
@@ -571,7 +634,7 @@ mod tests {
         .await
         .expect("write broken page");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.pages.scanned, 2);
         assert_eq!(report.pages.indexed, 1);
@@ -589,7 +652,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_malformed_time_entry_is_skipped_not_fatal() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         times
             .create(draft("Deep work", "2026-08-06T09:00:00Z"))
             .await
@@ -602,7 +665,7 @@ mod tests {
         .await
         .expect("write broken entry");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.times.scanned, 2);
         assert_eq!(report.times.indexed, 1);
@@ -614,9 +677,9 @@ mod tests {
     /// a search hit that cannot be fetched.
     #[tokio::test]
     async fn a_page_that_breaks_is_dropped_from_the_index() {
-        let (directory, store, times, ideas, index) = fixture().await;
+        let (directory, store, times, ideas, words, index) = fixture().await;
         write(&store, "page-0", "A page about rhizomes.\n").await;
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
         assert_eq!(index.count(&EVERYONE).await.unwrap(), 1);
 
         tokio::fs::write(
@@ -626,7 +689,7 @@ mod tests {
         .await
         .expect("break the page");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.pages.failed, 1);
         assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
@@ -640,11 +703,156 @@ mod tests {
         );
     }
 
+    // -------------------------------------------------------------- word log
+
+    /// A wiki that existed before the server did is not a wiki written today.
+    #[tokio::test]
+    async fn a_first_scan_baselines_rather_than_claiming_the_wiki_was_written() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+        write(&store, "a", "One two three four.\n").await;
+        write(&store, "b", "Five six.\n").await;
+
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        let (log, skipped) = words.read().await.unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(log.len(), 2);
+
+        for observation in &log {
+            assert_eq!(observation.kind, crate::words::Kind::Baseline);
+            assert_eq!(observation.actor, crate::words::ACTOR_SCAN);
+            assert_eq!((observation.added, observation.removed), (0, 0));
+        }
+        assert_eq!(log[0].total, 4);
+        assert_eq!(log[1].total, 2);
+    }
+
+    /// A second scan over a wiki nobody touched writes nothing at all.
+    #[tokio::test]
+    async fn a_scan_that_found_nothing_new_records_nothing() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+        write(&store, "a", "One two three.\n").await;
+
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        assert_eq!(words.read().await.unwrap().0.len(), 1);
+    }
+
+    /// **The property that made this a log on disk rather than rows in the
+    /// database.** Every document in this project tells the reader that deleting
+    /// the index costs one scan, and a writing history is unreconstructable, so
+    /// the two claims have to be able to coexist.
+    #[tokio::test]
+    async fn deleting_the_index_reproduces_the_whole_series() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+
+        write(&store, "a", "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+        write(&store, "a", "One two three four five.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        let before = index.count_words_observed().await.unwrap();
+        assert_eq!(before, 2, "a baseline and an edit");
+        assert_eq!(index.last_word_total(&slug("a")).await.unwrap(), Some(5));
+
+        // Throw the whole database away, which is what the architecture says is
+        // safe to do.
+        let fresh = Index::open(None).await.expect("a new index");
+        sync(&store, &times, &ideas, &words, &fresh).await.unwrap();
+
+        assert_eq!(fresh.count_words_observed().await.unwrap(), before);
+        assert_eq!(fresh.last_word_total(&slug("a")).await.unwrap(), Some(5));
+        assert_eq!(
+            words.read().await.unwrap().0.len(),
+            before,
+            "and the scan added nothing: every page's count still matches the log"
+        );
+    }
+
+    /// The one case a lost index really does cost something. The previous body
+    /// went with `pages_fts`, so the difference between the two totals is all
+    /// there is, and it is recorded as a net rather than dressed up as a churn.
+    #[tokio::test]
+    async fn a_change_made_while_the_index_was_gone_is_a_net() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+
+        write(&store, "a", "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        // The database is deleted, and only then does the file change.
+        let fresh = Index::open(None).await.expect("a new index");
+        write(&store, "a", "One two three four five.\n").await;
+        sync(&store, &times, &ideas, &words, &fresh).await.unwrap();
+
+        let (log, _) = words.read().await.unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[1].kind, crate::words::Kind::Net);
+        assert_eq!((log[1].added, log[1].removed), (2, 0));
+        assert_eq!(log[1].total, 5);
+    }
+
+    /// A page gone from disk while nothing was watching closes its series, so
+    /// the next page written at that slug is a new page rather than an edit.
+    #[tokio::test]
+    async fn a_page_that_vanished_while_the_server_was_down_is_marked_deleted() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+
+        write(&store, "a", "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        store.delete(&slug("a")).await.expect("delete");
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        let (log, _) = words.read().await.unwrap();
+        assert_eq!(log[1].kind, crate::words::Kind::Deleted);
+        assert_eq!(log[1].actor, crate::words::ACTOR_SCAN);
+        assert_eq!(index.last_word_total(&slug("a")).await.unwrap(), None);
+    }
+
+    /// A file that will not parse is still somebody's writing. Marking it
+    /// deleted would make the next successful save look like a brand new page.
+    #[tokio::test]
+    async fn a_page_that_stopped_parsing_does_not_close_its_series() {
+        let (directory, store, times, ideas, words, index) = fixture().await;
+
+        write(&store, "a", "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        tokio::fs::write(
+            directory.path().join("a.md"),
+            "---\ntags: not a list\n---\n",
+        )
+        .await
+        .expect("break the page");
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        assert_eq!(report.pages.failed, 1);
+        assert_eq!(words.read().await.unwrap().0.len(), 1);
+        assert_eq!(index.last_word_total(&slug("a")).await.unwrap(), Some(3));
+    }
+
+    /// A log line nobody can read costs itself and nothing else, and the scan
+    /// says so rather than failing.
+    #[tokio::test]
+    async fn a_broken_log_line_does_not_stop_a_scan() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+        tokio::fs::write(words.root().join("2026-08.log"), "not a line at all\n")
+            .await
+            .expect("write a broken log");
+
+        write(&store, "a", "One two three.\n").await;
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        assert_eq!(report.pages.indexed, 1);
+        assert_eq!(index.count_words_observed().await.unwrap(), 1);
+    }
+
     /// The invariant the whole storage design rests on: whatever incremental
     /// syncing produces must be what a from-scratch rebuild produces.
     #[tokio::test]
     async fn incremental_syncing_matches_a_full_rebuild() {
-        let (directory, store, times, ideas, index) = fixture().await;
+        let (directory, store, times, ideas, words, index) = fixture().await;
 
         // A history of edits, arriving through both the API and the filesystem.
         write(&store, "page-0", "The first page.\n").await;
@@ -653,11 +861,11 @@ mod tests {
             .create(draft("Deep work", "2026-08-06T09:00:00Z"))
             .await
             .unwrap();
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         write(&store, "notes/deep/page-2", "The third page.\n").await;
         store.delete(&slug("page-0")).await.expect("delete");
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         tokio::fs::write(
             directory.path().join("notes/page-1.md"),
@@ -665,13 +873,15 @@ mod tests {
         )
         .await
         .expect("external edit");
-        let incremental = sync(&store, &times, &ideas, &index).await.unwrap();
+        let incremental = sync(&store, &times, &ideas, &words, &index).await.unwrap();
         assert!(incremental.changed_anything());
 
         let after_incremental = snapshot(&index).await;
         let times_after_incremental = index.time_stamps().await.unwrap();
 
-        let report = rebuild(&store, &times, &ideas, &index).await.unwrap();
+        let report = rebuild(&store, &times, &ideas, &words, &index)
+            .await
+            .unwrap();
         let after_rebuild = snapshot(&index).await;
 
         assert_eq!(report.pages.indexed, 2, "rebuild should reindex every page");
@@ -690,7 +900,7 @@ mod tests {
 
     #[tokio::test]
     async fn rebuilding_clears_rows_for_files_that_are_gone() {
-        let (directory, store, times, ideas, index) = fixture().await;
+        let (directory, store, times, ideas, words, index) = fixture().await;
         write(&store, "page-0", "Body.\n").await;
         let entry = times
             .create(TimeDraft {
@@ -699,7 +909,7 @@ mod tests {
             })
             .await
             .unwrap();
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         tokio::fs::remove_file(directory.path().join("page-0.md"))
             .await
@@ -707,7 +917,9 @@ mod tests {
         tokio::fs::remove_file(entry.id.to_path(times.root()))
             .await
             .expect("remove entry");
-        rebuild(&store, &times, &ideas, &index).await.unwrap();
+        rebuild(&store, &times, &ideas, &words, &index)
+            .await
+            .unwrap();
 
         assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
         assert_eq!(index.count_times().await.unwrap(), 0);
@@ -798,7 +1010,7 @@ mod tests {
     /// straight into an editor is as real as one made through the API.
     #[tokio::test]
     async fn picks_up_idea_files_written_by_hand() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         let capture = "20260820T141530-000000000";
         let thread = IdeaId::parse("20260820T142000-000000000").expect("valid idea id");
 
@@ -821,7 +1033,7 @@ mod tests {
         .await
         .expect("write thread");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.captures.scanned, 1);
         assert_eq!(report.captures.indexed, 1);
@@ -841,13 +1053,13 @@ mod tests {
     /// capture must never also turn up as a page.
     #[tokio::test]
     async fn idea_files_are_not_pages() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         ideas
             .create_capture(capture_draft("2026-08-20T14:15:30Z", "A thought.\n"))
             .await
             .unwrap();
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.pages.scanned, 0);
         assert_eq!(report.captures.scanned, 1);
@@ -860,7 +1072,7 @@ mod tests {
     /// support.
     #[tokio::test]
     async fn a_malformed_idea_file_is_skipped_not_fatal() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         let capture = ideas
             .create_capture(capture_draft("2026-08-20T14:15:30Z", "A thought.\n"))
             .await
@@ -886,7 +1098,7 @@ mod tests {
         .await
         .expect("write broken event");
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.events.scanned, 1);
         assert_eq!(report.events.indexed, 0);
@@ -900,7 +1112,7 @@ mod tests {
     /// deleting `index.db` and starting again produces.
     #[tokio::test]
     async fn a_rebuild_reproduces_the_folded_idea_state() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
 
         let first = ideas
             .create_capture(capture_draft("2026-08-20T14:15:30Z", "Dungeon seeds.\n"))
@@ -924,7 +1136,7 @@ mod tests {
             })
             .await
             .unwrap();
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         // Connect, reject, archive.
         record(
@@ -956,7 +1168,7 @@ mod tests {
             "2026-08-20T14:23:00Z",
         )
         .await;
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         // An inverse event, a pair rejection, and an edit to a capture's text.
         record(
@@ -980,7 +1192,7 @@ mod tests {
             .patch_capture(&first.id, "Dungeon seeds, rewritten.\n")
             .await
             .unwrap();
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         // Retire, reopen, promote, and lose a capture entirely.
         record(
@@ -1012,7 +1224,7 @@ mod tests {
         )
         .await;
         ideas.delete_capture(&third.id).await.unwrap();
-        let incremental = sync(&store, &times, &ideas, &index).await.unwrap();
+        let incremental = sync(&store, &times, &ideas, &words, &index).await.unwrap();
         assert!(incremental.changed_anything());
 
         let after_incremental = idea_snapshot(&index).await;
@@ -1036,7 +1248,9 @@ mod tests {
         assert_eq!(after_incremental.1[0].body, "Dungeon seeds, rewritten.\n");
         assert!(after_incremental.1[1].archived);
 
-        let report = rebuild(&store, &times, &ideas, &index).await.unwrap();
+        let report = rebuild(&store, &times, &ideas, &words, &index)
+            .await
+            .unwrap();
         assert_eq!(report.captures.indexed, 2, "a rebuild reads every capture");
         assert_eq!(report.ideas.indexed, 1);
         assert_eq!(report.events.indexed, 8);
@@ -1050,10 +1264,10 @@ mod tests {
 
     #[tokio::test]
     async fn syncing_records_when_it_last_ran() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         assert_eq!(index.last_sync().await.unwrap(), None);
 
-        sync(&store, &times, &ideas, &index).await.unwrap();
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert!(index.last_sync().await.unwrap().is_some());
     }
@@ -1062,13 +1276,13 @@ mod tests {
     /// so an entry must never also turn up as a page.
     #[tokio::test]
     async fn time_entries_are_not_pages() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
         times
             .create(draft("Deep work", "2026-08-06T09:00:00Z"))
             .await
             .unwrap();
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report.pages.scanned, 0);
         assert_eq!(report.times.scanned, 1);
@@ -1077,9 +1291,9 @@ mod tests {
 
     #[tokio::test]
     async fn an_empty_wiki_syncs_cleanly() {
-        let (_directory, store, times, ideas, index) = fixture().await;
+        let (_directory, store, times, ideas, words, index) = fixture().await;
 
-        let report = sync(&store, &times, &ideas, &index).await.unwrap();
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
         assert_eq!(report, SyncReport::default());
         assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);

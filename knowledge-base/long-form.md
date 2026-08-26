@@ -1,9 +1,9 @@
 # Long-form writing
 
-Status: **part built**. L0, L1 and L2 are in; L3 and L4 are not. This page is
-still the implementation plan and the reasoning behind it, with a record of what
-each phase actually turned out to be appended as it landed. Where it and the code
-disagree, the code is what runs and this page is why.
+Status: **part built**. L0 through L3 are in; L4 is not. This page is still the
+implementation plan and the reasoning behind it, with a record of what each phase
+actually turned out to be appended as it landed. Where it and the code disagree,
+the code is what runs and this page is why.
 
 Rhizolog can capture a thought, turn it into a page, and say where the hours
 went. What it cannot do is anything that happens after a first draft exists. A
@@ -483,9 +483,10 @@ character, which is what makes a tab a safe delimiter and a space not:
 2026-08-25T14:25:30.123456789Z <TAB> book/one/the-ferry <TAB> claude-code <TAB> tim <TAB> observed <TAB> 1900 <TAB> 2000 <TAB> 41230
 ```
 
-`at`, `slug`, `actor`, `account`, `kind`, `added`, `removed`, `total`. `account`
-is empty on a wiki with no accounts, which is the same thing `owner` does on a
-capture. It is a separate field from `actor` because they answer different
+`at`, `slug`, `actor`, `account`, `kind`, `added`, `removed`, `total`, and a
+ninth field the built version needed: see
+[What L3 turned out to be](#what-l3-turned-out-to-be). `account` is empty on a
+wiki with no accounts, which is the same thing `owner` does on a capture. It is a separate field from `actor` because they answer different
 questions: which tool made the write, and which person it was made as. Bucketing
 happens
 **at read time from an `offset`**, exactly as `/api/time-stats` does and for the
@@ -932,6 +933,8 @@ this repository's own em dash rule is expressed in `prose.toml` and fires on
 
 ### L3: actor and the word log
 
+**Built.** See [What L3 turned out to be](#what-l3-turned-out-to-be).
+
 The header, the actor and account on every write path including the watcher,
 `.rhizolog/words/`, the derived `page_words`, `GET /api/word-stats`.
 
@@ -943,7 +946,9 @@ new page at the same slug does not; and when **deleting `index.db` and restartin
 reproduces the whole series**, which is the property that made this a log on disk
 rather than rows in the database.
 
-L3 has no dependency on L2 and may swap places with it.
+L3 had no dependency on L2 and could have swapped places with it. It did not, and
+the one thing that argues it should have is that a word log is worth what it has
+accumulated: every week it was not running is a week missing from a chart.
 
 ### L4: dashboard and documentation closure
 
@@ -957,9 +962,14 @@ code departed from it.
 enumerates the three has to gain it: the table in
 [Architecture](architecture.md), the paragraph in `AGENTS.md`, and the `README`.
 It is authored and **not** secret, so it goes with `times/` and `ideas/` rather
-than with `users/`: back it up, commit it. The gitignore needs no change, because
-it already names `index.db` rather than the directory, which is the decision that
-keeps paying.
+than with `users/`: back it up, commit it. All three were updated in L3 rather
+than left for here, because the tree exists now and documentation that is wrong
+about what is on disk is worse than documentation that is late.
+
+The gitignore was going to need no change, "because it already names `index.db`
+rather than the directory". That was true and beside the point, and it took one
+line to fix and a `git status` to notice. See
+[What L3 turned out to be](#what-l3-turned-out-to-be).
 
 ## What L0 turned out to be
 
@@ -1307,6 +1317,153 @@ not one: `backend/wiki/` is gitignored and `example-wiki/` is a fixture whose
 contents the documentation makes claims about. The starter is the example under
 [The rules file](#the-rules-file), and finding it a home is part of L4's
 documentation closure.
+
+## What L3 turned out to be
+
+`words/{mod,diff,stats}.rs` is the log, `index/words.rs` is the table folded from
+it, and `page_words` is at schema version 12. Seven things differ from what this
+page said above, and one of them is a line in `.gitignore` that would have thrown
+the whole feature away.
+
+### `*.log` very nearly ate the word log
+
+This page said the gitignore needed no change, "because it already names
+`index.db` rather than the directory, which is the decision that keeps paying".
+That was true and beside the point. `.gitignore` also carries a plain `*.log`
+under **Editor / OS noise**, and a pattern with no slash in it matches at any
+depth, so `.rhizolog/words/2026-08.log` was ignored by a rule written years
+before there was anything to ignore.
+
+A tree the documentation tells you to commit, silently untracked, discovered by
+creating the file and running `git status` rather than by reading the file.
+`!**/.rhizolog/words/*.log` undoes it, and the comment beside it says what would
+break the negation: an ignored `.rhizolog/` directory, which git would not
+complain about.
+
+### A first sighting means two different things
+
+The plan says a page seen for the first time is a baseline, so that importing an
+existing wiki does not report the whole thing as written on a Tuesday. True, and
+it is only half the cases. A page nobody has a record of looks **identical**
+whether the server has just been pointed at a wiki full of them or somebody has
+just created one: no previous body, no previous total. `Index::upsert` cannot
+tell them apart, because the difference is not in the page.
+
+It is in who is asking. So `upsert` reports the facts and the caller reads them:
+`WordChange::as_written` turns a baseline into words that have just arrived, and
+the startup scan is the one caller that does not use it. Without that, the first
+draft of every page would have been recorded as nothing at all.
+
+The watcher counts as a live write, with one known cost: restoring a backup file
+by file would be reported as writing it. A change on that scale arrives as a
+directory event and goes through the scan instead, which is what made this the
+right way round.
+
+### The diff counts words, not arrangement
+
+`added` and `removed` come from comparing two **multisets** of words. A word in
+the new text that the old text had no copy of is added, and the reverse is
+removed. Two consequences, and the plan should have said both:
+
+- **A shared word is not written twice.** Rewriting a sentence and keeping half
+  its vocabulary reports less than the whole sentence, which is why this page's
+  illustrative "added 1900, removed 2000" is a ceiling rather than a figure.
+- **A pure reordering reports nothing.** A day spent restructuring a chapter
+  without writing a new word is a day the log says nothing happened on. The
+  alternative is a sequence diff, which calls a moved paragraph both added and
+  removed and whose longest common subsequence over prose is padded out by `the`
+  and `and` anyway. This version is one somebody can check by hand.
+
+It also makes the log's own check exact: `added - removed` is always the change
+in the page's count. That is what `total` is for, and it is what makes deleting
+the index free.
+
+One thing the plan had no way to anticipate: **punctuation had to be trimmed off
+a word before comparing**. The counter splits on whitespace, so finishing a
+sentence turns `late.` into `late` and would otherwise report one word removed
+and two added where one was written. Interior punctuation stays, so `it's` and
+`rust-lang` are each one word.
+
+### Five kinds, not three
+
+`observed`, `moved` and `deleted` were named. Two more were needed:
+
+- **`baseline`**, which the plan describes without giving it a name. It has to
+  be one, because "has this slug been seen" is what the next write is decided by.
+- **`net`**, which is the one case a lost index really costs something. The
+  previous body went with `pages_fts`, so when the database was deleted *and* a
+  file changed before the next start, the difference between the two totals is
+  all there is. It is recorded under its own name rather than dressed up as a
+  churn, because the whole feature exists to stop a net figure being passed off
+  as one.
+
+Only `observed` and `net` count as writing. A baseline, a move and a delete are
+bookkeeping, and counting them would put a page's whole length into the day
+somebody first pointed the server at it.
+
+A `deleted` record carries **`removed: 0`**. The words were written and deleting
+the file does not unwrite them; the marker exists so that the next page written
+at that slug starts a series of its own. A `moved` record closes the slug it left
+as well as opening the one it arrived at, which the plan did not say and which is
+what stops a new page at a vacated slug inheriting a total.
+
+### The line has a ninth field
+
+`at`, `slug`, `actor`, `account`, `kind`, `added`, `removed`, `total`, and
+**`from`**, which is the slug a page arrived from and is empty on everything but
+a `moved` record. The plan called for a move to name both slugs and gave the
+format eight columns to do it in.
+
+A line with **more** than nine fields is read as the nine it understands, so a
+log written by a later version stays readable by this one. An append-only file
+cannot be migrated, so that has to be true from the first version.
+
+### `api`, and the header is refused rather than trimmed
+
+The plan names `web`, `file` and "whatever a caller supplied", and leaves the
+default unstated. There are four: `scan` for the startup scan and
+`POST /api/reindex`, `file` for the watcher, `api` for a write that named no
+tool, and the label itself for one that did. `web` is not special; it is what the
+dashboard's own client sends, which is one line in `frontend/src/api/client.ts`.
+
+A label that could not be written into a tab-separated line is a **400**,
+`invalid_actor`, and the error does not echo it back. It was just refused for
+holding something unprintable, and putting it in a JSON error would be putting it
+somewhere else it does not belong.
+
+### The log is rebuilt wholesale, and is not in the sync report
+
+`sync` reads the whole log and replaces `page_words` on every run, **before** the
+page scan. The order is load-bearing: the scan asks what each page's last
+recorded total was, and on a database that has just been deleted the answer is
+nothing at all until the log has been read back in, which would report every page
+in the wiki as written today.
+
+It is not one of `SyncReport`'s trees. The other five are compared file by file
+and counted as scanned, indexed, unchanged, removed and failed; this one is read
+and replaced, and three of those five fields would be zero for reasons that mean
+nothing. Reporting it belongs with L4's dashboard work, where there is somewhere
+to put it.
+
+### Verified against a real wiki, including the property that made it a file
+
+A scratch wiki with two pages written before the server ever saw it, then: an
+assistant's create, an unlabelled revision, an edit in an editor, a move and a
+delete. The log came back exactly as designed, with the arithmetic checkable by
+hand: a 12-word draft, then `added 5, removed 4, total 13` for a rewrite that
+kept most of its vocabulary, and 12 minus 4 plus 5 is 13.
+
+Then the test that made this a log on disk rather than rows in the database:
+**stop, delete `index.db`, restart.** The file was byte for byte identical
+afterwards and `/api/word-stats` returned the same series, split the same way by
+tool. Nothing was recorded, because every page's count still matched the log,
+which is the whole job `total` was given.
+
+One thing that run showed and no test would have: an edit made in the same moment
+as a directory appearing is attributed to `scan` rather than `file`. The
+directory forces a rescan, the rescan picks the edit up, and a rescan genuinely
+does not know when the change happened. That is what `scan` means, and it is a
+limit of watching a filesystem rather than a fault.
 
 ## Test strategy
 

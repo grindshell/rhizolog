@@ -47,12 +47,46 @@ async fn watched_with_stores() -> (TempDir, Store, TimeStore, IdeaStore, Index) 
     let ideas = IdeaStore::open(directory.path())
         .await
         .expect("open idea inbox");
+    let words = rhizolog::WordLog::open(directory.path())
+        .await
+        .expect("open word log");
     let index = Index::open(None).await.expect("open index");
 
-    watcher::spawn(store.clone(), times.clone(), ideas.clone(), index.clone());
+    watcher::spawn(
+        store.clone(),
+        times.clone(),
+        ideas.clone(),
+        words,
+        index.clone(),
+    );
     tokio::time::sleep(STARTUP).await;
 
     (directory, store, times, ideas, index)
+}
+
+/// Every line of the word log, split into its fields.
+///
+/// Read off disk rather than out of the index, because the log is the authored
+/// copy and the table is a reading of it. The fields are `at`, `slug`, `actor`,
+/// `account`, `kind`, `added`, `removed`, `total`, `from`.
+fn word_log(directory: &TempDir) -> Vec<Vec<String>> {
+    let words = directory.path().join(".rhizolog").join("words");
+    let Ok(entries) = std::fs::read_dir(&words) else {
+        return Vec::new();
+    };
+
+    let mut months: Vec<std::path::PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    months.sort();
+
+    months
+        .iter()
+        .filter_map(|month| std::fs::read_to_string(month).ok())
+        .flat_map(|text| {
+            text.lines()
+                .map(|line| line.split('\t').map(str::to_owned).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Poll `condition` until it holds or [`PATIENCE`] runs out.
@@ -96,6 +130,79 @@ async fn picks_up_a_page_created_outside_the_api() {
     assert_eq!(hits.total, 1);
     assert_eq!(hits.hits[0].slug.as_str(), "external");
     assert_eq!(hits.hits[0].title, "External");
+}
+
+/// The one actor nobody can claim over HTTP, because it is the one the server
+/// works out for itself: an edit the watcher noticed is the writer in their own
+/// editor.
+#[tokio::test]
+async fn an_edit_in_somebody_elses_editor_is_attributed_to_the_file() {
+    let (directory, _store, index) = watched().await;
+    let path = directory.path().join("chapter.md");
+
+    tokio::fs::write(&path, "The ferry was late and nobody was surprised.\n")
+        .await
+        .expect("write page");
+
+    eventually("the new page to be indexed", || async {
+        index.count(&EVERYONE).await.unwrap_or(0) == 1
+    })
+    .await;
+
+    tokio::fs::write(&path, "The ferry was early and nobody was surprised.\n")
+        .await
+        .expect("rewrite page");
+
+    eventually("the edit to reach the word log", || async {
+        word_log(&directory).len() == 2
+    })
+    .await;
+
+    let log = word_log(&directory);
+    assert!(log.iter().all(|line| line[2] == "file"), "got {log:?}");
+
+    // A page appearing under a running server is somebody writing one, not a
+    // wiki that was already there.
+    assert_eq!(log[0][4], "observed");
+    assert_eq!(log[0][5], "8", "eight words arrived");
+    assert_eq!(log[0][6], "0");
+
+    // And the edit is a churn against what was there, not a fresh page.
+    assert_eq!(log[1][4], "observed");
+    assert_eq!(log[1][5], "1", "early");
+    assert_eq!(log[1][6], "1", "late");
+    assert_eq!(log[1][7], "8");
+}
+
+/// A page that vanished closes its series. A page that merely stopped parsing
+/// does not: it is still somebody's writing, and marking it deleted would make
+/// the next successful save look like a brand new page.
+#[tokio::test]
+async fn a_page_deleted_outside_the_api_closes_its_series() {
+    let (directory, _store, index) = watched().await;
+    let path = directory.path().join("chapter.md");
+
+    tokio::fs::write(&path, "One two three.\n")
+        .await
+        .expect("write page");
+    eventually("the page to be indexed", || async {
+        index.count(&EVERYONE).await.unwrap_or(0) == 1
+    })
+    .await;
+
+    tokio::fs::remove_file(&path).await.expect("delete page");
+    eventually("the delete to reach the word log", || async {
+        word_log(&directory).len() == 2
+    })
+    .await;
+
+    let log = word_log(&directory);
+    assert_eq!(log[1][4], "deleted");
+    assert_eq!(log[1][2], "file");
+    assert_eq!(
+        log[1][6], "0",
+        "the words were written and deleting the file does not unwrite them"
+    );
 }
 
 /// The time log is files too, and it lives inside `.rhizolog/` — the one

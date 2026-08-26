@@ -24,7 +24,7 @@ const PASSWORD: &str = "correct horse battery staple";
 
 struct App {
     router: Router,
-    _directory: TempDir,
+    directory: TempDir,
 }
 
 struct Res {
@@ -53,6 +53,9 @@ impl App {
         let ideas = rhizolog::IdeaStore::open(directory.path())
             .await
             .expect("open ideas");
+        let words = rhizolog::WordLog::open(directory.path())
+            .await
+            .expect("open word log");
         let index = Index::open(None).await.expect("open index");
 
         Self {
@@ -61,13 +64,14 @@ impl App {
                 times,
                 ideas: rhizolog::IdeaService::new(ideas),
                 users,
+                words,
                 index,
                 usage: rhizolog::UsageTally::new(),
                 assets: Assets::None,
                 secure_cookies: false,
                 anonymous_read,
             }),
-            _directory: directory,
+            directory,
         }
     }
 
@@ -315,7 +319,7 @@ async fn an_unrecognised_visibility_hides_the_page_rather_than_publishing_it() {
 }
 
 fn app_page_path(app: &App, slug: &str) -> std::path::PathBuf {
-    app._directory.path().join(format!("{slug}.md"))
+    app.directory.path().join(format!("{slug}.md"))
 }
 
 /// `null` is a legal username — the reserved list holds Windows device names,
@@ -964,6 +968,9 @@ async fn anonymous_read_grants_no_writes_and_no_side_channels() {
         (Method::GET, "/api/times", None),
         (Method::GET, "/api/pins", None),
         (Method::GET, "/api/time-stats", None),
+        // A writing history is working state, and the variable that opened this
+        // door exists to publish pages marked `public`.
+        (Method::GET, "/api/word-stats", None),
         (Method::GET, "/api/users", None),
     ] {
         let res = app.send(method.clone(), path, body, None).await;
@@ -1117,6 +1124,79 @@ async fn a_time_entry_against_a_page_you_cannot_read_names_no_title() {
         his.body["times"][0]["pages"][0]["title"],
         "Project Roadrunner"
     );
+}
+
+/// The same join again, in the word log, and the same answer: the slug is the
+/// observation's own content and stays, the **title** is the page's and is
+/// withheld. Hiding the row would be hiding somebody's own working history from
+/// them, which is the wrong reading of a rule that protects other people's
+/// pages.
+#[tokio::test]
+async fn a_word_observation_against_a_page_you_cannot_read_names_no_title() {
+    let (app, tim, alice) = two_accounts().await;
+    app.write(
+        &tim,
+        json!({
+            "slug": "secret/acquisition",
+            "title": "Project Roadrunner",
+            "content": "The counterparty is Acme and nobody else knows.\n",
+            "visibility": "private",
+        }),
+    )
+    .await;
+
+    let hers = app.get("/api/word-stats", &alice).await;
+    assert_eq!(hers.status, StatusCode::OK, "{:?}", hers.body);
+    assert!(
+        !hers.body.to_string().contains("Project Roadrunner"),
+        "the series leaked the title of a page alice cannot read:\n{}",
+        hers.body
+    );
+
+    let pages = hers.body["pages"].as_array().expect("pages");
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0]["slug"], "secret/acquisition");
+    assert_eq!(
+        pages[0]["title"], "secret/acquisition",
+        "ranked under its slug, which is the label an unwritten page already gets"
+    );
+    assert_eq!(
+        pages[0]["added"], 8,
+        "and the words really were written, so the total includes them"
+    );
+
+    // The account whose writing it is sees the title, and every account sees the
+    // same figures: this is wiki-wide state, like the time log.
+    let his = app.get("/api/word-stats", &tim).await;
+    assert_eq!(his.body["pages"][0]["title"], "Project Roadrunner");
+    assert_eq!(his.body["totals"], hers.body["totals"]);
+}
+
+/// The account comes from the session and the label comes from a header, so a
+/// label can never be used to claim somebody else's account.
+#[tokio::test]
+async fn a_label_cannot_claim_an_account() {
+    let (app, tim, _alice) = two_accounts().await;
+
+    let written = app
+        .send(
+            Method::POST,
+            "/api/pages",
+            Some(json!({ "slug": "a", "content": "One two three.\n" })),
+            Some(&tim),
+        )
+        .await;
+    assert_eq!(written.status, StatusCode::CREATED, "{:?}", written.body);
+
+    let log = std::fs::read_dir(app.directory.path().join(".rhizolog").join("words"))
+        .expect("the word log directory")
+        .flatten()
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .collect::<String>();
+
+    let fields: Vec<&str> = log.trim().split('\t').collect();
+    assert_eq!(fields[2], "api", "the tool, which nobody named");
+    assert_eq!(fields[3], "tim", "and the account, which the session did");
 }
 
 /// Visibility is decided twice: in SQL for the listing, and in Rust against a

@@ -30,7 +30,7 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::api::AppState;
-use crate::api::extract::Json as JsonBody;
+use crate::api::extract::{Actor, Json as JsonBody};
 use crate::auth::Viewer;
 use crate::error::{AppError, AppResult};
 use crate::index::{ListOptions, PageRecord, SortBy, SortOrder};
@@ -39,6 +39,7 @@ use crate::page::{Frontmatter, Page, Visibility};
 use crate::slug::Slug;
 use crate::store::StoreError;
 use crate::users::Username;
+use crate::words::{self, By};
 
 /// Fields a listing can be narrowed to with `?fields=`.
 pub const SUMMARY_FIELDS: [&str; 7] = [
@@ -687,6 +688,7 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     viewer: Viewer,
+    actor: Actor,
     JsonBody(request): JsonBody<CreatePage>,
 ) -> AppResult<Response> {
     let visibility = request.visibility.unwrap_or_default();
@@ -709,7 +711,8 @@ pub async fn create(
         .store
         .create(&request.slug, frontmatter, &request.content)
         .await?;
-    state.index.upsert(&page).await?;
+    let change = state.index.upsert(&page).await?;
+    observe(&state, &page.slug, &actor, &viewer, change).await;
 
     Ok(created(&page))
 }
@@ -769,6 +772,7 @@ pub async fn read(
 pub async fn replace(
     State(state): State<AppState>,
     viewer: Viewer,
+    actor: Actor,
     Path(raw): Path<String>,
     JsonBody(request): JsonBody<ReplacePage>,
 ) -> AppResult<Response> {
@@ -811,7 +815,8 @@ pub async fn replace(
         .store
         .write(&slug, frontmatter, &request.content)
         .await?;
-    state.index.upsert(&page).await?;
+    let change = state.index.upsert(&page).await?;
+    observe(&state, &page.slug, &actor, &viewer, change).await;
 
     Ok(if existing.is_some() {
         Json(PageView::new(&page, false)).into_response()
@@ -836,6 +841,7 @@ pub async fn replace(
 pub async fn patch(
     State(state): State<AppState>,
     viewer: Viewer,
+    actor: Actor,
     Path(raw): Path<String>,
     JsonBody(request): JsonBody<PatchPage>,
 ) -> AppResult<Json<PageView>> {
@@ -910,7 +916,8 @@ pub async fn patch(
     let body = request.content.unwrap_or(existing.body);
 
     let page = state.store.write(&slug, frontmatter, &body).await?;
-    state.index.upsert(&page).await?;
+    let change = state.index.upsert(&page).await?;
+    observe(&state, &page.slug, &actor, &viewer, change).await;
 
     Ok(Json(PageView::new(&page, false)))
 }
@@ -930,6 +937,7 @@ pub async fn patch(
 pub async fn delete(
     State(state): State<AppState>,
     viewer: Viewer,
+    actor: Actor,
     Path(raw): Path<String>,
 ) -> AppResult<StatusCode> {
     let slug = parse_slug(&raw)?;
@@ -948,6 +956,18 @@ pub async fn delete(
     // pin goes with it. A file that merely disappeared from disk is a different
     // case and keeps its pin — see `index::pins`.
     state.index.unpin(&slug).await?;
+    // The history outlives the page: the words were written and deleting the
+    // file does not unwrite them. What the marker is for is the next page
+    // written at this slug, which starts a series of its own.
+    words::deleted(
+        &state.words,
+        &state.index,
+        &slug,
+        &by(&actor, &viewer),
+        Utc::now(),
+    )
+    .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -970,6 +990,7 @@ pub async fn delete(
 pub async fn move_page(
     State(state): State<AppState>,
     viewer: Viewer,
+    actor: Actor,
     JsonBody(request): JsonBody<MovePage>,
 ) -> AppResult<Json<PageView>> {
     // Both ends, for two different reasons.
@@ -1005,6 +1026,22 @@ pub async fn move_page(
     // page said and is not ours to rewrite; a pin is a bookmark, and a bookmark
     // that stopped working because you renamed the thing it points at is a bug.
     state.index.repin(&request.from, &request.to).await?;
+
+    // One record naming both slugs, rather than a rewrite of the old slug's
+    // history. Nothing was written, so it is a marker rather than a churn: it
+    // closes the series where the page left and continues it where it arrived,
+    // and a reader follows the chain. The `upsert` above computed a baseline,
+    // which is exactly what a move must not record.
+    words::moved(
+        &state.words,
+        &state.index,
+        &request.from,
+        &request.to,
+        &by(&actor, &viewer),
+        Utc::now(),
+        page.words(),
+    )
+    .await;
 
     Ok(Json(PageView::new(&page, false)))
 }
@@ -1049,6 +1086,44 @@ fn created(page: &Page) -> Response {
         response.headers_mut().insert(header::LOCATION, value);
     }
     response
+}
+
+/// Who a write is recorded as.
+///
+/// Two fields answering two questions: which tool made it, and which person it
+/// was made as. The label comes off a header and is a claim; the account comes
+/// off the session and is not, which is why a label can never be used to say you
+/// are somebody else.
+fn by(actor: &Actor, viewer: &Viewer) -> By {
+    By {
+        actor: actor.0.clone(),
+        account: viewer.username().cloned(),
+    }
+}
+
+/// Record what a write turned out to be worth in words.
+///
+/// Never fails the request: by the time this runs the page is on disk and in the
+/// index, and answering a write that worked with a 500 would make a caller retry
+/// and write it twice. See [`crate::words::record`].
+async fn observe(
+    state: &AppState,
+    slug: &Slug,
+    actor: &Actor,
+    viewer: &Viewer,
+    change: crate::index::WordChange,
+) {
+    words::observe(
+        &state.words,
+        &state.index,
+        slug,
+        &by(actor, viewer),
+        Utc::now(),
+        // A page written through the API is words that have just arrived, not a
+        // wiki that was already there. Only the startup scan baselines.
+        change.as_written(),
+    )
+    .await;
 }
 
 pub(crate) fn parse_slug(raw: &str) -> AppResult<Slug> {

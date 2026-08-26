@@ -30,6 +30,7 @@ use crate::ideas::{self, IdeaService, IdeaStore};
 use crate::index::sync::sync;
 use crate::store::display_path;
 use crate::users::UserStore;
+use crate::words::WordLog;
 use crate::{AppState, Config, Index, Store, TimeStore, UsageTally, watcher};
 
 /// How often API usage counts are moved from memory into the index.
@@ -125,6 +126,9 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
     let users = UserStore::open(&config.root)
         .await
         .context("opening the accounts directory")?;
+    let words = WordLog::open(&config.root)
+        .await
+        .context("opening the word log")?;
     let index = Index::open(Some(&config.database))
         .await
         .with_context(|| format!("opening the index at {}", config.database.display()))?;
@@ -132,8 +136,9 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
     tracing::info!(wiki_root = %store.root_display(), "opened wiki");
     tracing::info!(time_log = %times.root_display(), "opened time log");
     tracing::info!(idea_inbox = %ideas.root_display(), "opened idea inbox");
+    tracing::info!(word_log = %words.root_display(), "opened word log");
 
-    reconcile(&store, &times, &ideas, &index).await?;
+    reconcile(&store, &times, &ideas, &words, &index).await?;
     // After reconciliation, never before it: this decides what to do from three
     // counting queries, and a deleted database would report an empty inbox and
     // adopt nothing. See `crate::ideas::adoption`.
@@ -150,13 +155,20 @@ pub async fn start(config: &Config) -> anyhow::Result<Server> {
 
     // Started after the initial scan, so it only ever reports genuinely new
     // changes rather than racing the reconciliation that just ran.
-    let watching = watcher::spawn(store.clone(), times.clone(), ideas.clone(), index.clone());
+    let watching = watcher::spawn(
+        store.clone(),
+        times.clone(),
+        ideas.clone(),
+        words.clone(),
+        index.clone(),
+    );
 
     let state = AppState {
         store,
         times,
         ideas: IdeaService::new(ideas),
         users,
+        words,
         index,
         usage: UsageTally::new(),
         assets: assets::resolve(&config.assets).await,
@@ -242,9 +254,10 @@ async fn reconcile(
     store: &Store,
     times: &TimeStore,
     ideas: &IdeaStore,
+    words: &WordLog,
     index: &Index,
 ) -> anyhow::Result<()> {
-    let report = sync(store, times, ideas, index)
+    let report = sync(store, times, ideas, words, index)
         .await
         .context("reconciling the index with the wiki")?;
 

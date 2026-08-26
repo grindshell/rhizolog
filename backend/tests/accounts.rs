@@ -46,6 +46,9 @@ impl App {
         let ideas = rhizolog::IdeaStore::open(directory.path())
             .await
             .expect("open ideas");
+        let words = rhizolog::WordLog::open(directory.path())
+            .await
+            .expect("open word log");
         let index = Index::open(None).await.expect("open index");
 
         Self {
@@ -54,6 +57,7 @@ impl App {
                 times,
                 ideas: rhizolog::IdeaService::new(ideas),
                 users,
+                words,
                 index,
                 usage: rhizolog::UsageTally::new(),
                 assets: Assets::None,

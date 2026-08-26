@@ -1011,10 +1011,49 @@ export interface paths {
         patch: operations["patch_user"];
         trace?: never;
     };
+    "/api/word-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the words went, by day and by tool.
+         * @description **Refused for a caller who has not signed in**, on a wiki with accounts, even
+         *     under `RHIZOLOG_ANONYMOUS_READ`. A writing history is working state rather
+         *     than published content, and that variable exists to publish pages marked
+         *     `public`.
+         */
+        get: operations["word_statistics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ActorWordsView: {
+            /**
+             * @description Which tool. **A claim rather than a proof**: anything that can write can
+             *     send the header, which is fine, because the question is bookkeeping about
+             *     your own tools rather than security.
+             * @example claude-code
+             */
+            actor: string;
+            /** Format: int64 */
+            added: number;
+            /** Format: int64 */
+            delta: number;
+            observations: number;
+            /** Format: int64 */
+            removed: number;
+        };
         AffectedIdea: {
             id: components["schemas"]["IdeaId"];
             /** @example Dungeon seeds */
@@ -1379,6 +1418,31 @@ export interface components {
             profile?: string | null;
             role?: null | components["schemas"]["Role"];
             username: components["schemas"]["Username"];
+        };
+        DayView: {
+            /**
+             * Format: int64
+             * @example 1900
+             */
+            added: number;
+            /**
+             * @description The local date, in the offset that was asked for.
+             * @example 2026-08-25
+             */
+            date: string;
+            /**
+             * Format: int64
+             * @description `added - removed`. Arithmetic over the two rather than a stored value,
+             *     which is the whole point: a day of revision is not "minus one hundred".
+             * @example -100
+             */
+            delta: number;
+            observations: number;
+            /**
+             * Format: int64
+             * @example 2000
+             */
+            removed: number;
         };
         /** @description What a capture's deletion cost. */
         DeletedCapture: {
@@ -2291,6 +2355,27 @@ export interface components {
              * @example 412
              */
             words: number;
+        };
+        PageWordsView: {
+            /** Format: int64 */
+            added: number;
+            /** Format: int64 */
+            delta: number;
+            observations: number;
+            /** Format: int64 */
+            removed: number;
+            /** @example book/one/the-ferry */
+            slug: string;
+            /**
+             * @description The page's title, or its slug when there is none to show.
+             *
+             *     A page this caller may not read is ranked under its slug, which is the
+             *     label an unwritten page already gets. The row itself stays: the words
+             *     really were written, and hiding somebody's own working history from them
+             *     would be the wrong reading of a rule that protects other people's pages.
+             * @example The Ferry
+             */
+            title: string;
         };
         PatchCapture: {
             /**
@@ -3281,6 +3366,57 @@ export interface components {
              * @example notes/rust/streams
              */
             slug: string;
+        };
+        WordStatsResponse: {
+            /** @description Busiest tools first, capped at ten. */
+            actors: components["schemas"]["ActorWordsView"][];
+            /**
+             * Format: date-time
+             * @description The instant the window was computed against.
+             */
+            at: string;
+            /**
+             * @description Every local day in the window, including the empty ones, so a client can
+             *     draw the chart without filling gaps itself.
+             */
+            days: components["schemas"]["DayView"][];
+            /** Format: date-time */
+            from: string;
+            /**
+             * Format: int32
+             * @description The offset the days were cut in, as it was applied after clamping.
+             * @example -420
+             */
+            offset_minutes: number;
+            /** @description Busiest pages first, capped at ten. */
+            pages: components["schemas"]["PageWordsView"][];
+            /**
+             * @description Always `observed`, and the field is here to say what that means rather
+             *     than to be branched on: **this is not keystroke history**. The watcher
+             *     debounces at 500 ms and collapses a burst into one batch, edits made
+             *     while the server was down are one observation at the next startup, and
+             *     only an API write is genuinely one per save. The counts are right in
+             *     every one of those cases; what is lost is resolution in time.
+             * @example observed
+             */
+            resolution: string;
+            /**
+             * Format: date-time
+             * @description Exclusive.
+             */
+            to: string;
+            totals: components["schemas"]["WordTotalsView"];
+        };
+        WordTotalsView: {
+            /** Format: int64 */
+            added: number;
+            /** Format: int64 */
+            delta: number;
+            observations: number;
+            /** @description Distinct pages written to in the window. */
+            pages: number;
+            /** Format: int64 */
+            removed: number;
         };
     };
     responses: never;
@@ -6027,6 +6163,56 @@ export interface operations {
             };
             /** @description This is the only owner */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    word_statistics: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The instant to read "now" as. Defaults to the server's clock.
+                 *
+                 *     It decides which local day the window ends on, and passing it is what
+                 *     makes a figure captured for the product site reproducible.
+                 */
+                at?: string;
+                /**
+                 * @description Minutes east of UTC, which is what `-new Date().getTimezoneOffset()`
+                 *     gives. It decides which local day an observation falls in.
+                 * @example -420
+                 */
+                offset?: number;
+                /** @description The start of the window. Defaults to ninety local days back. */
+                from?: string;
+                /**
+                 * @description The end of the window, exclusive. Defaults to the end of the local day
+                 *     holding `at`.
+                 */
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WordStatsResponse"];
+                };
+            };
+            /** @description This wiki has accounts and the request named none */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

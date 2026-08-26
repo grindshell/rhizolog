@@ -43,6 +43,9 @@ async fn app_serving(wiki: &TempDir, assets: Assets) -> Router {
     let ideas = rhizolog::IdeaStore::open(wiki.path())
         .await
         .expect("open ideas");
+    let words = rhizolog::WordLog::open(wiki.path())
+        .await
+        .expect("open word log");
     let index = Index::open(None).await.expect("open index");
 
     rhizolog::router(AppState {
@@ -50,6 +53,7 @@ async fn app_serving(wiki: &TempDir, assets: Assets) -> Router {
         times,
         ideas: rhizolog::IdeaService::new(ideas),
         users,
+        words,
         index,
         usage: rhizolog::UsageTally::new(),
         assets,

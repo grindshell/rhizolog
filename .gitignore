@@ -23,9 +23,10 @@ backend/wiki/
 # server.json says where a running server is listening and means nothing once
 # that server stops.
 #
-# By name, not the whole directory: `.rhizolog/times/` and `.rhizolog/ideas/`
-# sit beside them and are a time log and an idea inbox, both authored data with
-# no other copy. A wiki kept in git should ignore these lines and nothing more.
+# By name, not the whole directory: `.rhizolog/times/`, `.rhizolog/ideas/` and
+# `.rhizolog/words/` sit beside them and are a time log, an idea inbox and a
+# writing history, all three authored data with no other copy. A wiki kept in
+# git should ignore these lines and nothing more.
 #
 # `**/` because a pattern with a slash in it is anchored to this file's own
 # directory: plain `.rhizolog/index.db` would miss `example-wiki/`'s.
@@ -42,3 +43,11 @@ backend/wiki/
 # Editor / OS noise
 .DS_Store
 *.log
+
+# Except the word log, which this file very nearly threw away. `.rhizolog/words/`
+# is authored data with no other copy and is meant to be committed, and the rule
+# above is not anchored, so it matches a `.log` file at any depth. The negation
+# works because no *directory* on the way to it is excluded; if `.rhizolog/` ever
+# becomes an ignored directory, this line stops meaning anything and git will not
+# say so. See knowledge-base/long-form.md.
+!**/.rhizolog/words/*.log

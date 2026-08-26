@@ -43,6 +43,8 @@ harmless and needs no suppression logic.
       captures/2026-08/                   # NOT derived; the only copy
       threads/
       events/2026-08/
+    words/
+      2026-08.log                         # NOT derived; the only copy
     users/
       tim.md                              # NOT derived, and secret
 ```
@@ -51,9 +53,9 @@ The walker skips any directory beginning with `.`, which keeps `.rhizolog/`
 and `.git/` out of the wiki.
 
 `.rhizolog/` is therefore **not all disposable**, despite what its name
-suggests. The database is; the time log and the idea inbox beside it are
-authored data with no other copy. See [Time tracking](time-tracking.md) for why
-they sit under a dot-directory rather than in plain sight, and ignore the
+suggests. The database is; the time log, the idea inbox and the word log beside
+it are authored data with no other copy. See [Time tracking](time-tracking.md)
+for why they sit under a dot-directory rather than in plain sight, and ignore the
 derived files by name rather than the whole directory in a wiki kept in git.
 
 Four kinds of thing live there, and they want different treatment:
@@ -63,8 +65,15 @@ Four kinds of thing live there, and they want different treatment:
 | `index.db` | **derived** — rebuilt from the wiki; deleting it costs one scan |
 | `times/` | **authored** — the only copy; back it up, commit it |
 | `ideas/` | **authored** as well: captures, threads and decisions, and the only copy of them |
+| `words/` | **authored** too: what was written, when, and by which tool. See [Long-form writing](long-form.md) |
 | `users/` | **authored, and secret** — the only copy; back it up, do *not* commit it |
 | `server.json` | **volatile** — where a running server is; meaningless once it stops |
+
+`words/` is the one that departs from the shape the others use: a file per month
+holding a line per observation, rather than a file per record. The reason is
+frequency. A time entry is a document somebody may open and correct; a word
+observation is a machine's reading, never edited, arriving every time a file is
+saved, and a file per save would be thousands of files a month.
 
 `ideas/` appears on the first capture rather than when the store is opened, and
 that is not tidiness: `server::start` opens the stores and then watches the wiki,
@@ -537,10 +546,13 @@ src/
   times/         TimeId, TimeEntry, the time log on disk, statistics
   ideas/         captures, threads and decisions: the store, the rules, and the
                  two pure halves (analysis.rs, lifecycle.rs) that explain them
+  words/         the word log on disk, the churn diff, the series
+  prose/         prose/v1: the rules file, the five rule kinds, tokenizing
+  compile.rs     assembling a tree of pages into one document and a manifest
   users/         Username, User, the accounts on disk, password hashing
   auth.rs        who a request is: sessions, the Viewer, the gate in front of /api
   index/         SQLite: schema, upsert, search, links, tags, pins, times, ideas,
-                 sessions, stats
+                 words, sessions, stats
                  audience.rs: the one visibility predicate every page query pastes in
   watcher.rs     notify -> reindex queue
   assets.rs      the built dashboard: Dir | Embedded | None

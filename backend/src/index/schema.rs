@@ -46,7 +46,14 @@
 /// it looks like an answer. **Changing how a body is counted is a bump too**,
 /// for `idea_terms`' reason: every row is the output of that one function. See
 /// [`crate::markdown::count_words`] and `knowledge-base/long-form.md`.
-pub const SCHEMA_VERSION: i64 = 11;
+///
+/// Version 12 adds `page_words`, folded from `.rhizolog/words/`. That directory
+/// is a **fourth authored tree**, so this is the first derived table whose
+/// source is neither the markdown nor one of the three trees that came before
+/// it. An index written before this has none of it, and the series would come
+/// back empty rather than wrong. Rebuilding reads the log, which is a few
+/// hundred kilobytes and is the only reason it was worth putting on disk.
+pub const SCHEMA_VERSION: i64 = 12;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -235,6 +242,42 @@ create table page_parts (
 ) strict;
 
 create index page_parts_by_target on page_parts(target);
+
+-- The word log, folded from `.rhizolog/words/`. The files are the log; this is
+-- only an index over them, and deleting the database loses nothing. That
+-- sentence is the whole reason the log is not a durable table here: a writing
+-- history is unreconstructable, and every document in this project tells the
+-- reader that deleting this database costs one scan.
+--
+-- Rebuilt wholesale rather than compared file by file, because the log is small
+-- and a partial rebuild has states a whole one cannot get into.
+--
+-- `id` is insertion order, which is the order the files were read in, and it is
+-- what the last thing that happened at a slug is decided by. Two observations
+-- can share an instant; they cannot share an id.
+--
+-- `src` is the slug a page arrived from, for a `moved` record and nothing else.
+-- It is what closes the series at the slug that was vacated, so a new page
+-- written there later starts its own rather than inheriting a total.
+--
+-- No `references pages(slug)`: the history outlives the page. The words were
+-- written and deleting the file does not unwrite them.
+create table page_words (
+    id      integer primary key,
+    at      integer not null,
+    slug    text    not null,
+    actor   text    not null,
+    account text    not null,
+    kind    text    not null,
+    added   integer not null,
+    removed integer not null,
+    total   integer not null,
+    src     text
+) strict;
+
+create index page_words_at on page_words(at);
+create index page_words_by_slug on page_words(slug, id);
+create index page_words_by_src on page_words(src);
 
 -- Each row's rowid is the rowid of the `pages` row it describes, because that
 -- is the only handle an FTS5 table can be looked up by other than `MATCH`.

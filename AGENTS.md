@@ -67,14 +67,21 @@ starting a timer while it is pointed there writes a new file into the fixture
 and breaks those numbers. Check `git status example-wiki` afterwards.
 
 **`.rhizolog/` is not all disposable.** `index.db` is derived and rebuilds on
-startup. Three things beside it are authored data with no other copy:
+startup. Four things beside it are authored data with no other copy:
 `.rhizolog/times/` is the time log, `.rhizolog/ideas/` is Idea Inbox's captures,
-threads and decision events, and `.rhizolog/users/` is the accounts, which are
-authored *and* secret since each file carries a password hash. That is why the
-gitignore names the database rather than the directory, and why `users/` is the
-one authored thing in there that is ignored too. See
-`knowledge-base/time-tracking.md`, `knowledge-base/idea-inbox.md` and
+threads and decision events, `.rhizolog/words/` is the word log, and
+`.rhizolog/users/` is the accounts, which are authored *and* secret since each
+file carries a password hash. That is why the gitignore names the database
+rather than the directory, and why `users/` is the one authored thing in there
+that is ignored too. See `knowledge-base/time-tracking.md`,
+`knowledge-base/idea-inbox.md`, `knowledge-base/long-form.md` and
 `knowledge-base/accounts.md`.
+
+`words/` is the one whose files end in `.log`, which the gitignore's
+`*.log` line for editor noise very nearly threw away: it is not anchored, so it
+matches at any depth. `!**/.rhizolog/words/*.log` undoes that and would silently
+stop working if `.rhizolog/` ever became an ignored directory. Check with
+`git status --untracked-files=all` in a wiki, not by reading the file.
 
 ## Tech stack
 

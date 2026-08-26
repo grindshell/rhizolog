@@ -7,7 +7,9 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use rhizolog::{AppState, Assets, IdeaService, IdeaStore, Index, Store, TimeStore, UserStore};
+use rhizolog::{
+    AppState, Assets, IdeaService, IdeaStore, Index, Store, TimeStore, UserStore, WordLog,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -44,12 +46,16 @@ impl App {
         // authentication in front of it. `signed_in` is the other case.
         let users = UserStore::open(directory.path()).await.expect("open users");
         let ideas = IdeaStore::open(directory.path()).await.expect("open ideas");
+        let words = WordLog::open(directory.path())
+            .await
+            .expect("open word log");
         Self {
             router: rhizolog::router(AppState {
                 store,
                 times,
                 ideas: IdeaService::new(ideas),
                 users,
+                words,
                 index,
                 usage: rhizolog::UsageTally::new(),
                 // API-only: the SPA fallback is covered in tests/frontend.rs.
@@ -62,7 +68,26 @@ impl App {
     }
 
     async fn send(&self, method: Method, path: &str, body: Option<Value>) -> Res {
-        let builder = Request::builder().method(method).uri(path);
+        self.dispatch(method, path, body, None).await
+    }
+
+    /// The same, labelled with an `X-Rhizolog-Actor` header.
+    async fn send_as(&self, method: Method, path: &str, body: Option<Value>, actor: &str) -> Res {
+        self.dispatch(method, path, body, Some(actor)).await
+    }
+
+    async fn dispatch(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        actor: Option<&str>,
+    ) -> Res {
+        let mut builder = Request::builder().method(method).uri(path);
+
+        if let Some(actor) = actor {
+            builder = builder.header("x-rhizolog-actor", actor);
+        }
 
         let request = match body {
             Some(value) => builder
@@ -115,6 +140,35 @@ impl App {
 
     async fn delete(&self, path: &str) -> Res {
         self.send(Method::DELETE, path, None).await
+    }
+
+    /// Every line of the word log, split into its fields.
+    ///
+    /// Read off disk rather than out of `/api/word-stats`, deliberately: the log
+    /// is the authored copy and the table is a reading of it, so a test that
+    /// asked the API would be checking the reading against itself.
+    ///
+    /// The fields are `at`, `slug`, `actor`, `account`, `kind`, `added`,
+    /// `removed`, `total`, `from`.
+    fn log(&self) -> Vec<Vec<String>> {
+        let directory = self.directory.path().join(".rhizolog").join("words");
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            return Vec::new();
+        };
+
+        let mut months: Vec<std::path::PathBuf> =
+            entries.flatten().map(|entry| entry.path()).collect();
+        months.sort();
+
+        months
+            .iter()
+            .filter_map(|month| std::fs::read_to_string(month).ok())
+            .flat_map(|text| {
+                text.lines()
+                    .map(|line| line.split('\t').map(str::to_owned).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     /// Write `.rhizolog/prose.toml` into this wiki.
@@ -196,6 +250,7 @@ async fn usage_counts_survive_a_restart() {
         let times = TimeStore::open(wiki.path()).await.expect("open time log");
         let users = UserStore::open(wiki.path()).await.expect("open users");
         let ideas = IdeaStore::open(wiki.path()).await.expect("open ideas");
+        let words = WordLog::open(wiki.path()).await.expect("open word log");
         let index = Index::open(Some(&database)).await.expect("open index");
         let usage = rhizolog::UsageTally::new();
         let app = App {
@@ -204,6 +259,7 @@ async fn usage_counts_survive_a_restart() {
                 times,
                 ideas: IdeaService::new(ideas),
                 users,
+                words,
                 index: index.clone(),
                 usage: usage.clone(),
                 assets: Assets::None,
@@ -229,6 +285,7 @@ async fn usage_counts_survive_a_restart() {
     let times = TimeStore::open(wiki.path()).await.expect("open time log");
     let users = UserStore::open(wiki.path()).await.expect("open users");
     let ideas = IdeaStore::open(wiki.path()).await.expect("open ideas");
+    let words = WordLog::open(wiki.path()).await.expect("open word log");
     let index = Index::open(Some(&database)).await.expect("reopen index");
     let app = App {
         router: rhizolog::router(AppState {
@@ -236,6 +293,7 @@ async fn usage_counts_survive_a_restart() {
             times,
             ideas: IdeaService::new(ideas),
             users,
+            words,
             index,
             usage: rhizolog::UsageTally::new(),
             assets: Assets::None,
@@ -1603,6 +1661,308 @@ async fn removing_a_chapter_from_the_spine_makes_it_an_orphan_again() {
         .await;
 
     assert_eq!(app.get("/api/stats").await.body["orphan_count"], 2);
+}
+
+// -------------------------------------------------------------- word log
+
+/// The fields of one logged line, by name rather than by index.
+const AT: usize = 0;
+const SLUG: usize = 1;
+const ACTOR: usize = 2;
+const ACCOUNT: usize = 3;
+const KIND: usize = 4;
+const ADDED: usize = 5;
+const REMOVED: usize = 6;
+const TOTAL: usize = 7;
+const FROM: usize = 8;
+
+/// The whole reason this feature exists. A rewrite is not "minus one hundred".
+#[tokio::test]
+async fn a_rewrite_reports_both_halves_rather_than_their_difference() {
+    let app = App::new().await;
+
+    app.seed(
+        "chapter",
+        json!({ "content": "the ferry was late and nobody was surprised at all\n" }),
+    )
+    .await;
+
+    app.put(
+        "/api/pages/chapter",
+        json!({ "content": "the ferry was early and everybody was surprised\n" }),
+    )
+    .await;
+
+    let log = app.log();
+    assert_eq!(log.len(), 2);
+
+    // A page written through the API is words that have just arrived, not a
+    // wiki that was already there.
+    assert_eq!(log[0][KIND], "observed");
+    assert_eq!(log[0][ADDED], "10");
+    assert_eq!(log[0][REMOVED], "0");
+    assert_eq!(log[0][TOTAL], "10");
+
+    // Both halves, and neither of them the whole sentence: the words the two
+    // versions share were not written a second time.
+    assert_eq!(log[1][ADDED], "2", "early, everybody");
+    assert_eq!(log[1][REMOVED], "4", "late, nobody, at, all");
+    assert_eq!(log[1][TOTAL], "8");
+
+    // `total` is the check. It has to be the page's own count, and the two
+    // halves have to account for the change in it.
+    assert_eq!(app.get("/api/pages?prefix=chapter").await.body["words"], 8);
+
+    let series = app.get("/api/word-stats").await;
+    assert_eq!(series.body["totals"]["added"], 12);
+    assert_eq!(series.body["totals"]["removed"], 4);
+    assert_eq!(
+        series.body["totals"]["delta"], 8,
+        "which is the page's length, and not the only figure on offer"
+    );
+}
+
+/// Four writes, four distinguishable records. The label is a claim rather than a
+/// proof, which is exactly why it is worth recording who claimed what.
+#[tokio::test]
+async fn a_write_is_labelled_by_the_tool_that_made_it() {
+    let app = App::new().await;
+
+    app.post(
+        "/api/pages",
+        json!({ "slug": "a", "content": "One two three.\n" }),
+    )
+    .await;
+    app.send_as(
+        Method::POST,
+        "/api/pages",
+        Some(json!({ "slug": "b", "content": "Four five six.\n" })),
+        "claude-code",
+    )
+    .await;
+    app.send_as(
+        Method::PUT,
+        "/api/pages/b",
+        Some(json!({ "content": "Four five six seven.\n" })),
+        "web",
+    )
+    .await;
+
+    let actors: Vec<String> = app.log().iter().map(|line| line[ACTOR].clone()).collect();
+
+    assert_eq!(actors, ["api", "claude-code", "web"]);
+}
+
+/// A label that could not be written into a tab-separated line is refused rather
+/// than trimmed to fit, because silently rewriting somebody's provenance is
+/// worse than telling them the header was no good.
+#[tokio::test]
+async fn a_label_that_would_break_the_log_is_refused() {
+    let app = App::new().await;
+
+    let res = app
+        .send_as(
+            Method::POST,
+            "/api/pages",
+            Some(json!({ "slug": "a", "content": "One.\n" })),
+            "two\tfields",
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.code(), "invalid_actor");
+    assert_eq!(
+        res.body["error"]["details"]["header"], "x-rhizolog-actor",
+        "and it names the header rather than echoing what was refused"
+    );
+    assert!(
+        !res.body.to_string().contains("two"),
+        "the value was just refused for being unprintable; it does not belong in a JSON error"
+    );
+
+    // And the write did not happen.
+    assert_eq!(app.get("/api/pages/a").await.status, StatusCode::NOT_FOUND);
+}
+
+/// A move is one record naming both slugs, not a rewrite of history. A delete
+/// and a new page at the same slug are two series, because otherwise the chart
+/// would show a page losing forty thousand words and gaining them back.
+#[tokio::test]
+async fn a_move_keeps_one_series_and_a_delete_starts_another() {
+    let app = App::new().await;
+
+    app.seed("old", json!({ "content": "One two three four.\n" }))
+        .await;
+    app.post("/api/move", json!({ "from": "old", "to": "new" }))
+        .await;
+    app.put(
+        "/api/pages/new",
+        json!({ "content": "One two three four five.\n" }),
+    )
+    .await;
+
+    let log = app.log();
+    assert_eq!(log[1][KIND], "moved");
+    assert_eq!(log[1][SLUG], "new");
+    assert_eq!(log[1][FROM], "old");
+    assert_eq!(
+        (log[1][ADDED].as_str(), log[1][REMOVED].as_str()),
+        ("0", "0"),
+        "nothing was written; a move is a marker rather than a churn"
+    );
+
+    // The next edit is an ordinary one, diffed against what the page held before
+    // it moved rather than treated as a brand new page.
+    assert_eq!(log[2][KIND], "observed");
+    assert_eq!(log[2][ADDED], "1");
+    assert_eq!(log[2][REMOVED], "0");
+
+    // Now delete it and write something else at the same slug.
+    app.delete("/api/pages/new").await;
+    app.seed(
+        "new",
+        json!({ "content": "Something else entirely here.\n" }),
+    )
+    .await;
+
+    let log = app.log();
+    assert_eq!(log[3][KIND], "deleted");
+    assert_eq!(
+        log[3][REMOVED], "0",
+        "the words were written and deleting the file does not unwrite them"
+    );
+    assert_eq!(log[4][KIND], "observed");
+    assert_eq!(
+        log[4][ADDED], "4",
+        "a fresh series, not a four-word edit of a five-word page"
+    );
+}
+
+/// A page nobody wrote to twice produces one line, not one per save.
+#[tokio::test]
+async fn saving_a_page_nobody_changed_records_nothing() {
+    let app = App::new().await;
+    let body = json!({ "content": "One two three.\n" });
+
+    app.seed("a", body.clone()).await;
+    app.put("/api/pages/a", body.clone()).await;
+    app.put("/api/pages/a", body).await;
+
+    assert_eq!(app.log().len(), 1);
+}
+
+/// Formatting is not writing, which is why the diff runs over the extracted text
+/// rather than over the markdown.
+#[tokio::test]
+async fn reflowing_a_paragraph_is_not_words() {
+    let app = App::new().await;
+
+    app.seed("a", json!({ "content": "One two three four five six.\n" }))
+        .await;
+    app.put(
+        "/api/pages/a",
+        json!({ "content": "One two three\nfour five six.\n" }),
+    )
+    .await;
+
+    assert_eq!(app.log().len(), 1);
+}
+
+/// On a wiki with no accounts there is no name to give, which is the same thing
+/// `owner` does on a capture.
+#[tokio::test]
+async fn an_open_wiki_records_a_tool_and_no_account() {
+    let app = App::new().await;
+    app.seed("a", json!({ "content": "One.\n" })).await;
+
+    let log = app.log();
+    assert_eq!(log[0][ACCOUNT], "");
+    assert!(log[0][AT].ends_with('Z'), "got {}", log[0][AT]);
+}
+
+// -------------------------------------------------------------- word stats
+
+#[tokio::test]
+async fn the_series_comes_back_by_day_by_tool_and_by_page() {
+    let app = App::new().await;
+
+    app.send_as(
+        Method::POST,
+        "/api/pages",
+        Some(json!({ "slug": "a", "content": "One two three four.\n" })),
+        "claude-code",
+    )
+    .await;
+    app.send_as(
+        Method::POST,
+        "/api/pages",
+        Some(json!({ "slug": "b", "content": "Five six.\n" })),
+        "web",
+    )
+    .await;
+
+    let res = app.get("/api/word-stats").await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["resolution"], "observed");
+    assert_eq!(res.body["totals"]["added"], 6);
+    assert_eq!(res.body["totals"]["removed"], 0);
+    assert_eq!(res.body["totals"]["delta"], 6);
+    assert_eq!(res.body["totals"]["pages"], 2);
+
+    let actors = res.body["actors"].as_array().expect("actors");
+    assert_eq!(actors.len(), 2);
+    assert_eq!(actors[0]["actor"], "claude-code");
+    assert_eq!(actors[0]["added"], 4);
+    assert_eq!(actors[1]["actor"], "web");
+
+    let pages = res.body["pages"].as_array().expect("pages");
+    assert_eq!(pages[0]["slug"], "a");
+    assert_eq!(pages[0]["title"], "A", "the derived title, not the slug");
+
+    // Every day in the window, so a chart can draw the gaps.
+    let days = res.body["days"].as_array().expect("days");
+    assert_eq!(days.len(), 90);
+    assert_eq!(
+        days.iter()
+            .map(|day| day["added"].as_u64().unwrap())
+            .sum::<u64>(),
+        6
+    );
+}
+
+#[tokio::test]
+async fn a_window_the_caller_named_is_the_window_it_gets() {
+    let app = App::new().await;
+    app.seed("a", json!({ "content": "One two.\n" })).await;
+
+    // A window that ended before anything was written.
+    let res = app
+        .get("/api/word-stats?from=2020-01-01T00:00:00Z&to=2020-01-08T00:00:00Z")
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["days"].as_array().expect("days").len(), 7);
+    assert_eq!(res.body["totals"]["added"], 0);
+    assert_eq!(res.body["totals"]["observations"], 0);
+}
+
+/// Bookkeeping is not writing, so a baseline is not a day on which somebody
+/// wrote a whole wiki.
+#[tokio::test]
+async fn a_reindex_of_an_untouched_wiki_adds_nothing_to_the_series() {
+    let app = App::new().await;
+    app.seed("a", json!({ "content": "One two three.\n" }))
+        .await;
+
+    let before = app.get("/api/word-stats").await.body["totals"].clone();
+    assert_eq!(
+        app.post("/api/reindex", json!({})).await.status,
+        StatusCode::OK
+    );
+    let after = app.get("/api/word-stats").await.body["totals"].clone();
+
+    assert_eq!(before, after);
+    assert_eq!(app.log().len(), 1, "and no new line was written");
 }
 
 // ----------------------------------------------------------------- prose

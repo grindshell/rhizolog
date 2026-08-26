@@ -280,6 +280,15 @@ function queryString(params: Record<string, unknown> | undefined): string {
  */
 const BASE = '/api'
 
+// What the dashboard calls itself in the word log.
+//
+// A label rather than a credential, and the backend treats it as one: it says
+// which tool made a write so that "how much of today came through Claude" has
+// an answer, and anything that can write could send any label it liked. The
+// account a write is made as comes from the session and is not something this
+// can touch.
+const ACTOR = 'web'
+
 interface RequestOptions {
   method?: string
   query?: Record<string, unknown>
@@ -290,7 +299,14 @@ interface RequestOptions {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', query, body, signal } = options
 
-  const init: RequestInit = { method, signal, headers: { Accept: 'application/json' } }
+  const init: RequestInit = {
+    method,
+    signal,
+    // Every request, not only the writes: the header costs nothing on a read
+    // and a per-method exception is a thing to get wrong later. The backend
+    // records it against page writes and ignores it everywhere else.
+    headers: { Accept: 'application/json', 'X-Rhizolog-Actor': ACTOR },
+  }
   if (body !== undefined) {
     init.headers = { ...init.headers, 'Content-Type': 'application/json' }
     init.body = JSON.stringify(body)

@@ -16,6 +16,7 @@ pub mod schema;
 pub mod sessions;
 pub mod sync;
 pub mod times;
+pub mod words;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -46,6 +47,7 @@ pub use times::{
     PageTimes, TimeGroup, TimeList, TimeListOptions, TimePageRef, TimeRecord, TimeRef, TimeSortBy,
     TimeTotals,
 };
+pub use words::WordChange;
 
 #[derive(Debug, Error)]
 pub enum IndexError {
@@ -253,7 +255,14 @@ impl Index {
     }
 
     /// Record a page, replacing whatever was indexed under its slug.
-    pub async fn upsert(&self, page: &Page) -> Result<(), IndexError> {
+    ///
+    /// Returns what the write was worth in words. This is the one place holding
+    /// both the body about to be written and the body about to be replaced, so
+    /// it is the only place the difference between them can be taken. Writing
+    /// that down is somebody else's job: the log under `.rhizolog/words/` is
+    /// authored data, and the index does not write authored data. See
+    /// [`crate::words`].
+    pub async fn upsert(&self, page: &Page) -> Result<WordChange, IndexError> {
         let slug = page.slug.to_string();
         let title = page.title();
         let tags = page.tags().to_vec();
@@ -385,14 +394,34 @@ impl Index {
                 params![&slug],
                 |row| row.get(0),
             )?;
+
+            // Read before the delete below replaces it. This is the previous
+            // body, and it is here rather than in a store of its own because it
+            // is already here: nothing new has to be kept for the diff, which is
+            // the only reason a diff on every save is affordable.
+            let before: Option<String> = transaction
+                .query_row(
+                    "select body from pages_fts where rowid = ?1",
+                    params![rowid],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
             transaction.execute("delete from pages_fts where rowid = ?1", params![rowid])?;
             transaction.execute(
                 "insert into pages_fts (rowid, slug, title, body) values (?1, ?2, ?3, ?4)",
                 params![rowid, &slug, &title, &body],
             )?;
 
+            let change = crate::index::words::weigh(
+                crate::index::words::last_total(&transaction, &slug)?,
+                before.as_deref(),
+                &body,
+                words.max(0) as u64,
+            );
+
             transaction.commit()?;
-            Ok(())
+            Ok(change)
         })
         .await
     }

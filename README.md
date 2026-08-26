@@ -233,6 +233,7 @@ All optional, all environment variables.
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | The derived index. Safe to delete. |
 | none | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
 | none | `<root>/.rhizolog/ideas/` | Captures, threads and decisions. **Not** derived; back it up. |
+| none | `<root>/.rhizolog/words/` | The word log: what was written, when, and by which tool. **Not** derived; back it up. |
 | none | `<root>/.rhizolog/users/` | Accounts. **Not** derived, and secret; back it up, don't commit it. |
 | none | `<root>/.rhizolog/server.json` | Where the running server is. Gone when it stops. |
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Where to listen. |

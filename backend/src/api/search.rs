@@ -188,6 +188,7 @@ pub async fn reindex(State(state): State<AppState>) -> AppResult<Json<ReindexRes
         &state.store,
         &state.times,
         state.ideas.store(),
+        &state.words,
         &state.index,
     )
     .await?;

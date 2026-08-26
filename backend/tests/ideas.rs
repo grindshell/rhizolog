@@ -173,6 +173,7 @@ async fn router_over(root: &std::path::Path) -> Router {
     let times = TimeStore::open(root).await.expect("open time log");
     let ideas = IdeaStore::open(root).await.expect("open ideas");
     let users = UserStore::open(root).await.expect("open users");
+    let words = rhizolog::WordLog::open(root).await.expect("open word log");
     let index = Index::open(None).await.expect("open index");
 
     rhizolog::router(AppState {
@@ -180,6 +181,7 @@ async fn router_over(root: &std::path::Path) -> Router {
         times,
         ideas: IdeaService::new(ideas),
         users,
+        words,
         index,
         usage: rhizolog::UsageTally::new(),
         assets: Assets::None,

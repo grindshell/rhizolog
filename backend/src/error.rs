@@ -124,6 +124,22 @@ pub enum AppError {
     #[error("the prose rules will not parse: {reason}")]
     ProseRulesInvalid { reason: String },
 
+    /// An `X-Rhizolog-Actor` header that could not go in the word log.
+    ///
+    /// The log is tab-separated, so a label holding a tab or a newline would
+    /// produce a line that reads back as something else. Refused rather than
+    /// trimmed to fit: silently rewriting somebody's provenance is worse than
+    /// telling them the header was no good.
+    ///
+    /// The value is deliberately not echoed. It was just refused for holding
+    /// something unprintable, and putting it in a JSON error would be putting it
+    /// somewhere else it does not belong.
+    #[error(
+        "{header} must be 1 to {maximum} characters and hold no control characters",
+        header = crate::words::ACTOR_HEADER
+    )]
+    InvalidActor { maximum: usize },
+
     #[error("invalid time id {raw:?}: {source}")]
     InvalidTimeId {
         raw: String,
@@ -401,7 +417,8 @@ impl AppError {
             // for the same reason: the request is well formed and the authored
             // file it reaches for is not.
             Self::ProseRulesInvalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::InvalidRecordId { .. }
+            Self::InvalidActor { .. }
+            | Self::InvalidRecordId { .. }
             | Self::InvalidTimeId { .. }
             | Self::TimeRangeInverted { .. }
             | Self::InvalidRequestBody { .. }
@@ -477,6 +494,7 @@ impl AppError {
             Self::CompileRootNotFound { .. } => "compile_root_not_found",
             Self::CompileTooLarge { .. } => "compile_too_large",
             Self::ProseRulesInvalid { .. } => "prose_rules_invalid",
+            Self::InvalidActor { .. } => "invalid_actor",
             Self::InvalidRequestBody { .. } => "invalid_request_body",
             Self::UnknownFields { .. } => "unknown_fields",
             Self::InvalidParameter { .. } => "invalid_parameter",
@@ -544,6 +562,10 @@ impl AppError {
             Self::ProseRulesInvalid { reason } => Some(json!({
                 "file": format!("{}/{}", crate::store::INTERNAL_DIR, crate::prose::RULES_FILE),
                 "reason": reason,
+            })),
+            Self::InvalidActor { maximum } => Some(json!({
+                "header": crate::words::ACTOR_HEADER,
+                "maximum": maximum,
             })),
             Self::Password(error) => Some(json!({
                 "rule": error.code(),

@@ -23,6 +23,7 @@ pub mod store;
 pub mod times;
 pub mod users;
 pub mod watcher;
+pub mod words;
 
 pub use api::usage::UsageTally;
 pub use api::{AppState, router};
@@ -44,3 +45,4 @@ pub use slug::{Slug, SlugError};
 pub use store::{Store, StoreError};
 pub use times::{TimeEntry, TimeId, TimeStore, TimeStoreError};
 pub use users::{Role, User, UserStore, UserStoreError, Username};
+pub use words::{Observation, WordLog, WordLogError};

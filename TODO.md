@@ -237,7 +237,7 @@ not missing pieces of it.
 
 ## Long-form writing
 
-**Three phases of five are built.** The plan and the reasoning are in
+**Four phases of five are built.** The plan and the reasoning are in
 [Long-form writing](knowledge-base/long-form.md): compile a tree of pages into
 one addressable document, give a page and a manuscript a length and a target, and
 check prose against rules the author wrote down. It is aimed at drafting
@@ -245,7 +245,7 @@ long-form work alone with an assistant, which is what makes compile a context
 loader before it is an export and what makes a net word count worth splitting by
 who wrote it.
 
-Five phases. L3 and L4 are what is left, and neither is started:
+Five phases. L4 is what is left, and it is not started:
 
 - **L0: words.** **Built.** `markdown::count_words`, `pages.words` at schema
   version 10, `target`, `due` and `contents` in frontmatter, `?sort=words`, and
@@ -272,10 +272,26 @@ Five phases. L3 and L4 are what is left, and neither is started:
   A rules file belongs to a wiki: `backend/wiki/` is gitignored and
   `example-wiki/` is a fixture the documentation makes claims about. The starter
   is the worked example on the plan page. Giving it a home is part of L4.
-- **L3: actor and the word log.** An `X-Rhizolog-Actor` header, and
-  `.rhizolog/words/`: a fourth authored tree, with `page_words` derived from it.
-- **L4: dashboard and documentation closure**, which is where the three places
-  that enumerate the authored trees gain a fourth.
+- **L3: actor and the word log.** **Built.** An `X-Rhizolog-Actor` header, and
+  `.rhizolog/words/`: a fourth authored tree, one file a month and one line an
+  observation, with `page_words` derived from it at schema version 12. Every
+  observation carries words **added and removed** rather than their difference,
+  diffed against the previous body out of `pages_fts`. `GET /api/word-stats`
+  answers the series by day, by tool and by page, and refuses a caller who has
+  not signed in even under `RHIZOLOG_ANONYMOUS_READ`. Deleting `index.db` and
+  restarting reproduces the whole series and adds nothing to the log, which is
+  the property that made this a file rather than a table. The four places that
+  enumerate the authored trees were updated here rather than in L4, because the
+  tree exists now. See "What L3 turned out to be" on the plan page, and in
+  particular the `*.log` line in `.gitignore` that had been quietly ignoring it.
+- **The word log is not in the sync report.** The other five trees are compared
+  file by file and counted as scanned, indexed, unchanged, removed and failed;
+  this one is read and replaced wholesale on every sync, and three of those five
+  fields would be zero for reasons that mean nothing. `POST /api/reindex`
+  therefore says nothing about it. It belongs with L4's dashboard work, where
+  there is somewhere to put it.
+- **L4: dashboard and documentation closure**: the Manuscript panel, the
+  assembled view, the findings strip, and the words chart beside the hours.
 
 **The recursion rule is settled.** A page contributes its body, then each page in
 its `contents:` list, in order, recursively; a link in prose is never structure,

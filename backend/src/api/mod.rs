@@ -18,6 +18,7 @@ pub mod search;
 pub mod times;
 pub mod usage;
 pub mod users;
+pub mod words;
 
 use axum::Router;
 use axum::extract::Request;
@@ -40,6 +41,7 @@ use crate::index::Index;
 use crate::store::Store;
 use crate::times::TimeStore;
 use crate::users::UserStore;
+use crate::words::WordLog;
 
 pub const OPENAPI_PATH: &str = "/api-docs/openapi.json";
 pub const SWAGGER_UI_PATH: &str = "/swagger-ui";
@@ -60,6 +62,14 @@ pub struct AppState {
     /// and how many there are is what decides whether this wiki asks anybody to
     /// sign in. See [`crate::auth`].
     pub users: UserStore,
+    /// The word log under `.rhizolog/words/`: what was written, when, and by
+    /// which tool. The fourth authored tree, and the one whose contents cannot
+    /// be reconstructed from anything else, which is why it is a file and not a
+    /// table. See [`crate::words`].
+    ///
+    /// One per process, deliberately: appends are serialised through a lock this
+    /// value holds, and a second one over the same directory would not share it.
+    pub words: WordLog,
     /// The derived index. Everything in it can be rebuilt from `store` and
     /// `times` — except the sessions, which are durable and cost a sign-in each
     /// if lost.
@@ -100,6 +110,10 @@ pub struct AppState {
     ),
     tags(
         (name = "pages", description = "Reading and writing wiki pages"),
+        (name = "words", description = "The word log: what was written, when, and by which tool. \
+                                       Churn rather than net change, because a rewrite is not \
+                                       the difference between two totals. Working state, so it \
+                                       is never served to a caller who has not signed in."),
         (name = "prose", description = "prose/v1: holding prose to rules you wrote down. Local, \
                                        deterministic, and never a model. Every finding quotes the \
                                        text it fired on and carries the arithmetic behind it."),
@@ -212,6 +226,7 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         .routes(routes!(times::stop_time))
         .routes(routes!(times::list_time_groups))
         .routes(routes!(times::time_statistics))
+        .routes(routes!(words::word_statistics))
         .routes(routes!(ideas::list_captures, ideas::create_capture))
         .routes(routes!(
             ideas::read_capture,

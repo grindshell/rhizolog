@@ -36,8 +36,11 @@ use crate::ideas::{
 };
 use crate::index::{Index, sync::sync};
 use crate::slug::Slug;
-use crate::store::{INTERNAL_DIR, Store};
+use chrono::Utc;
+
+use crate::store::{INTERNAL_DIR, Store, StoreError};
 use crate::times::{TIMES_DIR, TimeId, TimeStore};
+use crate::words::{self, By, WordLog};
 
 /// How long to wait for a burst of events to settle.
 ///
@@ -94,6 +97,7 @@ pub fn spawn(
     store: Store,
     times: TimeStore,
     ideas: IdeaStore,
+    words: WordLog,
     index: Index,
 ) -> Option<JoinHandle<()>> {
     let root = store.root().to_path_buf();
@@ -144,7 +148,7 @@ pub fn spawn(
                 continue;
             };
 
-            apply(&store, &times, &ideas, &index, plan).await;
+            apply(&store, &times, &ideas, &words, &index, plan).await;
         }
 
         tracing::debug!("file watcher stopped");
@@ -308,9 +312,16 @@ fn segments(relative: &Path) -> Option<Vec<&str>> {
         .collect()
 }
 
-async fn apply(store: &Store, times: &TimeStore, ideas: &IdeaStore, index: &Index, plan: Reindex) {
+async fn apply(
+    store: &Store,
+    times: &TimeStore,
+    ideas: &IdeaStore,
+    words: &WordLog,
+    index: &Index,
+    plan: Reindex,
+) {
     match plan {
-        Reindex::Everything => match sync(store, times, ideas, index).await {
+        Reindex::Everything => match sync(store, times, ideas, words, index).await {
             Ok(report) if report.changed_anything() => {
                 tracing::info!(
                     pages = report.pages.indexed,
@@ -327,7 +338,7 @@ async fn apply(store: &Store, times: &TimeStore, ideas: &IdeaStore, index: &Inde
         },
         Reindex::Targets(targets) => {
             for slug in targets.pages {
-                if let Err(error) = reindex_page(store, index, &slug).await {
+                if let Err(error) = reindex_page(store, words, index, &slug).await {
                     tracing::warn!(%slug, %error, "could not reindex a changed page");
                 }
             }
@@ -363,12 +374,28 @@ async fn apply(store: &Store, times: &TimeStore, ideas: &IdeaStore, index: &Inde
 /// and idempotence is what makes the API's own write echoes harmless.
 async fn reindex_page(
     store: &Store,
+    words: &WordLog,
     index: &Index,
     slug: &Slug,
 ) -> Result<(), crate::index::IndexError> {
     match store.read(slug).await {
         Ok(page) => {
-            index.upsert(&page).await?;
+            let change = index.upsert(&page).await?;
+            // `file`, which is the writer in their own editor. It is the one
+            // actor nobody can claim over HTTP, because it is the one the server
+            // works out for itself.
+            words::observe(
+                words,
+                index,
+                slug,
+                &By::file(),
+                Utc::now(),
+                // A page appearing under a running server is somebody writing
+                // one, not a wiki that was already there. Only the startup scan
+                // baselines.
+                change.as_written(),
+            )
+            .await;
             tracing::debug!(%slug, "reindexed after an external edit");
         }
         Err(error) => {
@@ -377,6 +404,14 @@ async fn reindex_page(
             // comes back on the next event or the next scan.
             tracing::debug!(%slug, %error, "dropping a page that could not be read");
             index.remove(slug).await?;
+
+            // Only a page that has actually **gone** closes its series. A page
+            // that has merely stopped parsing is still somebody's writing, and
+            // marking it deleted would make the next successful save look like a
+            // brand new page.
+            if matches!(error, StoreError::NotFound { .. }) {
+                words::deleted(words, index, slug, &By::file(), Utc::now()).await;
+            }
         }
     }
     Ok(())
