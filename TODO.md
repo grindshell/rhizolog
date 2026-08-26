@@ -406,15 +406,12 @@ failed on `create table` and the index would not have opened at all. Two tests
 guard it now, one comparing the two lists and one opening a database stamped with
 an older version.
 
-Three gaps were found in the survey this plan came out of. **Pacing is built**
-and has [its own page](knowledge-base/pacing.md) and its own section below. The
-other two are still not:
+Three gaps were found in the survey this plan came out of. **Pacing and
+reordering are built** and have their own pages,
+[Pacing](knowledge-base/pacing.md) and
+[Reordering the spine](knowledge-base/reordering.md), and their own sections
+below. The third is still not:
 
-- **Reordering the spine from the panel.** Today the only way to move a chapter
-  is to edit a YAML list in a textarea. Order moved into frontmatter so a
-  formatter could not reorder a book, and the panel was meant to pay that back;
-  it pays back reading and not editing. A drag that ends in a `PATCH` of
-  `contents` is the shape.
 - **Split and merge.** Splitting a page at an offset and repairing the parent's
   contents list is mechanical, error-prone by hand, and exactly what an API
   should do.
@@ -462,6 +459,34 @@ What is not done:
 - **A rate over a fortnight says nothing about which fortnight.** One enormous
   day and fourteen steady ones give the same number, and `active_days` is all
   that separates them.
+
+## Reordering the spine
+
+**Built**, and recorded in [Reordering the spine](knowledge-base/reordering.md).
+The Manuscript panel gains a Reorder view where each row moves within the
+contents list that names it, which is a `PATCH` of that list and no new endpoint.
+`GET /api/compile` gained the two fields that made it possible: `parent` and
+`ordinal` per section, saying which list named the entry and where in it.
+
+The one rule worth carrying: **`ordinal` is an identity, not a row number.** A
+page reached down both an excluded path and an included one is walked twice, so
+its children appear in the manifest twice with the same ordinals. Rebuilding a
+contents list by counting rows would double it and write a book with every
+chapter in it twice.
+
+What is not done:
+
+- **A drag.** `TODO.md` called it the shape and it is a pair of buttons per row,
+  because the keyboard alternative a drag needs is a pair of buttons and this way
+  works on a phone. A drag can be laid over it and would end in the same write.
+- **Moving a chapter between parts.** Two lists change, which is two writes and a
+  question about the second failing. The panel says so rather than leaving
+  somebody to find out that the buttons will not do it.
+- **The list written back is as old as the compile on screen.** A chapter added
+  in your own editor since then is written out of the spine. Re-reading after the
+  move makes it visible rather than silent; closing it properly means conditional
+  writes, which this API does not have anywhere and should not grow in one
+  corner. The editor has the same window over a larger surface.
 
 ## Rough edges
 

@@ -281,6 +281,11 @@ handing an assistant chapter nine in the light of chapter two is the thing the
 manifest makes possible, because a finding over the whole book maps back to the
 page and offset that produced it.
 
+Each entry also says which `contents:` list named it and where in that list, which
+is what lets the dashboard's Manuscript panel move a chapter without anybody
+opening a YAML list in a textarea. A move is a `PATCH` of that list, and a gap or
+a typo in it survives one: those are things somebody wrote.
+
 Every page has a `words` count, prose rather than bytes: code fences, inline
 code, frontmatter and raw HTML blocks are all excluded, so a page that is mostly
 a code sample is large and nearly wordless. `?sort=words` orders by it and the

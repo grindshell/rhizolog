@@ -1529,6 +1529,12 @@ The same argument later produced `GET /api/pace`, which does the division that
 have been a field for either. See [Pacing](pacing.md), including what it costs to
 walk the book a second time on the same page view.
 
+The panel later grew the other half of what it was for. Drawing the spine paid
+back reading; moving a chapter still meant rewriting a YAML list by hand. It does
+not now, and what the manifest was missing was two fields saying which contents
+list named each entry and where in it. See
+[Reordering the spine](reordering.md).
+
 ### A part edge does not look like a wikilink, and bows the same way
 
 The two questions L1 deferred, answered. Drawn in the second colour and heavier

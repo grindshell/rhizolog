@@ -28,6 +28,8 @@ Every page should be reachable from this index.
   stage, a target of its own, and staying in the spine while out of the book
 - [Pacing](pacing.md): words remaining over days remaining, the rate that
   actually happened, and why a net is the right number here and nowhere else
+- [Reordering the spine](reordering.md): moving a chapter from the panel that
+  draws it, and why the manifest had to say which list named each entry
 - [The desktop app](desktop-app.md) — packaging as a portable Tauri app, and
   keeping the server the only interface
 - [The product site](product-site.md) — rhizolog.com: what the landing page is

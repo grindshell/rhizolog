@@ -476,6 +476,39 @@ Neither changes the Manuscript panel's trigger, which stays `contents`, `target`
 or `due`. A page carrying only a stage has no spine to draw and the panel costs a
 compile.
 
+### The Reorder view is where the spine can be moved
+
+A third entry in the List / Cards toggle, and each row gains a pair of buttons
+that move it within the contents list that names it. The write is a `PATCH` of
+that list; there is no reorder endpoint.
+
+This is the panel finally paying back the whole of what order-in-frontmatter cost.
+It paid back reading from the day it existed; moving a chapter still meant opening
+the parent in the editor and rewriting a YAML list in a textarea, without the book
+in front of you, which is worse than the thing the decision was protecting against.
+
+**Being a mode is the point.** Order lives in frontmatter so that nothing
+incidental can move a chapter, and a view you have to enter is that same argument
+carried into the one place that can. It also keeps the ordinary reading of a book
+free of two buttons on every row.
+
+Buttons rather than a drag, which `TODO.md` had called the shape. A drag needs a
+keyboard alternative to be usable at all and that alternative is a pair of
+buttons, so the choice was between buttons and buttons plus a second way in; these
+also work on a phone, where an HTML5 drag does not. They are labelled by the entry
+rather than the direction, because a column of "Move up" buttons read out one after
+another says nothing about which chapter each one moves.
+
+An entry moves only within its own list, so a chapter cannot leave its part, and
+the view says so rather than leaving somebody to discover it. There are no reorder
+controls in the card view: up and down in a grid that wraps means something
+different at every width.
+
+The list written back is rebuilt from the manifest on screen, so it is as old as
+the compile that drew it, and the panel re-reads the book after every move to make
+a collision visible rather than silent. See
+[Reordering the spine](reordering.md).
+
 ### The card view is the corkboard without the coordinates
 
 A toggle beside "Read assembled" swaps the list for one card per section: title,

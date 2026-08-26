@@ -141,6 +141,22 @@ The four that are not assembled are why the book is shaped the way it is:
   about nothing. The page itself still has both, and `/pages/book/two/the-argument`
   still shows them.
 
+Every one of those entries also says which `contents:` list named it and where in
+that list, which is what the panel's **Reorder** view moves them with. `book/two`
+is the one worth trying it on: its list holds five entries and only two of them
+are chapters, so a move there has to carry a gap, a cut scene, a page already
+assembled elsewhere and an entry that is not a slug along with it. All four are
+still in the file afterwards, in their new places.
+
+**Do not reorder anything while `RHIZOLOG_ROOT` points here.** It rewrites
+`book/two.md` and the section above stops being true. It writes no word
+observation, because the body it rewrites is unchanged, so `git status
+example-wiki` is the thing that says whether it happened.
+
+An entry only moves within the list that names it, so the appendix cannot be
+dragged out of Part Two and the ferry cannot leave Part One. Moving a chapter
+between parts is two lists changing, which is a hand edit.
+
 `?assembled=1` on the same page renders the whole thing, with headings shifted by
 depth: the book's `#`, each part's `##`, each chapter's `###`. Nothing is
 inserted, so a part contributes only what it wrote, which is a heading and an
@@ -371,7 +387,7 @@ opinion about your voice.
 `GET /api/prose/rules` reports them with their defaults filled in and a digest
 over the lot, so an assistant handed a finding can reproduce it without reading
 the file. `GET /api/prose?slug=index` runs them over this page and should answer
-**10 errors and 98 warnings**: an em dash for each of the first, and a word used
+**10 errors and 100 warnings**: an em dash for each of the first, and a word used
 twice inside eight of another for each of the second.
 
 The first rule is the one this project holds itself to, and it is written with

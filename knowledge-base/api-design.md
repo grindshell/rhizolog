@@ -58,6 +58,27 @@ storage model it sits on.
 Plus fields rather than endpoints: `words` on the page listing and the page read,
 and `target`, `due` and `contents` on a page that carries them.
 
+### Reordering is two more manifest fields and no endpoint at all
+
+`GET /api/compile` reports `parent` and `ordinal` per section: which `contents:`
+list named the entry, and where in that list. Absent together on the root and on a
+`?style=` preamble, which nothing named, and **present on a gap, a repeat and a
+cut chapter**, where everything else about the page is absent. Those two describe
+the entry rather than the page, and an entry nothing could locate would be an
+entry nothing could fix.
+
+With them, moving a chapter is a `PATCH` of the parent's `contents`, which was
+already possible and was already the documented way to edit a spine. A
+`POST /api/reorder {parent, from, to}` was considered and lost: it would be a
+second way to say what `PATCH` already says, and the stale-list problem it solves
+belongs to the whole dashboard rather than to this one field. See
+[Reordering the spine](reordering.md).
+
+**`ordinal` is an identity, not a row number.** A page reached down both an
+excluded path and an included one is walked twice, so its children appear twice in
+the manifest with the same ordinals. A client rebuilding a contents list keys on
+the ordinal or writes a book with every chapter in it twice.
+
 ### Pacing is one more, and it is one more because of who may ask
 
 | Method | Path | Purpose |

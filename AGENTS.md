@@ -83,13 +83,16 @@ lines agrees with the page it describes, so the startup scan finds nothing to
 record. Before that log was committed, merely starting a server against the
 fixture appended a baseline for every page in it.
 
-Two things still change it. Starting a timer writes a time entry, and **editing a
-page writes a word observation**, which the numbers in `index.md` do not account
-for. Check `git status example-wiki` afterwards.
+Three things still change it. Starting a timer writes a time entry, **editing a
+page writes a word observation**, and **the Manuscript panel's Reorder view
+rewrites a `contents:` list**, which the numbers in `index.md` do not account for.
+The third writes no word observation, because the body it rewrites is unchanged
+and the diff is nothing to nothing; it still rewrites the file. Check
+`git status example-wiki` afterwards.
 
 Anything that changes `index.md` changes its own word count, which the log's last
 line for `index` has to match or the next scan records the difference as a `net`.
-The chain is baseline 3100, then `+260 -40`, then `+220 -21`, ending at 3519. Fix
+The chain is baseline 3263, then `+260 -40`, then `+220 -21`, ending at 3682. Fix
 it by moving the **baseline**, which carries no churn and so changes no total on
 the chart: it is the final count less 419, and the middle total moves with it.
 Those three numbers rot every time this page's prose changes; the rule is what to
