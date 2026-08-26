@@ -210,6 +210,50 @@ compile could afford since it reads bodies from disk anyway; the index wins
 because three things want the tree and only one of them wants the bodies:
 compile, the target rollup, and the dashboard panel.
 
+### Every entry is a slug from the wiki root
+
+`book/one/opening`, never `opening`, `./opening` or `../two/opening`. There is no
+relative form and no basename fallback, wherever the page holding the list sits.
+
+This is the same answer a wikilink already gets, for the reasons
+[Architecture](architecture.md) gives under "Resolution is exact, and it is a
+query", and the same answer a time entry's `pages:` list already gets. A
+structured list of slugs in frontmatter has one spelling in this wiki and this is
+not the place to invent a second. The verbosity is a cost that page already
+accepted out loud:
+
+> The cost is verbosity: you write `[[notes/rust/async]]`, not `[[async]]`. The
+> editor can offer completion for that; it cannot un-break a link that
+> retargeted itself.
+
+Three things make it more clearly right here than it is for wikilinks:
+
+- **A relative entry would be resolved against a position that moves.**
+  `POST /api/move` deliberately does not rewrite inbound links, because a move
+  turning them into wanted pages is visible in the stats. A relative `contents:`
+  entry would not go wanted: it would resolve against the contents page's new
+  directory and quietly assemble a different book.
+- **It would need a second code path that builds a page path**, since resolving
+  `..` has to happen before validation. `Slug` is the only thing allowed to do
+  that, and [Architecture](architecture.md) calls slug validation
+  security-critical for exactly this reason. Markdown links are resolved
+  relatively, and note what that resolution is allowed to do when it climbs out
+  of the wiki: **drop the link entirely**. That is a fine answer for a reference
+  and an unacceptable one for a chapter.
+- **The manifest reports slugs**, so a relative list would be written one way and
+  read back another, and every reader would be doing the translation by hand.
+
+The failures are worth knowing because they are not all the same:
+
+- `../two/opening` and `./opening` are refused by `Slug::parse` itself, which has
+  a `RelativeSegment` variant and the error code `slug_relative_segment`. They
+  land as `invalid` in the manifest and name their own problem.
+- `opening` is **not** an error. It is a perfectly good slug for a top-level page,
+  so it resolves to `opening`, finds nothing, and appears as a `wanted` gap at its
+  position. That is the one relative-looking form that fails quietly, and it fails
+  the way a missing chapter does: visible, in place, and fixed by writing the slug
+  out in full.
+
 ### A slug typo must not cost you the page
 
 `contents:` entries are read as **strings** and parsed into `Slug` at compile
@@ -237,8 +281,11 @@ immediately, and the Manuscript panel can point out that a body link and a
   one becomes an H2 under the book's H1. Nothing is inserted: a page with no
   heading contributes no heading, because the manifest records the boundary and
   inventing a title would be writing words the author did not.
-- **A page already emitted is skipped**, and the manifest says so. That is how
-  cycles end, and it is reported rather than silently deduplicated.
+- **A page already emitted is `duplicate`**, and the manifest says so rather than
+  deduplicating quietly. That is how a cycle ends, but the status is not called
+  after one, because the commoner case is not a cycle at all: an appendix listed
+  under two parts is a diamond, and a name that said `cycle` would send somebody
+  looking for a loop that is not there.
 - **A wanted page in the contents is a gap in the manuscript**, and the manifest
   says that too. This is exactly the stance
   [Architecture](architecture.md) already takes: an unresolved link is a branch
@@ -263,7 +310,7 @@ immediately, and the Manuscript panel can point out that a body link and a
 ### The manifest is the reason this is not a blob
 
 Per section: `slug`, `title`, `depth`, `words`, `offset`, `length`, and a
-`status` of `included`, `wanted`, `invalid`, `skipped_cycle` or `unreadable`.
+`status` of `included`, `wanted`, `invalid`, `duplicate` or `unreadable`.
 Plus totals, and the analyzer-style stamp `compiler: "compile/v1"`.
 
 A section with any status other than `included` still occupies its position in
@@ -455,7 +502,7 @@ mistake somebody just made and wants to hear about.
 
 ```text
 backend/src/
-  compile.rs         # assembly, heading shift, cycles, the manifest
+  compile.rs         # assembly, heading shift, repeats, the manifest
   prose/
     mod.rs           # the rules file and its parsing
     rules.rs         # the five rule kinds, each a pure function
@@ -484,8 +531,8 @@ Almost no new routes, which is the measure of whether this fits.
 
 - **A contents page gets a Manuscript panel** on `/pages/*slug`: the sections in
   order with their counts, the target and progress, the due date, and a Compile
-  button. Gaps, invalid entries and cycles are shown as themselves rather than
-  omitted. This panel is not a nicety. Since the order moved into frontmatter,
+  button. Gaps, invalid entries and duplicates are shown as themselves rather
+  than omitted. This panel is not a nicety. Since the order moved into frontmatter,
   it is the only place the spine is rendered as something you can click, and it
   is what the body used to be.
 - **`/pages/*slug?assembled=1`** renders the compiled document, which is also the
@@ -529,13 +576,15 @@ numbers.
 ### L1: compile and the manifest
 
 Index `contents:` entries as `part` links with an `ordinal`. Implement the
-assembly, the heading shift, cycle and gap reporting, the three formats, and the
-audience predicate.
+assembly, the heading shift, gap and duplicate reporting, the three formats, and
+the audience predicate.
 
 Done when compiling a fixture book twice is byte-identical, every included
 section's bytes appear exactly once at the offset the manifest claims, a wanted
-page holds its position rather than being skipped, a cycle terminates and says
-so, and a chapter listed in `contents:` is no longer an orphan in `/api/stats`.
+page holds its position rather than being skipped, a repeat terminates the walk
+and is reported as `duplicate` rather than dropped, a relative entry is refused
+by `Slug` rather than resolved against anything, and a chapter listed in
+`contents:` is no longer an orphan in `/api/stats`.
 
 ### L2: `prose/v1`
 
@@ -574,11 +623,16 @@ code departed from it.
 - Assembly: a page with no `contents:`, an empty list, a list naming a page that
   has its own list, a body followed by contents in that order, and a `contents:`
   entry that is a URL, a `..` path or an empty string.
+- **Every relative spelling of an entry**, from a page that is nested rather than
+  at the root: `./x` and `../x` are `invalid`, a bare basename resolves from the
+  root and goes `wanted`, and none of the three ever reaches a page beside the
+  one holding the list.
 - **That a wikilink in a chapter's prose is never a section**, including one
   written on a page that also has a `contents:` list, which is the whole rule and
   the one a future refactor is most likely to break.
 - Heading shift at depth zero, one and three, and a page with no heading.
-- Cycles: a page containing itself, and a two-page loop.
+- Repeats, both shapes: a page containing itself, a two-page loop, and an
+  appendix listed under two parts, which is `duplicate` without being a cycle.
 - Each rule kind against a fixture with the expected spans, including a finding
   whose quote contains a multi-byte character, since spans are bytes.
 - Sentence splitting, including the abbreviation case that is known to fail, so
@@ -609,7 +663,8 @@ code departed from it.
 
 - A collapsed findings strip issues no request, matching the preview's rule.
 - A finding's quote renders as text and produces no element from hostile content.
-- The manuscript panel shows gaps and cycles rather than hiding them.
+- The manuscript panel shows gaps, invalid entries and duplicates rather than
+  hiding them.
 - The word chart renders with one actor, with several, and with none.
 
 ### Performance evidence
