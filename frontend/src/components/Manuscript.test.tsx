@@ -526,34 +526,59 @@ describe('reordering the spine', () => {
   }
 
   /**
-   * A drag event, as far as jsdom has one.
+   * The rows, given somewhere to be.
    *
-   * There is no `DragEvent` and no `DataTransfer` in jsdom, so this is a
-   * cancelable event with a stub stapled to it. What it proves is the wiring:
-   * which rows accept a drop, and that the write a drop ends in is the write the
-   * buttons make. Whether a browser picks the row up, what the pointer shows and
-   * where the drop actually lands are the browser's, and none of it is visible
-   * from here. That is the honest limit of testing a drag in a fake DOM, and it
-   * is why the buttons are still the ones the rest of this block checks.
+   * jsdom lays nothing out, so every `getBoundingClientRect` is zeroes and a hit
+   * test over them would find every row stacked on the same point. Handing them
+   * spans is the whole of what has to be faked here, and that is the point of
+   * the gesture being a pointer drag: it is arithmetic over coordinates rather
+   * than something the browser does on our behalf, so the handlers a test drives
+   * are the handlers a finger drives. A native drag could not be started by any
+   * event a script dispatches, and none of what follows was provable at all.
+   *
+   * The stack sits well clear of the top of the window, or a drag this near it
+   * would be a drag that has started scrolling.
    */
-  function drag(type: string): Event {
-    const event = new Event(type, { bubbles: true, cancelable: true })
-    Object.defineProperty(event, 'dataTransfer', {
-      value: { effectAllowed: '', dropEffect: '', setData: () => {} },
+  const ROW = 24
+  const TOP = 200
+
+  function stack(container: HTMLElement): HTMLElement[] {
+    const rows = [...container.querySelectorAll('li')]
+    rows.forEach((row, index) => {
+      const top = TOP + index * ROW
+      const box = { top, bottom: top + ROW - 4, height: ROW - 4, left: 0, right: 200 }
+      row.getBoundingClientRect = () => box as DOMRect
     })
+    return rows
+  }
+
+  /** The middle of a row, in the coordinates `stack` gave it. */
+  const over = (index: number) => TOP + index * ROW + (ROW - 4) / 2
+
+  /** jsdom has no `PointerEvent`; what these handlers read is the coordinate. */
+  function pointer(type: string, clientY: number): Event {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientY })
+    Object.defineProperty(event, 'pointerId', { value: 1 })
     return event
   }
 
-  /** The rows, in the order the panel drew them. */
-  const rows = (container: HTMLElement) => [...container.querySelectorAll('li')]
+  /** Press the grip of a row, which is the only thing a drag starts from. */
+  function press(rows: HTMLElement[], index: number) {
+    const grip = rows[index]?.querySelector('span.touch-none')
+    if (!grip) throw new Error(`row ${index} has no grip`)
+    grip.dispatchEvent(pointer('pointerdown', over(index)))
+  }
 
-  it('writes the same list back for a drop as for a button', async () => {
+  const moveTo = (y: number) => window.dispatchEvent(pointer('pointermove', y))
+  const letGo = (y: number) => window.dispatchEvent(pointer('pointerup', y))
+
+  it('writes the same list back for a drag as for a button', async () => {
     const { container } = await reordering()
-    const [one, , two] = rows(container)
+    const rows = stack(container)
 
-    two?.dispatchEvent(drag('dragstart'))
-    one?.dispatchEvent(drag('dragover'))
-    one?.dispatchEvent(drag('drop'))
+    press(rows, 2)
+    moveTo(over(0))
+    letGo(over(0))
 
     await waitFor(() => expect(api.patchPage).toHaveBeenCalled())
     expect(api.patchPage).toHaveBeenCalledWith('book', {
@@ -564,41 +589,40 @@ describe('reordering the spine', () => {
   /**
    * The rule the buttons are already on, and the one a drag makes it possible to
    * break: an entry moves within the list that names it, so a chapter cannot
-   * leave its part. A `dragover` refuses the drop unless it is cancelled, so a
-   * row that says nothing is a row that says no.
+   * leave its part. There is nowhere to let go over a scene in another part, so
+   * letting go there does nothing at all.
    */
-  it('will not drop a part onto a scene inside another one', async () => {
+  it('will not put a part inside another one', async () => {
     api.compilePages.mockResolvedValue(nested())
     const rendered = panel()
     await rendered.findByText('Part One')
     rendered.getByText('Reorder').click()
     await waitFor(() => expect(rendered.queryByLabelText('Move Part One down')).toBeTruthy())
+    const rows = stack(rendered.container)
 
-    const [one, opening, , two] = rows(rendered.container)
-    two?.dispatchEvent(drag('dragstart'))
+    // Part Two, over a scene that belongs to Part One.
+    press(rows, 3)
+    moveTo(over(1))
+    await waitFor(() => expect(rows[3]?.className).toContain('opacity-40'))
+    expect(rows[1]?.className).not.toContain('ring-primary')
 
-    const refused = drag('dragover')
-    opening?.dispatchEvent(refused)
-    expect(refused.defaultPrevented).toBe(false)
-
-    const accepted = drag('dragover')
-    one?.dispatchEvent(accepted)
-    expect(accepted.defaultPrevented).toBe(true)
-
-    opening?.dispatchEvent(drag('drop'))
+    letGo(over(1))
     expect(api.patchPage).not.toHaveBeenCalled()
   })
 
   /**
-   * What is being dragged is an entry in the list this panel is holding, so a
-   * drop nothing here picked up is a drag from somewhere else and means nothing.
+   * A press is a press until it travels. Nothing lifts, nothing dims, and the
+   * pointer coming back up is not a move somebody did not ask for.
    */
-  it('ignores a drop that began outside the list', async () => {
+  it('does not treat a press that stays put as a drag', async () => {
     const { container } = await reordering()
-    const [one] = rows(container)
+    const rows = stack(container)
 
-    one?.dispatchEvent(drag('drop'))
+    press(rows, 2)
+    moveTo(over(2) + 3)
+    expect(rows[2]?.className).not.toContain('opacity-40')
 
+    letGo(over(2) + 3)
     expect(api.patchPage).not.toHaveBeenCalled()
   })
 
@@ -609,40 +633,75 @@ describe('reordering the spine', () => {
     await rendered.findByText('Part One')
     rendered.getByText('Reorder').click()
     await waitFor(() => expect(rendered.queryByLabelText('Move Part One down')).toBeTruthy())
+    const rows = stack(rendered.container)
 
-    const [one, opening, , two] = rows(rendered.container)
-    two?.dispatchEvent(drag('dragstart'))
-    one?.dispatchEvent(drag('dragover'))
+    press(rows, 3)
+    moveTo(over(0))
 
-    await waitFor(() => expect(one?.className).toContain('ring-primary'))
-    expect(two?.className).toContain('opacity-40')
-    expect(opening?.className).toContain('opacity-30')
-    expect(opening?.className).not.toContain('ring-primary')
+    await waitFor(() => expect(rows[0]?.className).toContain('ring-primary'))
+    expect(rows[3]?.className).toContain('opacity-40')
+    expect(rows[1]?.className).toContain('opacity-30')
+    expect(rows[1]?.className).not.toContain('ring-primary')
 
-    // Every row clears the mark, including the ones that refuse, or passing over
-    // a scene would leave the last part it could have used still lit.
-    opening?.dispatchEvent(drag('dragover'))
-    await waitFor(() => expect(one?.className).not.toContain('ring-primary'))
+    // Back over a scene, which is not a place it can go: the mark on the part it
+    // could have used has to go out with it.
+    moveTo(over(1))
+    await waitFor(() => expect(rows[0]?.className).not.toContain('ring-primary'))
   })
 
   /**
-   * The gap between two rows is not a place a drop can land, and neither is
-   * anywhere off the end of the list. No row's handler runs in either, so the
-   * list itself is what puts the mark out.
+   * Off the end of the list there is no row to be over, and the mark says so.
+   * Letting go there is how a drag is called off without a keyboard.
    */
   it('puts the mark out when the pointer leaves the rows', async () => {
     const { container } = await reordering()
-    const [one, , two] = rows(container)
+    const rows = stack(container)
 
-    two?.dispatchEvent(drag('dragstart'))
-    one?.dispatchEvent(drag('dragover'))
-    await waitFor(() => expect(one?.className).toContain('ring-primary'))
+    press(rows, 2)
+    moveTo(over(0))
+    await waitFor(() => expect(rows[0]?.className).toContain('ring-primary'))
 
-    one?.dispatchEvent(drag('dragleave'))
+    moveTo(TOP - 60)
 
-    await waitFor(() => expect(one?.className).not.toContain('ring-primary'))
+    await waitFor(() => expect(rows[0]?.className).not.toContain('ring-primary'))
     // The drag is still on: leaving the rows is not letting go of one.
-    expect(two?.className).toContain('opacity-40')
+    expect(rows[2]?.className).toContain('opacity-40')
+
+    letGo(TOP - 60)
+    expect(api.patchPage).not.toHaveBeenCalled()
+  })
+
+  /** What a native drag gave for free, and a pointer drag has to be told. */
+  it('abandons a drag on Escape', async () => {
+    const { container } = await reordering()
+    const rows = stack(container)
+
+    press(rows, 2)
+    moveTo(over(0))
+    await waitFor(() => expect(rows[2]?.className).toContain('opacity-40'))
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+
+    await waitFor(() => expect(rows[2]?.className).not.toContain('opacity-40'))
+    letGo(over(0))
+    expect(api.patchPage).not.toHaveBeenCalled()
+  })
+
+  /** One write at a time, which is the rule the buttons grey out for. */
+  it('will not start a drag while a write is in flight', async () => {
+    const { container, getByLabelText } = await reordering()
+    const rows = stack(container)
+    api.patchPage.mockReturnValue(new Promise(() => {}))
+
+    getByLabelText('Move Part Two up').click()
+    await waitFor(() => expect(api.patchPage).toHaveBeenCalledTimes(1))
+
+    press(rows, 2)
+    moveTo(over(0))
+    expect(rows[2]?.className).not.toContain('opacity-40')
+
+    letGo(over(0))
+    expect(api.patchPage).toHaveBeenCalledTimes(1)
   })
 
   /**
@@ -681,30 +740,27 @@ describe('reordering the spine', () => {
     await waitFor(() => expect(rendered.queryByLabelText('Move Part One down')).toBeTruthy())
     expect(rendered.queryByLabelText('Move The Opening down')).toBeNull()
 
-    const [, opening, , two] = rows(rendered.container)
-    two?.dispatchEvent(drag('dragstart'))
+    const rows = stack(rendered.container)
+    press(rows, 3)
+    moveTo(over(0))
 
-    await waitFor(() => expect(opening?.className).toContain('opacity-30'))
-    expect(opening?.getAttribute('draggable')).toBe('false')
+    await waitFor(() => expect(rows[1]?.className).toContain('opacity-30'))
+    expect(rows[1]?.querySelector('span.touch-none')).toBeNull()
   })
 
-  /** Outside the mode the rows are rows, and the link inside one is a link. */
-  it('makes no row draggable until the mode is entered', async () => {
+  /** Outside the mode there is nothing to take hold of. */
+  it('offers no grip until the mode is entered', async () => {
     api.compilePages.mockResolvedValue(book())
     const { findByText, getByText, container } = panel()
 
     await findByText('Part One')
-    expect(rows(container)[0]?.getAttribute('draggable')).toBe('false')
-    expect(container.querySelector('li a')?.getAttribute('draggable')).toBeNull()
+    expect(container.querySelector('li span.touch-none')).toBeNull()
 
     getByText('Reorder').click()
 
     await waitFor(() =>
-      expect(rows(container)[0]?.getAttribute('draggable')).toBe('true'),
+      expect(container.querySelector('li span.touch-none')).toBeTruthy(),
     )
-    // A link drags itself by default, and that drag is of the link rather than
-    // of the row underneath it.
-    expect(container.querySelector('li a')?.getAttribute('draggable')).toBe('false')
   })
 
   /**

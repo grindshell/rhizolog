@@ -533,23 +533,32 @@ incidental can move a chapter, and a view you have to enter is that same argumen
 carried into the one place that can. It also keeps the ordinary reading of a book
 free of two buttons on every row.
 
-A row can also be dragged onto another, which is the same write and was laid over
-the buttons rather than built instead of them. A drag has no keyboard and none on
-a phone, so it can only ever be the second way in; the buttons are the first and
+A row can also be dragged by its grip onto another, which is the same write and
+was laid over the buttons rather than built instead of them. A drag has no
+keyboard, so it can only ever be the second way in; the buttons are the first and
 are labelled by the entry rather than the direction, because a column of "Move up"
 buttons read out one after another says nothing about which chapter each one
-moves. The grip beside them is a cue and not a control: the row is what carries
-`draggable`, and a handle nothing can grab from a keyboard would be a control that
-does not work.
+moves. The grip stays hidden from assistive technology, since a handle nothing can
+grab from a keyboard would be a control that does not work.
+
+**It is a pointer drag rather than HTML5 drag and drop**, which is what makes it
+a gesture on a phone at all: a native drag is a mouse gesture with no touch
+equivalent. The grip is the only thing that takes the pointer, and deliberately
+not the whole row, because a row that answered a drag would be a row a finger
+could not scroll past. Everything the browser used to do is in
+`components/dragging.ts`: a movement threshold, a hit test by vertical position,
+scrolling near the edges of the window, Escape, and `pointercancel`. The other
+half of the trade is that the gesture can now be driven by a test, which a native
+drag never could be.
 
 An entry moves only within its own list, so a chapter cannot leave its part, and
 the view says so rather than leaving somebody to discover it. A drag is where that
 rule would otherwise be easiest to break, because the manifest is flat and
 recursive and a chapter's own scenes sit between it and the next chapter. Rows a
-drop cannot land on dim while one is in hand, which teaches the rule rather than
-stating it a second time, and a drop on one of them is refused by the row simply
-not accepting it. There are no reorder controls in the card view: up and down in a
-grid that wraps means something different at every width.
+release cannot land on dim while one is in hand, which teaches the rule rather
+than stating it a second time, and letting go over one of them writes nothing,
+because there was nowhere there to land. There are no reorder controls in the card
+view: up and down in a grid that wraps means something different at every width.
 
 The list written back is rebuilt from the manifest on screen, so it is as old as
 the compile that drew it, and the panel re-reads the book after every move to make

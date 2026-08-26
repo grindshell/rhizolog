@@ -464,11 +464,21 @@ contents list that names it, which is a `PATCH` of that list and no new endpoint
 `GET /api/compile` gained the two fields that made it possible: `parent` and
 `ordinal` per section, saying which list named the entry and where in it.
 
-A row moves by being dragged onto another or by pressing one of its two buttons,
-and both are the same write, because the move takes a **position** rather than a
-direction. The buttons came first and the drag was laid over them, which is the
-order rather than the delay: a drag has no keyboard and none on a phone, so it can
-only ever be the second way in.
+A row moves by being dragged by its grip onto another or by pressing one of its
+two buttons, and both are the same write, because the move takes a **position**
+rather than a direction. The buttons came first and the drag was laid over them,
+which is the order rather than the delay: a drag has no keyboard, so it can only
+ever be the second way in.
+
+The drag is **pointer events rather than HTML5 drag and drop**, which is what
+makes it a gesture on a phone: a native drag is a mouse gesture with no touch
+equivalent. `frontend/src/components/dragging.ts` is what that costs, since
+everything the browser did for free is done there by hand: a threshold, a hit test
+by vertical position, scrolling near the edges of the window, Escape and
+`pointercancel`. It buys back two things. The grip is the only thing that takes
+the pointer, so the row is still scrollable on a phone and the move buttons are no
+longer inside a drag source. And the gesture can be driven by a test, which a
+native drag never could be, since no event a script dispatches can start one.
 
 The one rule worth carrying: **`ordinal` is an identity, not a row number.** A
 page reached down both an excluded path and an included one is walked twice, so
@@ -484,19 +494,16 @@ while one is in hand.
 
 What is not done:
 
-- **A drag on a phone.** HTML5 drag and drop is a mouse gesture with no touch
-  equivalent. A pointer-events drag would be one and would need a threshold, its
-  own autoscroll and a hit test this gets from the browser for nothing. The
-  buttons are the answer there and were built to be.
-- **Whether a press on a move button can start a drag of its row.** The row
-  carries `draggable` and the buttons are inside it, and the source of a drag is
-  the nearest draggable ancestor of whatever the pointer went down on. So a press
-  that drifts past the drag threshold should start a drag rather than fire the
-  click, which would be the new gesture degrading the one the design calls
-  primary. A review raised it and could not reproduce it, because an HTML5 drag
-  needs real mouse input and synthetic events cannot begin one. Named rather than
-  fixed on an argument from the specification alone.
-- **Dropping between two rows rather than onto one.** An insertion line needs a
+- **A row that follows the finger.** Nothing moves during a drag: the held row
+  dims where it is and a ring says where it would land. That is a real difference
+  on a phone, where the finger covers the row it is holding, and it is one
+  transform on one element away. Deliberately not there yet, because the ring is
+  what actually answers "where will this end up".
+- **A long press to drag from anywhere on the row.** The grip is smaller than the
+  forty-four pixels a finger wants, and a long press is the usual answer. It needs
+  a timer, a way to tell it from a scroll that began slowly, and a decision about
+  text selection. The move buttons beside it are the same size.
+- **Landing between two rows rather than on one.** An insertion line needs a
   geometry a flat, recursive manifest does not have: as often as not the gap
   between two rows is a gap between two different lists.
 - **Moving a chapter between parts.** Two lists change, which is two writes and a
