@@ -68,6 +68,10 @@ export type DayView = Schemas['DayView']
 export type ActorWordsView = Schemas['ActorWordsView']
 export type PageWordsView = Schemas['PageWordsView']
 export type WordTotalsView = Schemas['WordTotalsView']
+export type Pace = Schemas['Pace']
+export type PaceWindow = Schemas['PaceWindow']
+export type PaceUncounted = Schemas['PaceUncounted']
+export type PacePage = Schemas['PacePage']
 export type Health = Schemas['Health']
 export type ErrorResponse = Schemas['ErrorResponse']
 export type ErrorDetail = Schemas['ErrorDetail']
@@ -126,6 +130,7 @@ export type ReceiptQuery = NonNullable<operations['read_idea_receipt']['paramete
 export type CompileQuery = operations['compile_pages']['parameters']['query']
 export type ProseQuery = operations['read_prose']['parameters']['query']
 export type WordStatsQuery = NonNullable<operations['word_statistics']['parameters']['query']>
+export type PaceQuery = operations['pace_of']['parameters']['query']
 
 /**
  * Every failure the API reports, whatever the status, arrives as
@@ -514,6 +519,29 @@ export function wordStats(
   signal?: AbortSignal,
 ): Promise<WordStatsResponse> {
   return request<WordStatsResponse>('/word-stats', {
+    query: { offset: utcOffsetMinutes(), ...query },
+    signal,
+  })
+}
+
+/**
+ * `GET /api/pace`: words remaining over days remaining, for one manuscript.
+ *
+ * The offset defaults to this browser's, for the same reason `wordStats` does:
+ * which local day something was written on is a wall-clock question. It does not
+ * move the deadline, which is counted in UTC days because that is what a `due:`
+ * line in a file names.
+ *
+ * Half of the answer is read off the word log, so this is refused for a caller
+ * with no account even under `RHIZOLOG_ANONYMOUS_READ`, exactly as `wordStats`
+ * is. Anything calling it has to survive a 401 rather than assume one cannot
+ * happen.
+ */
+export function manuscriptPace(
+  query: PaceQuery,
+  signal?: AbortSignal,
+): Promise<Pace> {
+  return request<Pace>('/pace', {
     query: { offset: utcOffsetMinutes(), ...query },
     signal,
   })

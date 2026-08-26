@@ -3,7 +3,10 @@ import { Router } from '@solidjs/router'
 import { cleanup, render, waitFor } from '@solidjs/testing-library'
 import type { CompiledView, PageView, SectionView } from '../api/client'
 
-const api = vi.hoisted(() => ({ compilePages: vi.fn() }))
+// `manuscriptPace` as well as the compile: the panel asks for a pace on any page
+// that names a target or a day, and a fetcher left real would reach for an
+// origin jsdom does not have.
+const api = vi.hoisted(() => ({ compilePages: vi.fn(), manuscriptPace: vi.fn() }))
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>()
@@ -69,6 +72,10 @@ function panel(over: Partial<PageView> = {}) {
 // function returned from `beforeEach` as a teardown.
 beforeEach(() => {
   api.compilePages.mockResolvedValue(compiled())
+  // Rejected rather than resolved, which is the case worth defaulting to: the
+  // pace is refused for a caller with no account, and the spine has to draw
+  // anyway. `Pace.test.tsx` is where the figures themselves are checked.
+  api.manuscriptPace.mockRejectedValue(new Error('no account'))
 })
 
 afterEach(() => {

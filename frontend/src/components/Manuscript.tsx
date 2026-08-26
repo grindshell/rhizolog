@@ -3,6 +3,7 @@ import { A } from '@solidjs/router'
 import { assembledHref, compilePages, pageHref } from '../api/client'
 import type { CompiledView, PageView, SectionView } from '../api/client'
 import { Async } from './Async'
+import Pace, { formatDay } from './Pace'
 import StageSummary, { StageBadge } from './Stages'
 
 /** How the sections can be laid out. */
@@ -127,6 +128,14 @@ function Assembly(props: { page: PageView; compiled: CompiledView; view: View })
   return (
     <>
       <Progress compiled={props.compiled} due={props.page.due} />
+
+      {/*
+        Under the bar rather than beside it, because it is the same question with
+        time in it: the bar says how far along, this says how fast. It costs a
+        second walk of the same book, which is the one real price of putting it
+        here and is only paid on a page that names a target or a day.
+      */}
+      <Pace page={props.page} />
 
       {/*
         Counted across the sections this panel is showing, which is the manifest
@@ -423,23 +432,4 @@ function Progress(props: { compiled: CompiledView; due?: string | null }) {
       </Show>
     </div>
   )
-}
-
-/**
- * A due date is a **day**, not an instant, so it is shown as one.
- *
- * It arrives as a full timestamp because this is JSON and a client has a clock,
- * and a bare `2027-03-01` in a file reads as midnight UTC. Rendering that in the
- * reader's own zone would show 28 February to anybody west of Greenwich, so the
- * day is read back in UTC and only its name is shown.
- */
-export function formatDay(value: string): string {
-  const at = new Date(value)
-  if (Number.isNaN(at.getTime())) return value
-  return at.toLocaleDateString(undefined, {
-    timeZone: 'UTC',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })
 }
