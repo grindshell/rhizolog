@@ -70,8 +70,8 @@ authored text behind it.
 **Manuscript:** Any page with a `target`, read as the compiled total from that
 page. There is no manuscript object.
 
-**Contents page:** A page carrying `contents: true`, whose internal links are
-positions in an assembly rather than ordinary references.
+**Contents page:** A page carrying a `contents:` list. There is no flag; holding
+a list is what makes a page one.
 
 **Compile:** Assembling a root page and the pages reachable through contents
 pages into one document.
@@ -93,9 +93,12 @@ the same way `owner` and `readers` do nothing on a wiki with no accounts:
 ```yaml
 ---
 title: The Long Way Round
-contents: true
 target: 90000
 due: 2027-03-01
+contents:
+  - book/one/opening
+  - book/one/the-ferry
+  - book/two
 ---
 ```
 
@@ -105,7 +108,7 @@ due: 2027-03-01
 - **`due`** is a date. It is read the way `created` is: a bare date is midnight
   UTC, and a wall-clock time with no zone is refused. A due date is a day rather
   than an instant, so unlike `created` it is stored as written.
-- **`contents`** turns substitution on for this page and nothing else. See below.
+- **`contents`** is the ordered list of pages this one assembles. See below.
 
 `due` is one field away from project management and stops there. There is no
 priority, no status board and no dependency between pages.
@@ -143,35 +146,90 @@ It is `/api/compile` with a query parameter rather than
 and `/api/prose` below: `matchit` requires a catch-all to be the final segment,
 and a slug is a catch-all.
 
-### Ordering is the links in the page, in the order they are written
+### The rule, in one sentence
 
-A contents page is already a page: navigable, renderable, editable, greppable,
-and diffable. Nothing new to create, and the table of contents cannot get out of
-step with itself.
+**A page contributes its body, then each page in its `contents:`, in order,
+recursively.** Holding a list is what makes a page a contents page. There is no
+flag, no depth parameter, and no convention about how a link is written.
 
-Order comes from the index, which means `links` gains an **`ordinal`** column.
-The alternative is re-parsing the root at compile time, which compile could
-afford since it reads bodies from disk anyway. The index wins because three
-things want the tree and only one of them wants the bodies: compile, the target
-rollup, and the dashboard panel. One column, one schema bump, one answer.
+### Structure is frontmatter, because prose is not a structured act
 
-### Substitution, and the rule that stops it
+The alternative was to read the contents page's body: every internal link in it,
+or every link standing alone in a list item or a paragraph, as a position in the
+assembly. Both were planned at one point and both are recorded under
+[Settled: the recursion rule](#settled-the-recursion-rule) with the rest.
 
-Two conditions, and both are needed:
+[Time tracking](time-tracking.md) already decided this question in the other
+direction and the argument transfers whole:
 
-1. The page carries `contents: true`.
-2. The link is the **entire content of a list item or a paragraph**.
+> A wikilink written inside an entry's note renders as a link and is not indexed
+> as a time link. Attaching a page to an entry is a structured act, because these
+> edges drive the numbers.
 
-Such a link is replaced, in place, by the target page's compiled body. Every
-other link is left as a link.
+Membership in a manuscript drives what the manuscript *is*, which is a stronger
+claim than driving a total. If a link in prose could put a page in the book, then
+a see-also, a back-link to the index, or a sentence mentioning where an idea came
+from would each be a chapter, and the wiki would have two kinds of link that look
+identical and behave differently depending on which page they were written on.
 
-The first condition is what keeps a chapter's prose from inlining the research
-notes it cites. The second is what lets a contents page have prose in it: a part
-title, an epigraph, a note to yourself, all survive compilation, and the links
-between them become the sections.
+Three consequences follow, and all three are the point rather than the price:
 
-This is the part of the plan most likely to be wrong, and the alternatives are
-recorded in [Open questions](#open-questions) rather than discarded.
+- **Nothing about formatting carries meaning.** Reflow a paragraph, join two
+  lines, run a formatter over the file. The manuscript does not move.
+- **Structure is editable by an assistant without touching prose.** "Insert a
+  chapter after the ferry" is an unambiguous frontmatter edit through the
+  ordinary page API. Under either body rule it is a text edit into prose, which
+  is the operation you least want a machine improvising in, on the one page where
+  a mistake reorders the book.
+- **Body before contents gives part titles and epigraphs for free.** Prose
+  belongs to a page's body and structure belongs to its frontmatter, so the two
+  never compete for the same line. A book with parts is a contents page whose
+  contents are contents pages, and each part's own body holds its heading and its
+  epigraph, in exactly the place they belong.
+
+### What it costs
+
+**The contents page's body no longer shows the chapters.** Opened raw it is a
+YAML list rather than a clickable index, which is a real loss for a project that
+cares about the file being good on its own. It is readable there; it is just not
+a link. Two things have to make up for it, and they are work rather than
+objections:
+
+- **A `contents:` entry is indexed as a link**, with a new `kind` of `part`
+  beside `wiki`, `internal` and `external`. Otherwise every chapter in the wiki
+  is an orphan and `/api/stats` fills up with them. This is not the
+  `time_pages` case: a page collects hundreds of time links, and has exactly one
+  parent, so these are edges the graph wants drawn rather than edges that would
+  swamp it.
+- **The Manuscript panel and `?assembled=1` become the rendering of the spine**,
+  since nothing else is one. See [Dashboard](#dashboard).
+
+`links` also gains an **`ordinal`** column, which is where the list's order is
+kept. Order could instead come from re-parsing the root at compile time, which
+compile could afford since it reads bodies from disk anyway; the index wins
+because three things want the tree and only one of them wants the bodies:
+compile, the target rollup, and the dashboard panel.
+
+### A slug typo must not cost you the page
+
+`contents:` entries are read as **strings** and parsed into `Slug` at compile
+time, not at frontmatter time. A mistyped chapter is reported in the manifest as
+`invalid` and everything else still compiles.
+
+The alternative is what [Architecture](architecture.md) already warns about under
+"A date somebody typed must not cost them the page": a value the frontmatter
+parser refuses does not make a missing field, it makes a **malformed page**, and
+a malformed page drops out of every listing taking its title and tags with it.
+That is far too much to charge for a typo in a list of sixty chapters, and the
+page it would be charged against is the one holding the book together.
+
+### Writing the links in the body as well is harmless
+
+Some people will, out of habit or because they want the page to render as an
+index. The body is emitted verbatim, so the result is a table of contents printed
+above the first chapter rather than anything wrong or doubled. It is visible
+immediately, and the Manuscript panel can point out that a body link and a
+`contents:` entry name the same page.
 
 ### The rest of the rules
 
@@ -185,19 +243,32 @@ recorded in [Open questions](#open-questions) rather than discarded.
   says that too. This is exactly the stance
   [Architecture](architecture.md) already takes: an unresolved link is a branch
   somebody gestured at, and a manuscript missing a chapter should say which.
-- **External links are never substituted**, whatever they are wrapped in.
+  A chapter written later fills the gap with no reindex, because a `contents:`
+  entry is resolved by the same read-time join every wikilink is.
+- **A `contents:` entry is a slug and only a slug.** A URL in that list is
+  `invalid` in the manifest rather than a section, an external reference, or an
+  attempt to fetch anything. Compile makes no network request, ever.
 - **Compile is a page-returning query**, so the audience predicate in
-  `index/audience.rs` applies to every page it assembles, and an unreadable
-  section is `missing` in the manifest for the same reason an unreadable page is
-  a `404`. On a single-user wiki this never fires. It is stated because the rule
-  is that every such query pastes it in, and a query that forgot would be the
+  `index/audience.rs` applies to every page it assembles. A section the caller
+  may not read is `wanted`, which is exactly the answer a slug with nothing
+  written at it gives, and that indistinguishability is the point: it is the
+  manifest's spelling of `404, never 403`. `unreadable` is kept for a page that
+  will not **parse**, which is already reported to anybody who asks for it, so
+  saying so here discloses nothing new and hiding it would swallow a real fault.
+  This is the same split [Idea Inbox](idea-inbox.md) arrived at for promotion.
+  On a single-user wiki none of it fires. It is stated because the rule is that
+  every such query pastes the predicate in, and a query that forgot would be the
   interesting one.
 
 ### The manifest is the reason this is not a blob
 
 Per section: `slug`, `title`, `depth`, `words`, `offset`, `length`, and a
-`status` of `included`, `missing`, `wanted`, `skipped_cycle` or `unreadable`.
+`status` of `included`, `wanted`, `invalid`, `skipped_cycle` or `unreadable`.
 Plus totals, and the analyzer-style stamp `compiler: "compile/v1"`.
+
+A section with any status other than `included` still occupies its position in
+the list. A manuscript that is short of a chapter says where the chapter was
+going to be, which is the whole difference between a gap and an omission.
 
 Without it the output is text nothing can point into. With it, a finding over the
 whole book maps back to the page that owns it, the dashboard can show per-section
@@ -384,7 +455,7 @@ mistake somebody just made and wants to hear about.
 
 ```text
 backend/src/
-  compile.rs         # assembly, substitution, heading shift, the manifest
+  compile.rs         # assembly, heading shift, cycles, the manifest
   prose/
     mod.rs           # the rules file and its parsing
     rules.rs         # the five rule kinds, each a pure function
@@ -413,7 +484,10 @@ Almost no new routes, which is the measure of whether this fits.
 
 - **A contents page gets a Manuscript panel** on `/pages/*slug`: the sections in
   order with their counts, the target and progress, the due date, and a Compile
-  button. Gaps and cycles are shown as themselves rather than omitted.
+  button. Gaps, invalid entries and cycles are shown as themselves rather than
+  omitted. This panel is not a nicety. Since the order moved into frontmatter,
+  it is the only place the spine is rendered as something you can click, and it
+  is what the body used to be.
 - **`/pages/*slug?assembled=1`** renders the compiled document, which is also the
   proof-reading view.
 - **The editor grows a findings strip** under the textarea, fed by
@@ -445,19 +519,23 @@ Each ends at a reviewable state and a reasonable commit boundary.
 ### L0: words
 
 Add the `words` column and the AST word counter; `target`, `due` and `contents`
-to frontmatter; `?sort=words` and prefix totals.
+to frontmatter, the last as a list of strings; `?sort=words` and prefix totals.
 
 Done when a prefix rollup equals the sum of the pages under it, a code fence
-changes no count, and a schema-version rebuild produces identical numbers.
+changes no count, a `contents:` entry that is not a valid slug leaves the page
+readable in every listing, and a schema-version rebuild produces identical
+numbers.
 
 ### L1: compile and the manifest
 
-Add `ordinal` to `links`. Implement substitution, the heading shift, cycle and
-gap reporting, the three formats, and the audience predicate.
+Index `contents:` entries as `part` links with an `ordinal`. Implement the
+assembly, the heading shift, cycle and gap reporting, the three formats, and the
+audience predicate.
 
 Done when compiling a fixture book twice is byte-identical, every included
 section's bytes appear exactly once at the offset the manifest claims, a wanted
-page is reported as a gap rather than skipped, and a cycle terminates and says so.
+page holds its position rather than being skipped, a cycle terminates and says
+so, and a chapter listed in `contents:` is no longer an orphan in `/api/stats`.
 
 ### L2: `prose/v1`
 
@@ -493,9 +571,12 @@ code departed from it.
 
 - Word counting: code fences, inline code, wikilink display text, tables,
   footnotes, an empty page, a page that is only a code block.
-- Substitution: a link alone in a list item, a link alone in a paragraph, a link
-  mid-sentence, a link in a page without `contents: true`, an external link in
-  every one of those positions.
+- Assembly: a page with no `contents:`, an empty list, a list naming a page that
+  has its own list, a body followed by contents in that order, and a `contents:`
+  entry that is a URL, a `..` path or an empty string.
+- **That a wikilink in a chapter's prose is never a section**, including one
+  written on a page that also has a `contents:` list, which is the whole rule and
+  the one a future refactor is most likely to break.
 - Heading shift at depth zero, one and three, and a page with no heading.
 - Cycles: a page containing itself, and a two-page loop.
 - Each rule kind against a fixture with the expected spans, including a finding
@@ -511,7 +592,13 @@ code departed from it.
 - A compiled manuscript's manifest offsets index into the returned bytes.
 - A page created after compilation turns a gap into a section with no reindex,
   which is the same self-healing property exact link resolution already has.
-- Compile filters by audience on a wiki with accounts.
+- A page named in `contents:` is not an orphan, and a page merely linked from a
+  chapter's prose still is if nothing else points at it.
+- A `contents:` entry that is not a valid slug leaves the page in every listing
+  with its title and tags intact, which is the one failure this design could
+  charge somebody the whole page for.
+- Compile filters by audience on a wiki with accounts, and a section hidden that
+  way is indistinguishable from one nobody has written.
 - An external edit is attributed to `file`, and a labelled write to its label.
 - The word series survives a schema-version rebuild.
 - A rules file that will not parse is reported as itself, and an absent one is
@@ -558,22 +645,46 @@ pnpm build
 Check `git status example-wiki` after any manual run and leave the fixture
 unchanged.
 
+## Settled: the recursion rule
+
+**Decided: an ordered `contents:` list in frontmatter.** The reasoning is under
+[Structure is frontmatter](#structure-is-frontmatter-because-prose-is-not-a-structured-act);
+what follows is the alternatives, kept so the question is not reopened from
+scratch.
+
+- **A depth limit alone**, following every internal link. Rejected: it inlines
+  the research notes the moment a chapter's prose links to one, and the depth
+  that is right for a book is wrong for a chapter.
+- **Filesystem order**, a directory whose pages sort by slug. Rejected, and worth
+  keeping because it is the obvious answer: it needs `01-opening.md`, and
+  renumbering to insert a chapter renames files. This project deliberately does
+  not rewrite inbound links on a move, so inserting chapter two would turn every
+  reference to chapters three onward into a wanted page. It also contradicts
+  [Architecture](architecture.md)'s premise that directories are for humans and
+  the link graph is what gives the wiki its shape.
+- **`order:` and `part_of:` on each page.** Rejected: an ordered list distributed
+  across N files, where inserting between three and four means renumbering or
+  fractional indices, and the parent cannot say what it holds without a query.
+- **A separate manifest file** beside the page or under `.rhizolog/`. Rejected:
+  a second file format, invisible in the wiki, and it gives up the one thing the
+  contents page had going for it.
+- **`contents: true`, and every internal link in the body is a section.** The
+  runner-up, and cheap: one flag, formatting-insensitive, and the body renders as
+  a browsable index everywhere with no panel needed. Rejected because a contents
+  page could then never link in prose, so a see-also or a back-link to the index
+  becomes a chapter, and because it leaves two kinds of link that look identical
+  and behave differently depending on which page they were written on.
+- **`contents: true` plus link-alone-in-a-block**, which this plan originally
+  said. Rejected: it buys inline links in a contents page's prose and pays with a
+  formatting convention that carries meaning, so a formatter joining two lines
+  silently changes the manuscript.
+
+The name is `contents:` rather than `parts:` or `sections:` because a book
+already has a word for an ordered list of what is inside it, and because
+`sections` is taken by the manifest. It carries the list rather than a boolean,
+so there is one field rather than a flag and a list that could disagree.
+
 ## Open questions
-
-**The recursion rule.** `contents: true` plus link-alone-in-a-block is a new
-concept and it should beat the alternatives before L1 starts:
-
-- **A depth limit alone.** Rejected: it inlines the research notes the moment a
-  chapter's prose links to one, and the depth that is right for a book is wrong
-  for a chapter.
-- **Only links inside list items count.** Rejected as it stands: a contents page
-  with a part title and an epigraph between its lists is ordinary, and this rule
-  is invisible in the source of the page it governs.
-- **An explicit `parts:` list in frontmatter.** Rejected: it is a second place
-  the order lives, and it stops the contents page being a page you can read.
-- **`contents: true` plus link-alone-in-a-block**, as planned above. The cost is
-  that the second half is a formatting rule with meaning, which is the kind of
-  thing that surprises somebody reflowing a paragraph.
 
 **Whether `target` on a leaf page is useful**, or whether the recursive
 definition is buying consistency nobody needs.

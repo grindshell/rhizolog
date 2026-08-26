@@ -249,23 +249,26 @@ Five phases, in this order, and L3 may swap with L2:
 
 - **L0: words.** A `words` column filled from the AST link extraction already
   walks, plus `target`, `due` and `contents` in frontmatter.
-- **L1: compile and the manifest.** An `ordinal` on `links`, substitution,
-  heading shift, gaps and cycles reported rather than hidden.
+- **L1: compile and the manifest.** `contents:` entries indexed as `part` links
+  with an `ordinal`, heading shift, gaps and cycles reported rather than hidden.
 - **L2: `prose/v1`.** Rules in `.rhizolog/prose.toml`, five rule kinds, every
   finding quoting the text it fired on. No dismissal store, on purpose.
 - **L3: actor and the word series.** An `X-Rhizolog-Actor` header, and
   `page_words` in the durable half of the index.
 - **L4: dashboard and documentation closure.**
 
-**The recursion rule is the one thing to settle before L1 starts.** Compiling
-recurses through pages carrying `contents: true`, substituting any link that is
-the whole content of a list item or a paragraph. That is two new conventions, and
-the three alternatives and why each was rejected are on the plan page under Open
-questions. Deciding it late means rewriting the assembly.
+**The recursion rule is settled.** A page contributes its body, then each page in
+its `contents:` list, in order, recursively; a link in prose is never structure,
+anywhere. Six alternatives and why each lost are on the plan page. What it leaves
+as work rather than as an objection: `contents:` entries have to be indexed as
+links or every chapter becomes an orphan in `/api/stats`, the Manuscript panel
+becomes the only rendering of the spine, and the list has to be read as strings
+and validated at compile time so a mistyped chapter does not make the whole page
+malformed and drop it out of every listing.
 
-Two smaller decisions are also open and cheaper: whether `target` on a leaf page
-earns the recursive definition, and whether compile needs a byte ceiling for a
-caller whose context window has one.
+Two smaller decisions are still open and both are cheaper: whether `target` on a
+leaf page earns the recursive definition, and whether compile needs a byte
+ceiling for a caller whose context window has one.
 
 `page_words` would be the first durable table that grows with use, which is worth
 knowing before it lands rather than after: `api_usage` is bounded by routes and
