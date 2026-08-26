@@ -19,7 +19,10 @@ have to be:
   reader of the manuscript, not only a writer into it, and today the only way to
   give it chapter nine in the light of chapter two is to paste.
 - **A net word count is a broken metric** on any day an assistant rewrote two
-  thousand words into nineteen hundred, so the daily figure has to record who.
+  thousand words into nineteen hundred, so the figure has to record words added
+  and words removed, and who did each. A signed total is the thing this feature
+  exists to replace, and it is worth checking any draft of the design against
+  that sentence, because the first one failed it.
 - **`prose/v1` is voice defence**, not a grammar checker. Drafting alone with
   assistance, the failure is drift, and you cannot see it happening because you
   read the prose as it arrives.
@@ -195,20 +198,64 @@ cares about the file being good on its own. It is readable there; it is just not
 a link. Two things have to make up for it, and they are work rather than
 objections:
 
-- **A `contents:` entry is indexed as a link**, with a new `kind` of `part`
-  beside `wiki`, `internal` and `external`. Otherwise every chapter in the wiki
-  is an orphan and `/api/stats` fills up with them. This is not the
-  `time_pages` case: a page collects hundreds of time links, and has exactly one
-  parent, so these are edges the graph wants drawn rather than edges that would
-  swamp it.
+- **The spine has to be indexed**, or every chapter in the wiki is an orphan and
+  `/api/stats` fills up with them. See below for where it goes and why it is not
+  a row in `links`.
 - **The Manuscript panel and `?assembled=1` become the rendering of the spine**,
   since nothing else is one. See [Dashboard](#dashboard).
 
-`links` also gains an **`ordinal`** column, which is where the list's order is
-kept. Order could instead come from re-parsing the root at compile time, which
-compile could afford since it reads bodies from disk anyway; the index wins
-because three things want the tree and only one of them wants the bodies:
-compile, the target rollup, and the dashboard panel.
+### A part is its own table, not a kind of link
+
+The first plan said a `contents:` entry became a row in `links` with a new `kind`
+of `part`, plus an `ordinal` column. That does not fit the table it was going
+into. `links` is keyed `(src_slug, target, kind)`, so **one parent cannot list
+the same child twice**, and an appendix under two parts is exactly the case the
+manifest has a `duplicate` status for. Making `ordinal` part of that key would
+work and would also change what a row *is* for every other kind: `[[a]]` written
+twice in a page is one row today, and it should stay one row, because collapsing
+repeats is what makes a backlink panel readable.
+
+So:
+
+```sql
+page_parts(src_slug, ordinal, target)   -- derived; primary key (src_slug, ordinal)
+```
+
+Position is the identity, which is what makes both meaningful things
+representable: order, and the same child appearing twice. `target` is a slug as
+written and resolved by joining `pages` at read time, exactly as `links.target`
+is, so a chapter written later fills its gap with nothing to reindex.
+
+This is structurally the `time_pages` decision and it lands the other way round
+on the one question that matters. Time links stay out of the graph because a page
+collects hundreds of them and they would swamp its backlinks. A page has exactly
+one parent, so part edges are edges the graph *wants*: **the orphan query and the
+graph both union `page_parts` in**, and that is a deliberate, stated change to
+two queries rather than a change to the identity of every link row in the wiki.
+
+Order could instead come from re-parsing the root at compile time, which compile
+could afford since it reads bodies from disk anyway. The index wins because three
+things want the tree and only one of them wants the bodies: compile, the target
+rollup, and the dashboard panel.
+
+### Absent and empty are different, and a `PUT` can tell them apart
+
+`contents:` is `Option<Vec<String>>`. **Absent** means a leaf page. **`[]`** means
+a contents page with nothing in it yet, which is what a book looks like on the day
+it is started, and the Manuscript panel should say so rather than showing nothing
+at all.
+
+That distinction only survives if writes preserve it, and this wiki has already
+been bitten here. [The dashboard](dashboard.md) records the rule:
+
+> Saving is a `PUT`, so the editor sends the owner back whether or not it shows
+> it. A field left out of a `PUT` is a field cleared.
+
+So a `PUT` that omits `contents` clears the list, a `PUT` with `[]` sets an empty
+one, and the editor has to round-trip the field whether or not it renders a
+control for it. An editor that dropped it would silently unmake a manuscript on
+the first save of any chapter page, which is the same failure that handed pages
+to the wrong owner.
 
 ### Every entry is a slug from the wiki root
 
@@ -307,6 +354,34 @@ immediately, and the Manuscript panel can point out that a body link and a
   every such query pastes the predicate in, and a query that forgot would be the
   interesting one.
 
+### Limits are numbers, and a limit refuses rather than truncates
+
+`compile_depth_exceeded` was named as an error with no maximum behind it, which
+is a limit in the same state as no limit at all. Three of them, and the numbers
+matter less than that they exist and are written down:
+
+| Limit | Value | Why |
+|---|---|---|
+| Depth | 16 | A book is title, part, chapter, scene. Sixteen is far past any real structure and near enough to catch a mistake |
+| Sections | 2,000 | A chapter per section, in a work nobody has written |
+| Output | 8 MiB | Roughly a million words, which is several books |
+
+**Exceeding one is a refusal, never a truncation.** `compile_too_large`, naming
+which limit was hit and the slug it was hit at. A truncated manuscript is the
+worst possible output here: it is a complete-looking document that silently stops
+being the book, and the reader most likely to be handed one is an assistant that
+will then reason about an ending that is not there. The refusal is a single
+error, so this is one place where the manifest is not returned, and the error
+naming the slug is what makes that survivable.
+
+Depth is the one worth having despite cycle detection already terminating the
+walk, because a mistake that is not a cycle can still be deep: a chain of
+sixty contents pages each holding the next terminates fine and is not a book.
+
+`?style=` counts toward the byte limit. It is prepended to the output, so a
+preamble that pushed a compile over the edge and was then not counted would be a
+limit that is not one.
+
 ### The manifest is the reason this is not a blob
 
 Per section: `slug`, `title`, `depth`, `words`, `offset`, `length`, and a
@@ -338,34 +413,149 @@ of the book.
 The hours have a heat map. The words should have the same thing beside it, on
 the same terms: a chart, not a streak.
 
-It cannot be derived, since nothing on disk records what a page used to be, so it
-is durable state:
+### It measures churn, because net change is the thing this feature exists to fix
 
-```sql
-page_words(slug, at, actor, delta, total)   -- durable, beside api_usage and pins
+An earlier draft of this page recorded one signed `delta` per observation, which
+is a straight contradiction of the paragraph at the top arguing that a net count
+is broken. An assistant rewriting two thousand words into nineteen hundred
+produces `delta = -100`, and knowing *who* produced the -100 does not recover the
+1,900 written or the 2,000 removed. The actor split answers a different question
+from the one the example asks, and shipping both would have looked like an
+answer.
+
+So an observation records **`added` and `removed`**, in words, and `delta` is
+arithmetic over them rather than a stored value. The rewrite above is
+`added 1900, removed 2000`, which is what a day of revision actually looks like
+and is the number the chart should be drawing.
+
+Both come from diffing the previous body against the new one, and the previous
+body is already there to diff against: `Index::upsert` writes `page.body` into
+`pages_fts`, keyed by the `pages` row's own rowid, and it does that *after* it
+has everything it needs to read the old row. Nothing new has to be stored, which
+is the only reason this is affordable on every save.
+
+**The diff runs over extracted text, not over the markdown.** What is in
+`pages_fts` is the raw body, so both sides go through the same extraction the
+word counter uses before anything is counted. Otherwise wrapping a paragraph in a
+block quote, or reflowing it, would report words added and removed that nobody
+wrote. That is the second thing hanging off `prose/text.rs` having one answer to
+what counts as text.
+
+### The log is authored, and the index over it is derived
+
+```text
+<wiki root>/
+  .rhizolog/
+    words/
+      2026-08.log        # NOT derived; the only copy
 ```
 
-One row per save, `at` in nanoseconds like every other timestamp here. Bucketing
-happens **at read time from an `offset`**, exactly as `/api/time-stats` does and
-for the same reason: an instant is an instant, and "how much did I write today"
-is a question about a wall clock. Storing a pre-computed day would bake in a
-guess about where the writer was.
+Putting this in `index.db` was the first plan and it was wrong. The durable half
+survives a schema bump, which is what that plan leaned on, but it does not
+survive `rm index.db`, and every document in this repository tells the reader
+that deleting the database costs one scan. `index/schema.rs` says it in the
+schema itself: *the files are the log; this is only an index over them, and
+deleting the database loses nothing.* A writing history is unreconstructable, so
+it is exactly the primary data [Time tracking](time-tracking.md) refused to put
+there:
 
-Four things to get right, because this is durable and
-[Architecture](architecture.md) is right that a change to a durable table needs a
-real migration:
+> A year of tracked time is primary data, the thing you would be most upset to
+> lose, and putting it somewhere the architecture actively encourages you to
+> delete would be indefensible.
 
-- **A page seen for the first time records a baseline, not a delta.** Otherwise
-  importing an existing wiki reports the whole thing as written on Tuesday.
-- **`total` is kept beside `delta`** so a row can be checked against the page
-  rather than believed, and so a missed save shows up as a discontinuity instead
-  of quietly skewing the series.
-- **It is the first durable table that grows with use.** One row per save is
-  small (a heavy year is tens of thousands of rows), and saying so now is cheaper
-  than discovering it later. Pruning is deliberately not designed yet.
-- **Deriving it from git was considered and rejected.** `git log --numstat` would
-  give this for free on a committed wiki, but it measures commits, and nobody
-  commits per save. It would report a week of work as one Friday.
+Moving it to disk also removes two problems the durable version had rather than
+just relocating them: `page_words` becomes an ordinary derived table rebuilt from
+the log, so it is no longer the one durable table that grows without bound, and
+changing its shape stops needing a real migration.
+
+**One file per month, one line per observation**, which is a departure from the
+one-file-per-record shape `times/` and `ideas/` use, and the reason is frequency.
+A time entry is a document somebody may open and correct; a word observation is a
+machine's reading, never edited, arriving every time a file is saved. A file per
+save would be thousands of files a month, and the `YYYY-MM` directory that makes
+the time log survivable would not save it.
+
+Tab-separated, because a slug may contain a space and may never contain a control
+character, which is what makes a tab a safe delimiter and a space not:
+
+```text
+2026-08-25T14:25:30.123456789Z <TAB> book/one/the-ferry <TAB> claude-code <TAB> tim <TAB> observed <TAB> 1900 <TAB> 2000 <TAB> 41230
+```
+
+`at`, `slug`, `actor`, `account`, `kind`, `added`, `removed`, `total`. `account`
+is empty on a wiki with no accounts, which is the same thing `owner` does on a
+capture. It is a separate field from `actor` because they answer different
+questions: which tool made the write, and which person it was made as. Bucketing
+happens
+**at read time from an `offset`**, exactly as `/api/time-stats` does and for the
+same reason: an instant is an instant, and "how much did I write today" is a
+question about a wall clock, so storing a precomputed day would bake in a guess
+about where the writer was.
+
+Two more things to get right:
+
+- **A page seen for the first time is a baseline**, `added 0, removed 0` with its
+  `total`. Otherwise importing an existing wiki reports the whole thing as
+  written on Tuesday.
+- **`total` is the check.** It is the page's own count after the observation, so
+  a line can be verified against the page rather than believed, and a missed
+  observation shows up as a discontinuity rather than quietly skewing the series.
+
+**Deriving all of this from git was considered and rejected.** `git log
+--numstat` would give it free on a committed wiki, but it measures commits, and
+nobody commits per save. It would report a week of work as one Friday.
+
+### An observation is not a save, and the log has to say so
+
+`page_words` cannot honestly promise one row per save, and the earlier draft
+promised it:
+
+- **The watcher debounces at 500 ms and collapses a burst into one batch**
+  (`watcher.rs`, "Why events are debounced"), because an editor saving through a
+  temporary file and a rename arrives as several events. Two saves eight seconds
+  apart are two observations; two saves inside the window are one.
+- **Edits made while the server was down** are one observation at the next
+  startup scan, however many saves they were.
+- **Only an API write is genuinely one observation per save**, because it
+  reindexes synchronously.
+
+The diff is still correct in every one of those cases, since it compares the last
+indexed body against what is on disk now. What it loses is resolution in time,
+and intermediate churn inside a window is invisible: save, delete a paragraph,
+put it back, and the observation correctly says nothing changed. That is a
+limitation of watching a filesystem rather than a bug, and `GET /api/word-stats`
+should carry `resolution: "observed"` so a caller is not invited to read it as
+keystroke history.
+
+### Ownership, visibility, and what happens to a slug
+
+**The log is wiki-wide state, like the time log**, and it gets the same rule for
+the same reason: the slug is the observation's own content and stays, and it is
+the page **title** that is filtered by audience, so an observation against a page
+the caller cannot read reports no title. Hiding the row would be hiding somebody's
+own working history from them. Aggregate totals include those pages, ranked under
+the slug, because the words really were written. See
+[Time tracking](time-tracking.md), "A time link is not a link".
+
+**Actor labels are wiki-wide too.** They name tools rather than people, and a
+label is already a claim rather than a proof, so treating one as a secret would
+be protecting nothing.
+
+**`/api/word-stats` refuses an anonymous caller**, including under
+`RHIZOLOG_ANONYMOUS_READ`. A writing history is working state, not published
+content, and the variable exists to publish pages marked `public`.
+
+A page's life leaves records in the same log rather than editing it, because it
+is append-only:
+
+- **A move writes a `moved` record** naming both slugs. History is never
+  rewritten; a reader follows the chain, which is what lets a chapter renamed
+  halfway through a book keep one continuous series.
+- **A delete writes a `deleted` record.** The history outlives the page, because
+  the words were written and deleting the file does not unwrite them.
+- **A new page at a reused slug starts a fresh series** after that `deleted`
+  record. Without the marker the two would be one series and the chart would show
+  a page losing forty thousand words and gaining them back.
 
 `GET /api/word-stats?offset=&from=&to=` answers the series, split by actor.
 
@@ -386,10 +576,12 @@ that can write can claim anything. That is fine, because the question it answers
 is bookkeeping about your own tools, not security. It has to be said out loud
 rather than left to be assumed.
 
-On a wiki with accounts the label is recorded under the account that supplied it
-and cannot be used to claim another. Named API tokens, already in
-[`TODO.md`](../TODO.md) for other reasons, are what would eventually make a label
-attested rather than asserted, and nothing here depends on them.
+On a wiki with accounts, the observation records the label **and** the account
+that supplied it, in two separate fields, so a label can never be used to claim
+another account: the account comes from the session and is not something a header
+can set. Named API tokens, already in [`TODO.md`](../TODO.md) for other reasons,
+are what would eventually make the *label* attested rather than asserted, and
+nothing here depends on them.
 
 That is **edit granularity**. It answers "how much of today came through Claude"
 and not "which sentence". Going further means diffing each save and attributing
@@ -407,24 +599,102 @@ The contract is the one `tfidf/v1` established: local, deterministic, no network
 no model, versioned, and every finding carries the text it fired on. A rule that
 reported a problem without quoting it would be asking to be believed.
 
-### Rule kinds
+### The rules file
 
-- **`forbid`**: literal strings or characters. This repository's own em dash rule
-  is this one, and `AGENTS.md` is its first fixture.
-- **`phrase`**: case-insensitive multiword. The tells. Shipped as a starter file
-  rather than compiled in, because a built-in list of banned phrases is a claim
-  about taste and taste is the thing being defended.
-- **`echo`**: the same non-trivial word twice within N words. Catches the
-  machine's habit and the author's equally.
-- **`uniformity`**: a run of at least N consecutive sentences whose word counts
-  all fall within k of their mean. The real tell of generated prose is not that
-  sentences are long, it is that they are all the same size, and that is
-  arithmetic.
-- **`consistent`**: a capitalised token appearing in more than one spelling
-  across the compiled manuscript, at edit distance one. The error long-form alone
-  actually produces, and only findable because the corpus is indexed. It is the
-  one rule with real false positives, so it takes an `allow` list in the same
-  file.
+```toml
+[[rule]]
+id       = "no-em-dash"
+kind     = "forbid"
+severity = "error"
+literals = ["\u2014"]
+message  = "em dash"
+
+[[rule]]
+id       = "tells"
+kind     = "phrase"
+severity = "warn"
+phrases  = ["it is not just", "a testament to", "delve into"]
+
+[[rule]]
+id       = "echo"
+kind     = "echo"
+severity = "warn"
+within   = 40
+ignore   = ["the", "and", "a", "of", "to"]
+
+[[rule]]
+id       = "uniformity"
+kind     = "uniformity"
+severity = "warn"
+run      = 5
+spread   = 3
+
+[[rule]]
+id       = "names"
+kind     = "consistent"
+severity = "warn"
+distance = 1
+allow    = ["Kaltenbrunner", "Kaltenbruner"]
+```
+
+The first rule is written with TOML's `\uXXXX` escape rather than the character
+itself, because this repository may not contain one. That is not a workaround:
+a rules file is going to be full of things somebody is trying not to write, so
+the parser has to accept the escape and the documentation has to demonstrate it.
+
+`id` is required and unique; a duplicate is `prose_rules_invalid` rather than a
+last-one-wins. `severity` is `error` or `warn` and carries no behaviour, since
+nothing here blocks a save; it is what the dashboard sorts and colours by.
+`message` defaults to the rule's `id`.
+
+### Tokenization, shared with the word counter
+
+Every rule that talks about words uses one tokenizer, and it is the one
+`tfidf/v1` already defines in [Idea Inbox](idea-inbox.md):
+
+1. Take the text extracted from the AST (see [Word counts](#word-counts)).
+2. Lowercase with Rust's Unicode lowercase conversion.
+3. Split at characters for which `char::is_alphanumeric` is false.
+4. Keep non-empty tokens in source order, each with its byte span in the source.
+
+No stemming and no stop-word list, for the reason that page already gives: every
+signal shown appears literally in text the writer wrote. So `delve` does not
+match `delved`, and a rule that wants both lists both. The `ignore` list on
+`echo` is not a stop-word list smuggled back in: it is authored, it is per-rule,
+and it defaults to empty.
+
+Case folding therefore applies everywhere except `consistent`, which is the one
+rule about spelling and reads the token as written.
+
+### What each rule computes
+
+- **`forbid`**: a literal substring search over the extracted text, not over
+  tokens, so it can name a single character. This repository's own em dash rule
+  is this one and `AGENTS.md` is its first fixture. The span is the match.
+- **`phrase`**: a **token sequence** match, not a substring, so `delve into` does
+  not fire inside a word and punctuation between the tokens does not defeat it.
+  The span runs from the first token's start to the last token's end. Shipped as
+  a starter file rather than compiled in, because a built-in list of banned
+  phrases is a claim about taste and taste is the thing being defended.
+- **`echo`**: two occurrences of the same token, neither in `ignore`, whose token
+  indices differ by at most `within`. It reports the **second** occurrence, spans
+  both, and a run of three produces two findings (first-second, second-third)
+  rather than one.
+- **`uniformity`**: a run of at least `run` consecutive sentences whose word
+  counts all lie within `spread` of the run's mean. Reports the longest such run
+  and does not also report the shorter runs inside it. The receipt carries every
+  sentence's length and the mean.
+- **`consistent`**: two tokens, each appearing at least twice in the compiled
+  text, each beginning with an uppercase character, at Damerau-Levenshtein
+  distance at most `distance`, where neither is in `allow`. Reports every
+  occurrence of the rarer spelling. The receipt carries both spellings and both
+  counts. It is the one rule nobody wrote and the one with real false positives,
+  which is why it is also the only one with an `allow` list.
+
+Two rules may fire on overlapping spans and both are reported: suppressing one
+would mean ranking rules against each other, and the author wrote them all.
+Findings are ordered by start offset, then by rule `id`, so two runs over the
+same text produce the same list in the same order.
 
 Code blocks and inline code are excluded from every rule, always, from the AST
 and not from configuration. A page documenting a syntax should not be flagged for
@@ -442,12 +712,14 @@ a finding.
 ```json
 {
   "analyzer": "prose/v1",
+  "rules_digest": "sha256:9f2b...",
   "rule": "echo",
   "severity": "warn",
   "slug": "book/one/the-ferry",
   "span": { "start": 1840, "end": 1908 },
   "quote": "the ferry was late, and being late was the only thing it had ever been",
-  "message": "late repeated within 12 words"
+  "message": "late repeated within 12 words",
+  "receipt": { "token": "late", "first": 1840, "second": 1889, "distance": 11, "within": 40 }
 }
 ```
 
@@ -460,9 +732,38 @@ Spans are **byte offsets into the page source**, not into rendered HTML, because
 the editor is a textarea over the source and a finding you cannot find is not a
 finding.
 
+**Every finding carries a `receipt`**, which is the numbers the rule actually
+compared: the two token positions and the distance for `echo`, the sentence
+lengths and the mean for `uniformity`, both spellings and both counts for
+`consistent`. `forbid` and `phrase` carry the matched literal. This is the
+`tfidf/v1` rule applied here, and without it "late repeated within 12 words" is a
+sentence asking to be believed rather than an arithmetic anybody can check.
+
 Changing any rule's arithmetic, the tokenizer, or the sentence splitter is a
 version bump to `prose/v2` and a note on this page, exactly as `tfidf/v1` is
 governed.
+
+### The rules have to be readable over HTTP, or the promise is false
+
+This page's goals say the assistant reads the manuscript **and the rules** the
+same way the dashboard does. `.rhizolog/prose.toml` is outside the page API and
+outside the wiki walker, so as first written that was not true of the rules: a
+remote caller could receive findings and had no way to see what produced them.
+
+`GET /api/prose/rules` returns the **normalized** ruleset: every rule with its
+`id`, `kind`, `severity`, resolved options and defaults filled in, plus the
+`rules_digest` that findings quote. Normalized rather than the file's bytes,
+because a caller wanting to reproduce a finding needs the values the analyzer
+used, and TOML has more than one way to write most of them.
+
+The digest is what ties the two together. A finding and a ruleset that disagree
+on it were produced from different rules, which is otherwise an invisible way for
+an assistant to be confidently wrong about why something fired.
+
+Reading the rules needs the same authentication every other `/api` route does. It
+is not writable through the API in this plan: the file is authored configuration,
+editing it is a text edit, and a second way to write it would be a second place
+for it to be wrong.
 
 ### There is no dismissal store, and that is deliberate
 
@@ -483,6 +784,7 @@ and that is exactly why it is the one with an `allow` list.
 | `GET` | `/api/word-stats` | The series, by day and by actor; `offset`, `from`, `to` |
 | `POST` | `/api/prose` | Findings over a body, for the editor, like `/api/render` |
 | `GET` | `/api/prose` | Findings over `slug`, or over a whole `root` |
+| `GET` | `/api/prose/rules` | The normalized ruleset and its digest |
 
 Plus fields rather than endpoints: `words` on the page listing and read, `target`,
 `due` and compiled `progress` on a page that carries them.
@@ -490,13 +792,18 @@ Plus fields rather than endpoints: `words` on the page listing and read, `target
 `/api/prose` takes `slug` and `root` as query parameters for the catch-all reason
 given above. `POST /api/prose` is the editor's path and matches `/api/render`,
 which already takes markdown and returns something derived from it.
+`/api/prose/rules` is a fixed segment under it and cannot collide with anything,
+since `/api/prose` takes no path parameter at all.
 
 Errors keep the standard envelope. At minimum: `compile_root_not_found`,
-`compile_depth_exceeded`, `prose_rules_invalid`, `prose_rules_missing`.
+`compile_too_large`, `prose_rules_invalid`, `prose_rules_missing`.
 A missing rules file is not an error at `POST /api/prose` (there is nothing to
 check against, and a wiki that has never written rules is the ordinary case), but
 it is worth distinguishing from a rules file that will not parse, which is a
-mistake somebody just made and wants to hear about.
+mistake somebody just made and wants to hear about. `GET /api/prose/rules` on a
+wiki with no rules file answers an empty ruleset rather than `404`: no rules is a
+state the wiki is genuinely in, and it is the answer a caller asking what the
+rules are should get.
 
 ## Backend module seams
 
@@ -504,11 +811,14 @@ mistake somebody just made and wants to hear about.
 backend/src/
   compile.rs         # assembly, heading shift, repeats, the manifest
   prose/
-    mod.rs           # the rules file and its parsing
+    mod.rs           # the rules file, its parsing, normalization and digest
     rules.rs         # the five rule kinds, each a pure function
     text.rs          # extraction from the AST, sentence splitting, word counting
+  words/
+    mod.rs           # the observation record and the monthly log on disk
+    diff.rs          # added and removed, from two bodies
   index/
-    words.rs         # the words column, page_words, the series
+    words.rs         # the words column, page_parts, page_words, the series
   api/
     compile.rs
     prose.rs
@@ -566,43 +876,53 @@ Each ends at a reviewable state and a reasonable commit boundary.
 ### L0: words
 
 Add the `words` column and the AST word counter; `target`, `due` and `contents`
-to frontmatter, the last as a list of strings; `?sort=words` and prefix totals.
+to frontmatter, the last as an `Option<Vec<String>>`; `?sort=words` and prefix
+totals.
 
 Done when a prefix rollup equals the sum of the pages under it, a code fence
 changes no count, a `contents:` entry that is not a valid slug leaves the page
-readable in every listing, and a schema-version rebuild produces identical
+readable in every listing, an absent list and an empty one survive a `PUT`
+round-trip as different values, and a schema-version rebuild produces identical
 numbers.
 
 ### L1: compile and the manifest
 
-Index `contents:` entries as `part` links with an `ordinal`. Implement the
-assembly, the heading shift, gap and duplicate reporting, the three formats, and
-the audience predicate.
+Add `page_parts`, and union it into the orphan and graph queries. Implement the
+assembly, the heading shift, gap and duplicate reporting, the three limits, the
+three formats, and the audience predicate.
 
 Done when compiling a fixture book twice is byte-identical, every included
 section's bytes appear exactly once at the offset the manifest claims, a wanted
 page holds its position rather than being skipped, a repeat terminates the walk
 and is reported as `duplicate` rather than dropped, a relative entry is refused
-by `Slug` rather than resolved against anything, and a chapter listed in
-`contents:` is no longer an orphan in `/api/stats`.
+by `Slug` rather than resolved against anything, a page listed twice under one
+parent keeps both positions in the manifest, a chapter listed in `contents:` is
+no longer an orphan in `/api/stats`, and each of the three limits refuses with
+`compile_too_large` naming the slug rather than returning a short document.
 
 ### L2: `prose/v1`
 
-The rules file, the five rule kinds, both endpoints.
+The rules file, its normalization and digest, the five rule kinds, all three
+endpoints.
 
-Done when every finding can be reconstructed from the response and the rules file
-without reading implementation code, and this repository's own em dash rule is
-expressed in `prose.toml` and fires on `AGENTS.md`'s three deliberate specimens
-exactly where it should.
+Done when every finding can be reconstructed from its own `receipt` and
+`GET /api/prose/rules` **without reading the rules file or the implementation**,
+which is the remote case and the one the earlier draft did not support; and when
+this repository's own em dash rule is expressed in `prose.toml` and fires on
+`AGENTS.md`'s three deliberate specimens exactly where it should.
 
-### L3: actor and the word series
+### L3: actor and the word log
 
-The header, the actor on every write path including the watcher, `page_words`,
-`GET /api/word-stats`.
+The header, the actor and account on every write path including the watcher,
+`.rhizolog/words/`, the derived `page_words`, `GET /api/word-stats`.
 
-Done when a scan, an API write with a label, an API write without one, and an
-external edit produce four distinguishable rows; when a first sighting records a
-baseline and no delta; and when a schema-version bump leaves the table untouched.
+Done when a startup scan, an API write with a label, an API write without one and
+an external edit produce four distinguishable records; when a rewrite reports
+`added` and `removed` rather than only their difference; when a first sighting is
+a baseline; when a move keeps one continuous series and a delete followed by a
+new page at the same slug does not; and when **deleting `index.db` and restarting
+reproduces the whole series**, which is the property that made this a log on disk
+rather than rows in the database.
 
 L3 has no dependency on L2 and may swap places with it.
 
@@ -613,6 +933,14 @@ The panel, the assembled view, the findings strip, the chart. Then update
 [The dashboard](dashboard.md), `AGENTS.md` and `TODO.md` from what was actually
 built, and change this page's status from plan to record, naming every place the
 code departed from it.
+
+**`.rhizolog/words/` makes a fourth authored tree**, so every place that
+enumerates the three has to gain it: the table in
+[Architecture](architecture.md), the paragraph in `AGENTS.md`, and the `README`.
+It is authored and **not** secret, so it goes with `times/` and `ideas/` rather
+than with `users/`: back it up, commit it. The gitignore needs no change, because
+it already names `index.db` rather than the directory, which is the decision that
+keeps paying.
 
 ## Test strategy
 
@@ -635,8 +963,13 @@ code departed from it.
   appendix listed under two parts, which is `duplicate` without being a cycle.
 - Each rule kind against a fixture with the expected spans, including a finding
   whose quote contains a multi-byte character, since spans are bytes.
+- Two rules firing on overlapping spans, both reported, in the documented order.
+- Rule normalization: defaults filled in, and two spellings of the same rule
+  producing the same digest.
 - Sentence splitting, including the abbreviation case that is known to fail, so
   that its behaviour is pinned rather than accidental.
+- The word diff: a pure rewrite (high `added`, high `removed`, `delta` near
+  zero), an append, a deletion, and no change at all.
 - Bucketing the word series across a local midnight and across a boundary at a
   non-zero offset, which is the bug `times::stats` already had to be written to
   avoid.
@@ -653,10 +986,24 @@ code departed from it.
   charge somebody the whole page for.
 - Compile filters by audience on a wiki with accounts, and a section hidden that
   way is indistinguishable from one nobody has written.
+- A page listed twice under one parent produces two `page_parts` rows, and moving
+  it to a third position leaves exactly the positions the file names.
 - An external edit is attributed to `file`, and a labelled write to its label.
-- The word series survives a schema-version rebuild.
-- A rules file that will not parse is reported as itself, and an absent one is
-  not an error at `POST /api/prose`.
+- **The word series survives deleting `index.db`**, not merely a schema-version
+  rebuild. The earlier design passed the second and failed the first.
+- A move keeps one series across both slugs; a delete and a new page at the same
+  slug are two.
+- On a wiki with accounts, an observation against an unreadable page reports its
+  slug and no title, which is the time log's rule and not a new one.
+- `GET /api/word-stats` refuses an anonymous caller even under
+  `RHIZOLOG_ANONYMOUS_READ`.
+- A finding's `rules_digest` matches what `GET /api/prose/rules` reports, and a
+  rules file edited between the two calls makes them disagree rather than
+  silently reconciling.
+- A rules file that will not parse is reported as itself, an absent one is not an
+  error at `POST /api/prose`, and `GET /api/prose/rules` answers an empty ruleset
+  rather than `404`.
+- Each compile limit refuses rather than truncating, and the error names the slug.
 - Every error uses the standard envelope; every operation id is unique.
 
 ### Frontend tests
@@ -744,9 +1091,10 @@ so there is one field rather than a flag and a list that could disagree.
 **Whether `target` on a leaf page is useful**, or whether the recursive
 definition is buying consistency nobody needs.
 
-**Whether compile should have a byte ceiling.** A book is not large, and neither
-is any reasonable manuscript, but nothing here bounds the output and an assistant
-asking for one has a context window that does.
+**Whether the word log wants pruning**, and what would be safe to prune. It is
+authored data now, so the answer is not "delete the old rows"; it is closer to
+what a rotated log does, and nothing about it is urgent at a few hundred
+kilobytes a year.
 
 ## Decisions to revisit only after use
 

@@ -252,10 +252,13 @@ Five phases, in this order, and L3 may swap with L2:
 - **L1: compile and the manifest.** `contents:` entries indexed as `part` links
   with an `ordinal`, heading shift, gaps and cycles reported rather than hidden.
 - **L2: `prose/v1`.** Rules in `.rhizolog/prose.toml`, five rule kinds, every
-  finding quoting the text it fired on. No dismissal store, on purpose.
-- **L3: actor and the word series.** An `X-Rhizolog-Actor` header, and
-  `page_words` in the durable half of the index.
-- **L4: dashboard and documentation closure.**
+  finding quoting the text it fired on and carrying the arithmetic behind it, and
+  `GET /api/prose/rules` so a remote caller can reproduce one. No dismissal
+  store, on purpose.
+- **L3: actor and the word log.** An `X-Rhizolog-Actor` header, and
+  `.rhizolog/words/`: a fourth authored tree, with `page_words` derived from it.
+- **L4: dashboard and documentation closure**, which is where the three places
+  that enumerate the authored trees gain a fourth.
 
 **The recursion rule is settled.** A page contributes its body, then each page in
 its `contents:` list, in order, recursively; a link in prose is never structure,
@@ -266,14 +269,26 @@ becomes the only rendering of the spine, and the list has to be read as strings
 and validated at compile time so a mistyped chapter does not make the whole page
 malformed and drop it out of every listing.
 
-Two smaller decisions are still open and both are cheaper: whether `target` on a
-leaf page earns the recursive definition, and whether compile needs a byte
-ceiling for a caller whose context window has one.
+**A review of the plan found five things worth fixing and they are fixed on the
+page**, three of them contradictions with decisions this repository had already
+made. The word history recorded a signed net change, which is precisely the
+metric the feature's own motivating example rejects; it now records words added
+and removed, diffed against the previous body, which `pages_fts` already holds.
+It lived in the durable half of `index.db`, which survives a schema bump but not
+`rm index.db`, and every document here promises that deleting the database costs
+one scan: it is an authored log under `.rhizolog/words/` now, with the derived
+table rebuilt from it. It claimed one row per save, which the watcher's 500 ms
+debounce makes untrue for anyone editing in their own editor. `prose/v1` had no
+way to read its own rules over HTTP, so a remote assistant could be handed
+findings it could not reproduce. And a `contents:` entry was going to be a row in
+`links`, whose key cannot hold the same child twice under one parent, so it is
+its own `page_parts` table.
 
-`page_words` would be the first durable table that grows with use, which is worth
-knowing before it lands rather than after: `api_usage` is bounded by routes and
-`pins` by patience, and a version bump rebuilds neither. Pruning is deliberately
-not designed.
+Two decisions are still open and both are cheap: whether `target` on a leaf page
+earns the recursive definition, and whether the word log ever wants pruning.
+Compile's limits are no longer among them: depth 16, 2,000 sections, 8 MiB, each
+a refusal rather than a truncation, because a manuscript that quietly stops being
+the book is the worst thing this endpoint could return.
 
 ## Rough edges
 
