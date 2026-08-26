@@ -412,6 +412,19 @@ built** and each has a page and a section below:
 [Reordering the spine](knowledge-base/reordering.md) and
 [Splitting and merging](knowledge-base/split-and-merge.md).
 
+**So "what is left for drafting" is spread over four sections**, this one and
+those three, and it is worth saying once where the rest of the answer is rather
+than leaving somebody to find out by reading all of them. Two things cut across
+the family and are not repeated in each: the read-modify-write window, which is
+one entry under Rough edges and belongs to the editor as much as to these; and
+undo, which is answered by the wiki directory being a git repository, under
+Decided against. What drafting **refuses** rather than defers is not here at all,
+because it is argued rather than outstanding: no computed or rolled-up stage, no
+synopsis derived from the prose, no custom metadata fields, no colour as data,
+and no reordering from the card view. Those live under Not goals in
+[Drafting](knowledge-base/drafting.md) and
+[Reordering the spine](knowledge-base/reordering.md).
+
 Three questions the plan left open and the build did not close:
 
 - **A synopsis is not searchable.** It is the natural way to find "the chapter
@@ -509,11 +522,9 @@ What is not done:
 - **Moving a chapter between parts.** Two lists change, which is two writes and a
   question about the second failing. The panel says so rather than leaving
   somebody to find out that neither gesture will do it.
-- **The list written back is as old as the compile on screen.** A chapter added
-  in your own editor since then is written out of the spine. Re-reading after the
-  move makes it visible rather than silent; closing it properly means conditional
-  writes, which this API does not have anywhere and should not grow in one
-  corner. The editor has the same window over a larger surface.
+- **The list written back is as old as the compile on screen.** One face of the
+  read-modify-write window under Rough edges, where the whole of it is. Re-reading
+  the book after every move is what makes a collision visible rather than silent.
 
 ## Splitting and merging
 
@@ -543,8 +554,8 @@ What is not done:
   entry precedes which and the editor does not, so it is the one thing a panel
   control would add. It needs a spine and a page on screen at once, which is a
   layout question rather than an API one.
-- **The list written back is as old as the read that found it**, exactly as
-  above, and named rather than closed for the same reason.
+- **The lists repaired are as old as the read that found them**, which is the
+  same face of the same window, under Rough edges.
 - **A repair that cannot write a parent answers `500` after the pages are
   written.** The pages and the word log are right and one contents list is not,
   which the manifest shows, because the spine is read from there anyway. A review
@@ -554,6 +565,20 @@ What is not done:
 
 ## Rough edges
 
+- **Every write in the dashboard is read-modify-write, and the window is
+  open.** Saving in the editor replaces a page with what was on screen when it
+  opened. Reordering rebuilds a `contents:` list from the compile the panel is
+  showing, so a chapter added in another tab since then is written out of the
+  spine. Splitting and merging repair the lists they found a moment earlier. It
+  is one problem with three faces, which is why it is here once rather than in
+  each of those sections: what closes it is conditional writes, and this API has
+  none anywhere. Growing them in one corner would be worse than the window,
+  because it would make the other two look deliberate.
+
+  What each of them does instead is make a collision visible rather than silent.
+  The panel re-reads the book after every move; a split answers with every list
+  it rewrote and what each says now. The editor, which has the largest surface of
+  the three, does the least about it.
 - **The no-em-dash rule is enforced going forward and was never applied
   backwards.** `be05e64` made it project-wide and cleared the root documents;
   everything written before that still has them. As of the Idea Inbox dashboard
