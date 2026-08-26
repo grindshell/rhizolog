@@ -1626,6 +1626,10 @@ errors and 36 warnings; the orphan count, the wanted count and the time totals a
 what they were. Then the whole thing again after deleting `index.db`, with the
 two log files hashed before and after: identical.
 
+Those five figures are the fixture as L4 left it, and the book below moved every
+one of them. The current numbers are in `example-wiki/index.md`, which is the one
+place they are meant to be read from.
+
 One number in that set is worth keeping. `echo` at `within = 12` was the plan's
 neighbourhood and it reported **60 warnings on a single page**. At `within = 8`
 with a three-line `ignore` list it reports 36 on the same page and four or fewer
@@ -1633,6 +1637,88 @@ on every other page in the wiki. The rule is a lexical count with no stemming an
 no stop-word list anywhere in the analyzer, so `ignore` is the only lever there
 is, and a long page of documentation repeats its own vocabulary constantly. Widen
 the list before lowering the number, or the repeats worth seeing go with the rest.
+
+## The fixture gained a manuscript
+
+L4 shipped with the Manuscript panel and `?assembled=1` built and nothing in
+`example-wiki/` to point them at, which `TODO.md` recorded as the two screens the
+fixture could not demonstrate. `example-wiki/book` is that manuscript: seven
+pages, two parts, and ten sections in its manifest.
+
+It is the only fiction in the fixture, and that is deliberate. Every other page
+there is a note explaining what it demonstrates, which works for a wiki and does
+not work here: what a compile has to be shown assembling is prose, and a chapter
+that spends its body describing chapter structure would demonstrate the panel by
+not being the thing the panel is for. So the pages are prose and every claim
+about them lives in `index.md`, which is where the fixture already keeps its
+claims.
+
+Three of the ten sections are deliberately not assembled, one for each way that
+happens:
+
+- `book/two/the-crossing` is **wanted**, a chapter nobody has written, holding
+  its position so the manuscript says where it was going to go.
+- `book/appendix` is listed under both parts, because a ferry timetable belongs
+  with the outward leg and the return equally, and its second position is
+  **duplicate**. That is the diamond this status was named for rather than a
+  cycle, demonstrated instead of asserted.
+- `../one/the-ferry` is **invalid**, refused by `Slug` itself. The page holding
+  it is still perfectly readable, which is the whole point of reading `contents:`
+  as strings and parsing them at compile time.
+
+`book/one/opening` carries a setext heading, so the compiled document is where
+you can watch it become an ATX one at `###`. The root's `target: 2,000` is
+written with the comma the L0 deserialiser accepts.
+
+### The `names` rule finally has something true to find
+
+`GET /api/prose?slug=book&compiled=true` reports the ferryman as `Maren` twice
+beside `Marren` three times, and **no single page reports it**: each chapter is
+internally consistent and the finding exists only across the section break. Up to
+now `?compiled=true` was argued for and tested and had no worked example in the
+fixture; `consistent` in particular had only ever been demonstrated by the false
+positives it had to be taught not to make.
+
+The chapter that carries the rarer spelling says out loud that the name is
+written two ways and that nobody on the pier would settle it, which is the fixture
+being a fixture: the finding and the reason for it are both in the wiki.
+
+### A contents gap is not a wanted page, and the two figures disagree
+
+Writing this surfaced an asymmetry nobody had had a reason to look at.
+`referenced()` unions `page_parts`, so a chapter is not an orphan. `wanted_count`
+does not, so `book/two/the-crossing` leaves `/api/stats` reporting one wanted
+page, which is the wikilink to `notes/rust/streams` and nothing else.
+
+The graph does not agree with that. A `contents:` entry pointing at nothing
+becomes a node with `exists: false`, which the dashboard draws exactly as it
+draws a wanted page, so the drawing shows two and the card beside it says one.
+
+Both halves are defensible on their own. A wanted page is a branch somebody
+gestured at in prose; a gap in a manuscript is a hole reported in position by the
+manifest, which is a different question with a better answer already. And the
+plan only ever asked for the orphan query and the graph to union the spine in.
+What is not defensible is that the dashboard states both without saying they
+count different things, so `example-wiki/index.md` now says which is which. Left
+as it stands rather than changed, because merging them would make the wanted
+count answer two questions at once, and that is the number this wiki's own
+statistics exist for.
+
+### What it cost, which was what was predicted
+
+Nine pages became sixteen. The word log gained eight lines, seven of them the
+book being written across the same week the time entries are pinned to, and one
+of them a revision by `claude-code` that removed 120 words and added 96: the
+motivating example of this whole page, on a page anybody can open. Every total in
+`index.md` moved, and the `index` baseline was rebased from 1,040 to 1,909, which
+is the manoeuvre `AGENTS.md` describes and the reason it is described there.
+
+The orphan and wanted counts did not move, and that was worth arranging rather
+than accepting: the book is linked from `index.md` so its root is not a third
+orphan, and a contents gap is not a wikilink so it is not a second wanted page.
+The property that reading the fixture writes nothing survived, which it only does
+because every one of the seven new pages has a log line whose total already
+matches it.
 
 ## Test strategy
 

@@ -61,15 +61,20 @@ itself. See `knowledge-base/desktop-app.md`.
 fixture, and changing it changes what the docs claim.
 
 That now includes three trees under `example-wiki/.rhizolog/`, each with numbers
-`example-wiki/index.md` states exactly: `times/` is 18 entries, `words/` is 18
+`example-wiki/index.md` states exactly: `times/` is 18 entries, `words/` is 26
 logged lines, and `prose.toml` is five rules.
+
+Seven of the sixteen pages are `book`, a manuscript, and `index.md` states its
+manifest section by section. It is the only thing in the fixture that exercises
+`contents:`, so it carries a gap, a page listed under two parents and an entry
+that is not a slug on purpose, and none of the three is a mistake to tidy up.
 
 **Pointing `RHIZOLOG_ROOT` at the example wiki to *look* at it writes nothing**,
 which is what the README tells people to do and is now a property rather than a
 hope. The word log already holds a line for every page and every one of those
 lines agrees with the page it describes, so the startup scan finds nothing to
 record. Before that log was committed, merely starting a server against the
-fixture appended nine baselines to it.
+fixture appended a baseline for every page in it.
 
 Two things still change it. Starting a timer writes a time entry, and **editing a
 page writes a word observation**, which the numbers in `index.md` do not account
@@ -77,9 +82,9 @@ for. Check `git status example-wiki` afterwards.
 
 Anything that changes `index.md` changes its own word count, which the log's last
 line for `index` has to match or the next scan records the difference as a `net`.
-The chain is baseline 1040, then `+260 -40`, then `+220 -21`, ending at 1459. Fix
+The chain is baseline 1909, then `+260 -40`, then `+220 -21`, ending at 2328. Fix
 it by moving the **baseline**, which carries no churn and so changes no total on
-the chart.
+the chart: it is the final count less 419, and the middle total moves with it.
 
 **`.rhizolog/` is not all disposable.** `index.db` is derived and rebuilds on
 startup. Four things beside it are authored data with no other copy:

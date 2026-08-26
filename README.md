@@ -66,15 +66,17 @@ Then open:
 The first compile takes a while: SQLite is built from source, and Swagger UI is
 unpacked at build time.
 
-`example-wiki/` is nine pages arranged to show the features off: nested slugs,
+`example-wiki/` is sixteen pages arranged to show the features off: nested slugs,
 wikilinks, a page that is linked but not written, two orphans, and the same
 directory name in two places, which is what makes the two path filters differ.
-It also carries a week of tracked time (eighteen entries, two overlapping timers,
-a session that runs past midnight, hours logged against the page nobody has
-written), a week of writing in the word log, and a rules file with one of each
-kind of prose rule in it. Read [its index](example-wiki/index.md) first; it
-explains what the dashboard will say about it and why, including why Today is
-empty.
+Seven of them are a short book, so that a contents page, an assembled document
+and a manifest with a gap, a repeat and a bad entry in it are things you can
+click on rather than read about. It also carries a week of tracked time (eighteen
+entries, two overlapping timers, a session that runs past midnight, hours logged
+against the page nobody has written), a week of writing in the word log, and a
+rules file with one of each kind of prose rule in it. Read
+[its index](example-wiki/index.md) first; it explains what the dashboard will say
+about it and why, including why Today is empty.
 
 Reading it changes nothing on disk: the word log already agrees with every page,
 so the startup scan finds nothing to record. Start a timer or edit a page while

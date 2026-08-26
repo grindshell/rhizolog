@@ -5,9 +5,11 @@ tags:
 
 # Example wiki
 
-Nine pages, a week of tracked time and a week of writing, arranged to show what
-Rhizolog does with them. Run the server against this directory and the dashboard
-reports two orphans and one wanted page — all three on purpose.
+Sixteen pages, a week of tracked time and a week of writing, arranged to show
+what Rhizolog does with them. Seven of the pages are a short book, because a
+manuscript is a thing a wiki full of notes cannot demonstrate. Run the server
+against this directory and the dashboard reports two orphans and one wanted
+page — all three on purpose.
 
 Nothing here is special. It is markdown in a directory; delete the whole thing
 and point `RHIZOLOG_ROOT` at your own notes.
@@ -24,6 +26,7 @@ the end of the time log below.
 - [[notes/rust/async]] — nested slugs, and a link to a page nobody has written
 - [[notes/rhizome]] — where the name comes from
 - [[notes/deleuze]] — and where *that* comes from
+- [[book]] — a manuscript, with a gap, a repeat and a bad entry in its contents
 
 ## Two ways to read a slug
 
@@ -58,6 +61,72 @@ to reach *from inside*.
 `scratch/inbox` has an hour and a half tracked against it and is still an
 orphan, which is also right: nobody has linked to it, you have just been working
 on it.
+
+None of the book's seven pages is an orphan, though only one of them is linked
+from anywhere. A `contents:` entry counts as a reference, so a chapter has a
+parent even where no wikilink points at it. Without that rule, writing a book
+would fill this statistic with its own chapters and the number would stop being
+worth reading.
+
+## The manuscript
+
+[[book]] is a short book in seven pages, and the only fiction here. It exists
+because a contents page is the one thing a wiki of notes cannot show you. Order
+lives in frontmatter so that reflowing a paragraph cannot reorder a book, and the
+price of that is real: open `book.md` raw and you get a YAML list rather than a
+clickable index. The Manuscript panel on `/pages/book` is what pays it back, and
+it is the only place the spine is drawn.
+
+`GET /api/compile?root=book` should return **606 words in 10 sections**, seven
+assembled and three not:
+
+| # | Section | Depth | Words | Status |
+|---|---|---|---|---|
+| 1 | `book/one` | 1 | 25 | included |
+| 2 | `book/one/opening` | 2 | 103 | included |
+| 3 | `book/one/the-ferry` | 2 | 188 | included |
+| 4 | `book/appendix` | 2 | 81 | included |
+| 5 | `book/two` | 1 | 29 | included |
+| 6 | `book/two/the-crossing` | 2 | 0 | wanted |
+| 7 | `book/two/the-return` | 2 | 137 | included |
+| 8 | `book/appendix` | 2 | 0 | duplicate |
+| 9 | `../one/the-ferry` | 2 | 0 | invalid |
+
+The root's own 43 words are section zero, which the panel drops because it is the
+page you are already reading.
+
+The three that are not assembled are why the book is shaped the way it is:
+
+- **A chapter nobody has written.** `book/two/the-crossing` holds its position
+  rather than being skipped, so the manuscript says where the missing chapter was
+  going to go. Write the page and it fills with nothing to reindex. It does *not*
+  move the wanted-page count above, which counts wikilinks: a gap in a contents
+  list is a gap in a manuscript, and the two are different statements. It is a
+  wanted node in `/api/graph` all the same.
+- **A page in two places.** `book/appendix` is listed under both parts, because a
+  timetable belongs with the outward leg and the return equally. The second
+  position reports `duplicate`, which is the manifest working rather than
+  complaining. It is not a cycle, and the status is deliberately not named after
+  one, because this shape is far commoner than a loop.
+- **An entry that is not a slug.** `../one/the-ferry` is refused by `Slug` itself
+  rather than resolved against anything, and it costs the page nothing: the entry
+  is `invalid` in the manifest and `book/two` stays readable everywhere else. A
+  typo in a list of chapters must not take the page holding the book together out
+  of every listing. Every entry is a slug from the wiki root, so the spelling that
+  works is `book/one/the-ferry`, which Part One already assembles anyway.
+
+`?assembled=1` on the same page renders the whole thing, with headings shifted by
+depth: the book's `#`, each part's `##`, each chapter's `###`. Nothing is
+inserted, so a part contributes only what it wrote, which is a heading and an
+epigraph. `book/one/opening` is written with a setext heading, `Opening` over a
+row of `=`, and the compiled document is where you can see what happens to it:
+there is no marker to shift, so it comes out as `###` with its own line kept
+verbatim.
+
+The target is 2,000 words against 606, so the panel reads 30 per cent. That is a
+figure and nothing else: no streak, nothing that congratulates you, and no change
+of tone when it goes up. The due date is fixed like every other date here, and is
+not a deadline anybody is keeping.
 
 ## The time log
 
@@ -114,9 +183,10 @@ example-wiki` afterwards says whether it happened.
 
 ## The word log
 
-`.rhizolog/words/` holds **18 lines across two months**, pinned to the same week
+`.rhizolog/words/` holds **26 lines across two months**, pinned to the same week
 as the time entries. Six of them are the startup scan finding pages that were
-already there; the rest are a week of writing, a rename and a delete.
+already there; the rest are a week of writing, most of it the book, plus a rename
+and a delete.
 
 An observation records **words added and words removed**, never their difference.
 That is the whole reason the feature exists: an assistant rewriting two thousand
@@ -129,20 +199,26 @@ Ask for the moment the log was written for:
 /api/word-stats?at=2026-08-06T18:00:00Z&offset=0
 ```
 
-which should answer **1061 added, 114 removed** across 10 observations and 8
+which should answer **1787 added, 234 removed** across 18 observations and 15
 pages, split by the tool that made each write:
 
 | Tool | Added | Removed |
 |---|---|---|
-| file | 417 | 26 |
-| web | 414 | 48 |
-| claude-code | 230 | 40 |
+| file | 910 | 26 |
+| web | 551 | 48 |
+| claude-code | 326 | 160 |
 
-Four of the lines exist to show something that is easy to get wrong:
+Five of the lines exist to show something that is easy to get wrong:
 
 - **A rewrite that wrote nothing.** On 6 August `scratch/rust/from-a-talk` is
   `added 24, removed 24`. A net figure would call that day empty; it was a
   morning's work.
+- **A rewrite that took more away than it put back.** `book/one/the-ferry` was
+  212 words on 4 August and is 188 now, and the line between them says
+  `added 96, removed 120` with `claude-code` against it. The net is minus
+  twenty-four. This is the case the whole feature exists for: knowing *who*
+  produced the minus twenty-four recovers neither the ninety-six written nor the
+  hundred and twenty cut, and the chart draws both.
 - **A page that arrived from somewhere else.** `notes/rust/async` was
   `notes/async` until 3 August, and the `moved` line names both slugs. History is
   never rewritten, so the series before the move is still there under the old
@@ -169,7 +245,7 @@ opinion about your voice.
 `GET /api/prose/rules` reports them with their defaults filled in and a digest
 over the lot, so an assistant handed a finding can reproduce it without reading
 the file. `GET /api/prose?slug=index` runs them over this page and should answer
-**9 errors and 36 warnings**: an em dash for each of the first, and a word used
+**10 errors and 65 warnings**: an em dash for each of the first, and a word used
 twice inside eight of another for each of the second.
 
 The first rule is the one this project holds itself to, and it is written with
@@ -188,6 +264,32 @@ before lowering `within`, or the repeats worth seeing go with the rest.
 
 The last rule, `names`, is the only one nobody wrote and the only one carrying an
 `allow` list. It looks for a single name spelled two ways, and it is the one with
-real false positives, so it gets the escape hatch and the other four do not. Here
-it finds nothing, which is what the two filters behind it exist to make possible:
-without them it would report `Then` as a misspelling of `Them`.
+real false positives, so it gets the escape hatch and the other four do not. On
+this page it finds nothing, which is what the two filters behind it exist to make
+possible: without them it would report `Then` as a misspelling of `Them`.
+
+### The rule that only fires on the whole book
+
+Ask about the assembled manuscript instead:
+
+```
+/api/prose?slug=book&compiled=true
+```
+
+which should answer **1 error and 11 warnings**, and two of those warnings are
+the ones worth the trip. The ferryman is `Marren` three times in
+[[book/one/the-ferry]] and `Maren` twice in [[book/two/the-return]], and `names`
+reports every occurrence of the rarer spelling: `Maren (2) beside Marren (3)`.
+
+**No single page reports it.** Each chapter is internally consistent, and a rule
+about spelling needs both spellings in front of it at once. That is what
+`compiled=true` is for, and it is not a convenience: two of the five rules are
+cross-page questions by nature, since a word echoed over a section break is just
+as invisible from inside one chapter. Offsets in that report index the assembled
+document rather than any page's source, which the response says in its `offsets`
+field, and each finding still names the `slug` it fell in.
+
+The one error is an em dash in [[book/two/the-return]], which is the same rule
+firing on the same character as above. A finding is your own rule on your own
+text, so there is nothing to dismiss and nowhere to dismiss it to: either the
+sentence changes or the rule does.

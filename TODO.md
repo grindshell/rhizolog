@@ -303,14 +303,19 @@ Every phase and what it turned out to be:
   fine. Eighteen committed lines fix it as a property rather than a warning: every
   page already agrees with the log, so the scan finds nothing to record.
 
+**`example-wiki/` now has a manuscript in it**, which is what the Manuscript panel
+and the assembled view had nothing to be shown against. `book` is seven pages in
+two parts, and its manifest is ten sections: seven assembled, one gap, one page
+listed under both parts and one entry that is not a slug. `index.md` states the
+whole manifest section by section, along with the compiled total, the target and
+what `prose/v1` says about the assembled book, which is where the `names` rule
+finds the one thing it is for and no single page reports it. It cost what was
+predicted: sixteen pages rather than nine, eight more lines in the word log, and
+a rebased `index` baseline. The orphan and wanted counts are unmoved, because the
+book is linked from the index and a contents gap is not a wikilink.
+
 What is not done:
 
-- **`example-wiki/` has no manuscript in it**, so the Manuscript panel and the
-  assembled view are the two screens the fixture cannot demonstrate. Adding one
-  means new pages, which moves the page count, the orphan count and the word
-  totals that `index.md` states exactly, so it is a deliberate change to the
-  fixture rather than a file dropped in. It is also what the product site's demo
-  would want.
 - **Compile has no performance evidence.** It is the one thing here whose cost
   grows with the work, and the plan's gate is scratch manuscripts of 50, 200 and
   500 sections, measured three times each with the minimum kept. Nothing has been
@@ -344,6 +349,16 @@ way to read its own rules over HTTP, so a remote assistant could be handed
 findings it could not reproduce. And a `contents:` entry was going to be a row in
 `links`, whose key cannot hold the same child twice under one parent, so it is
 its own `page_parts` table.
+
+**A contents gap is not counted as a wanted page, and the graph draws it as one.**
+The orphan query unions `page_parts`, so a chapter has a parent; the wanted count
+does not, so a `contents:` entry pointing at nothing leaves `/api/stats` reporting
+only the wikilink gaps. The graph disagrees with its own card: an unwritten
+chapter is a node with `exists: false`, drawn exactly as a wanted page is. Left
+alone deliberately, since a hole in a manuscript is already reported in position
+by the manifest and merging the two would make one number answer two questions,
+but the dashboard says both without saying they differ. `example-wiki/index.md`
+explains it; the dashboard does not.
 
 Two decisions are still open and both are cheap: whether `target` on a leaf page
 earns the recursive definition, and whether the word log ever wants pruning.
