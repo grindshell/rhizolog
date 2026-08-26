@@ -19,6 +19,21 @@ import type { Positioned, Viewport } from './layout'
  * - The **root** of a walk gets a second ring, because "which one did I ask
  *   about" is the first question anyone has about a neighbourhood.
  *
+ * ## A part edge does not look like a link, and bows the same way
+ *
+ * The two questions the plan left for this screen, answered. A `contents:` entry
+ * is drawn in the second colour and heavier, because it is a different kind of
+ * claim: a link is one page mentioning another, and a part is one page *being
+ * inside* another. Drawing them alike would hide the one relationship in a wiki
+ * that has an order to it.
+ *
+ * It bows exactly as a link does, and for the same reason rather than out of
+ * uniformity. Two pages can each name the other in their contents lists, which
+ * is a cycle compile ends by reporting the repeat as a `duplicate`, and drawn
+ * straight those two lines would be one with an arrowhead buried under the
+ * other. A page both linked to and assembled by the same parent is one line
+ * carrying both, so the two never overlap.
+ *
  * ## Labels are rationed
  *
  * Every node labelled is a wall of overlapping text at any real size, and no
@@ -352,6 +367,23 @@ export default function LinkGraph(props: {
           >
             <path d="M0 0 L8 4 L0 8 z" class="fill-primary" />
           </marker>
+          {/*
+            One marker for a part edge in both states. The stroke weight and the
+            dimming carry the emphasis; a second arrowhead colour for the same
+            relationship would be saying it twice.
+          */}
+          <marker
+            id="graph-arrow-part"
+            viewBox="0 0 8 8"
+            refX="7"
+            refY="4"
+            markerWidth="7"
+            markerHeight="7"
+            markerUnits="userSpaceOnUse"
+            orient="auto"
+          >
+            <path d="M0 0 L8 4 L0 8 z" class="fill-secondary" />
+          </marker>
         </defs>
 
         <g>
@@ -373,12 +405,17 @@ export default function LinkGraph(props: {
                       fill="none"
                       class="transition-opacity"
                       classList={{
-                        'stroke-primary': lit(),
-                        'stroke-base-content/25': !lit(),
+                        'stroke-secondary': edge.part,
+                        'stroke-primary': !edge.part && lit(),
+                        'stroke-base-content/25': !edge.part && !lit(),
+                        // A part edge that is not the one being pointed at is
+                        // dimmed rather than recoloured, so the spine of a book
+                        // stays legible as a spine at a glance.
+                        'opacity-45': edge.part && !lit() && shown(),
                         'opacity-10': !shown(),
                       }}
-                      stroke-width={lit() ? 2 : 1.2}
-                      marker-end={lit() ? 'url(#graph-arrow-lit)' : 'url(#graph-arrow)'}
+                      stroke-width={strokeWidth(edge.part, lit())}
+                      marker-end={arrow(edge.part, lit())}
                     />
                   )}
                 </Show>
@@ -496,6 +533,16 @@ export default function LinkGraph(props: {
           <span class="inline-block size-3 rounded-full border-2 border-dashed border-warning" />
           wanted
         </span>
+        {/*
+          Only when there is one to explain. A wiki with no manuscripts in it
+          should not carry a key to a thing it has none of.
+        */}
+        <Show when={props.graph.edges.some((edge) => edge.part)}>
+          <span class="flex items-center gap-1.5">
+            <span class="bg-secondary inline-block h-0.5 w-4" />
+            part of
+          </span>
+        </Show>
         <Show when={props.root}>
           <span class="flex items-center gap-1.5">
             <span class="inline-block size-3 rounded-full border-2 border-secondary" />
@@ -506,6 +553,24 @@ export default function LinkGraph(props: {
       </div>
     </div>
   )
+}
+
+/**
+ * How heavy a line is: what kind of edge it is, and whether it is being asked
+ * about.
+ *
+ * A part edge is heavier than a link at rest, because it is the relationship
+ * that gives a branch of the wiki an order and there are far fewer of them.
+ */
+export function strokeWidth(part: boolean, lit: boolean): number {
+  if (part) return lit ? 2.6 : 1.8
+  return lit ? 2 : 1.2
+}
+
+/** Which arrowhead a line ends in. */
+export function arrow(part: boolean, lit: boolean): string {
+  if (part) return 'url(#graph-arrow-part)'
+  return lit ? 'url(#graph-arrow-lit)' : 'url(#graph-arrow)'
 }
 
 /**

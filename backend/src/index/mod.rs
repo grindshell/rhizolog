@@ -42,7 +42,7 @@ pub use ideas::{
 };
 pub use pins::Pin;
 pub use sessions::StoredSession;
-pub use sync::{SyncCounts, SyncReport, sync};
+pub use sync::{SyncCounts, SyncReport, WordSync, sync};
 pub use times::{
     PageTimes, TimeGroup, TimeList, TimeListOptions, TimePageRef, TimeRecord, TimeRef, TimeSortBy,
     TimeTotals,

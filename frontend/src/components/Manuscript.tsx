@@ -1,0 +1,252 @@
+import { For, Show, createMemo, createResource } from 'solid-js'
+import { A } from '@solidjs/router'
+import { assembledHref, compilePages, pageHref } from '../api/client'
+import type { CompiledView, PageView, SectionView } from '../api/client'
+import { Async } from './Async'
+
+/**
+ * The spine of a manuscript, rendered as something you can click.
+ *
+ * This panel is not a nicety. Order moved into frontmatter precisely so that a
+ * formatter joining two lines could not reorder a book, and the cost of that
+ * decision was stated up front: a contents page opened raw is a YAML list rather
+ * than an index. This is what pays it back. Nothing else in the wiki renders the
+ * spine, so anything hidden here is hidden everywhere.
+ *
+ * Which is why a gap, a duplicate and a mistyped entry are shown **in position**
+ * rather than filtered out. A manuscript short of a chapter says where the
+ * chapter was going to be, and that is the whole difference between a gap and an
+ * omission.
+ *
+ * It costs one compile per page view, which is the same walk `GET /api/compile`
+ * does for the document itself. A cheaper endpoint returning only the manifest
+ * was considered and skipped: the walk is where the cost is, the assembly is
+ * concatenation, and a second code path for the same tree is a second answer
+ * about what the book is.
+ */
+export default function Manuscript(props: { page: PageView }) {
+  const [compiled] = createResource(
+    () => props.page.slug,
+    (root) => compilePages({ root }),
+  )
+
+  return (
+    <section class="card bg-base-100 shadow">
+      <div class="card-body gap-3">
+        <div class="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 class="card-title text-base">Manuscript</h2>
+          <A class="btn btn-ghost btn-sm" href={assembledHref(props.page.slug)}>
+            Read assembled
+          </A>
+        </div>
+
+        <Async resource={compiled}>
+          {(document) => <Assembly page={props.page} compiled={document} />}
+        </Async>
+      </div>
+    </section>
+  )
+}
+
+function Assembly(props: { page: PageView; compiled: CompiledView }) {
+  /**
+   * Everything but the root's own body, which compile emits first.
+   *
+   * Dropped because it is the page you are already reading, and a book listing
+   * itself as its own first chapter reads as a bug. Checked rather than assumed:
+   * a compile given a `?style=` preamble puts that first instead, and this panel
+   * should not silently swallow a section because it counted from one.
+   */
+  const parts = createMemo(() => {
+    const sections = props.compiled.sections
+    return sections[0]?.slug === props.compiled.root ? sections.slice(1) : sections
+  })
+
+  const included = createMemo(
+    () => parts().filter((section) => section.status === 'included').length,
+  )
+  const gaps = createMemo(
+    () => parts().filter((section) => section.status !== 'included').length,
+  )
+
+  return (
+    <>
+      <Progress compiled={props.compiled} due={props.page.due} />
+
+      <ul class="flex flex-col gap-1 text-sm">
+        <For
+          each={parts()}
+          fallback={
+            <li class="opacity-60">
+              {/*
+                An absent `contents:` and an empty one are different values and
+                survive a round trip as different values, so they get different
+                sentences. A book on the day it is started is the second.
+              */}
+              <Show
+                when={props.page.contents}
+                fallback="Nothing is assembled here. Give this page a contents list to make it a manuscript."
+              >
+                This manuscript has no parts yet. Add slugs to its contents list.
+              </Show>
+            </li>
+          }
+        >
+          {(section, position) => <Part section={section} position={position()} />}
+        </For>
+      </ul>
+
+      <Show when={parts().length > 0}>
+        <div class="text-xs opacity-60">
+          {included()} {included() === 1 ? 'section' : 'sections'}
+          <Show when={gaps() > 0}>
+            {' '}
+            · {gaps()} not assembled
+          </Show>
+        </div>
+      </Show>
+    </>
+  )
+}
+
+/**
+ * One section, in its position, whatever happened to it.
+ *
+ * The status badge is the point of the row. `wanted` covers a slug nobody has
+ * written **and** a page this reader may not see, deliberately: telling the two
+ * apart would confirm that something exists at a slug somebody guessed, which is
+ * `404, never 403` in the manifest's own spelling.
+ */
+function Part(props: { section: SectionView; position: number }) {
+  const status = () => props.section.status
+  const included = () => status() === 'included'
+
+  return (
+    <li class="flex flex-wrap items-baseline justify-between gap-2">
+      <span class="flex min-w-0 items-baseline gap-2">
+        <span class="w-6 shrink-0 text-right font-mono text-xs opacity-40">
+          {props.position + 1}
+        </span>
+        {/*
+          Indented by depth, which is the only thing that says a chapter sits
+          under a part rather than beside it. The list is flat because the
+          manifest is: positions are what compile promises, and a tree would
+          have to invent the nesting back out of them.
+        */}
+        <span style={{ 'padding-left': `${Math.max(0, props.section.depth - 1) * 0.75}rem` }}>
+          <Show
+            when={included()}
+            fallback={
+              <span class="font-mono text-xs break-all opacity-70">
+                {props.section.slug}
+              </span>
+            }
+          >
+            <A class="link" href={pageHref(props.section.slug)}>
+              {props.section.title ?? props.section.slug}
+            </A>
+          </Show>
+        </span>
+      </span>
+
+      <span class="flex shrink-0 items-baseline gap-2">
+        <Show when={!included()}>
+          <span class="badge badge-sm" classList={badgeClass(status())}>
+            {status()}
+          </span>
+        </Show>
+        <Show when={props.section.words > 0}>
+          <span class="font-mono text-xs opacity-60">
+            {props.section.words.toLocaleString()}
+          </span>
+        </Show>
+      </span>
+    </li>
+  )
+}
+
+/**
+ * The three not-included statuses that are worth different colours.
+ *
+ * `duplicate` is deliberately not a warning. The commonest case is not a cycle
+ * at all: an appendix listed under two parts is a diamond, and the second
+ * position reporting itself is the manifest working rather than complaining.
+ */
+function badgeClass(status: string): Record<string, boolean> {
+  return {
+    'badge-warning': status === 'wanted',
+    'badge-error': status === 'invalid' || status === 'unreadable',
+    'badge-ghost': status === 'duplicate',
+  }
+}
+
+/**
+ * Words against target, and the day it is due.
+ *
+ * Progress is arithmetic over the manifest rather than a field on the page, and
+ * that is a decision rather than an omission: `target` is measured against the
+ * **compiled** total, so filling a `progress` field on `GET /api/pages/{slug}`
+ * would mean assembling the whole book on every page read.
+ *
+ * The bar is a bar and says nothing else. No streak, no encouragement, and
+ * nothing that changes tone when the number goes up: the same terms the hours
+ * heat map is on.
+ */
+function Progress(props: { compiled: CompiledView; due?: string | null }) {
+  const target = () => props.compiled.target ?? 0
+  const share = () =>
+    target() > 0 ? Math.min(1, props.compiled.words / target()) : 0
+
+  return (
+    <div class="flex flex-col gap-1">
+      <div class="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span>
+          <span class="font-mono text-lg">
+            {props.compiled.words.toLocaleString()}
+          </span>
+          <span class="opacity-60">
+            {' '}
+            {props.compiled.words === 1 ? 'word' : 'words'}
+            <Show when={target() > 0}>
+              {' '}
+              of {target().toLocaleString()}
+            </Show>
+          </span>
+        </span>
+        <Show when={props.due}>
+          {(due) => (
+            <span class="text-xs opacity-60">due {formatDay(due())}</span>
+          )}
+        </Show>
+      </div>
+
+      <Show when={target() > 0}>
+        <progress
+          class="progress progress-primary w-full"
+          value={props.compiled.words}
+          max={target()}
+        />
+        <div class="text-xs opacity-60">{Math.round(share() * 100)}%</div>
+      </Show>
+    </div>
+  )
+}
+
+/**
+ * A due date is a **day**, not an instant, so it is shown as one.
+ *
+ * It arrives as a full timestamp because this is JSON and a client has a clock,
+ * and a bare `2027-03-01` in a file reads as midnight UTC. Rendering that in the
+ * reader's own zone would show 28 February to anybody west of Greenwich, so the
+ * day is read back in UTC and only its name is shown.
+ */
+export function formatDay(value: string): string {
+  const at = new Date(value)
+  if (Number.isNaN(at.getTime())) return value
+  return at.toLocaleDateString(undefined, {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}

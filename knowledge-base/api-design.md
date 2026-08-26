@@ -45,6 +45,57 @@ storage model it sits on.
 | `GET` | `/api-docs/openapi.json` | Generated OpenAPI document |
 | `GET` | `/swagger-ui` | Swagger UI |
 
+### Long-form writing is four more, and three of them take a query parameter
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/compile` | Assemble from `?root=`; `?format=` markdown, html or json, `?style=` to prepend a preamble |
+| `GET` | `/api/word-stats` | Words added and removed, by day, tool and page; `?at=`, `?offset=`, `?from=`, `?to=` |
+| `POST` | `/api/prose` | Findings over a body the editor has not saved, like `/api/render` |
+| `GET` | `/api/prose` | Findings over `?slug=`, or over everything it assembles with `?compiled=true` |
+| `GET` | `/api/prose/rules` | The normalized ruleset and the digest findings quote |
+
+Plus fields rather than endpoints: `words` on the page listing and the page read,
+and `target`, `due` and `contents` on a page that carries them.
+
+**The slug is a query parameter, not a path segment**, on all three of the first
+kind. That is the catch-all rule below biting for the third time, after
+`/api/move`: `matchit` requires a wildcard to be the final segment, so
+`/api/pages/{*slug}/compiled` will not compile as a route. `/api/prose/rules` is
+safe underneath `/api/prose` precisely because `/api/prose` takes no path
+parameter at all.
+
+**`GET /api/prose` takes a flag rather than one of two parameters.** The first
+draft gave it a `slug` **or** a `root`, exactly one of which had to be present,
+which needs an error for "you gave me neither" and another for "you gave me
+both", and neither of those says anything a caller can act on. `?compiled=true`
+reads the way `?render=true` already does, and a caller never has to know the
+word root.
+
+It moves what the offsets mean, so the response says which it gave: `offsets` is
+`page` for one body and `document` for a manuscript. That is the shape a response
+needs whenever a parameter changes what a number indexes, and it is cheaper than
+two endpoints that would drift.
+
+**`GET /api/word-stats` refuses an anonymous caller** on a wiki with accounts,
+including under `RHIZOLOG_ANONYMOUS_READ`. It is the only read that does. A
+writing history is working state rather than published content, and that variable
+exists to publish pages marked `public`.
+
+**`GET /api/prose/rules` is what makes the other two honest.** `.rhizolog/prose.toml`
+is outside the page API and outside the wiki walker, so without it a remote caller
+could be handed findings with no way to see what produced them. It returns the
+rules **normalized**, with defaults filled in, because a caller reproducing a
+finding needs the values the analyzer used and TOML has more than one way to write
+most of them. The digest ties the two together: a finding and a ruleset that
+disagree on it came from different rules, which is otherwise an invisible way for
+an assistant to be confidently wrong about why something fired.
+
+A wiki with no rules file answers an **empty ruleset** rather than a `404`, and no
+findings rather than an error. No rules is a state a wiki is genuinely in. Every
+report carries a `rules` count so a caller can tell that silence from a clean
+page, which is the field the dashboard needed and the plan had not thought of.
+
 ### Idea Inbox is twenty-five more, and none of them answers a stranger
 
 | Method | Path | Purpose |
@@ -156,7 +207,9 @@ name.
 
 So the operation lives at `/api/move`, outside the namespace slugs occupy, and
 takes `{from, to}` rather than reading one slug from the path. `/api/reindex`
-already has the same shape.
+already has the same shape, and `/api/compile` and `/api/prose` took it later for
+the same reason: what looks like a per-page sub-resource is not one when the page
+identifier is a catch-all.
 
 ### Why `?render=true` was not enough
 

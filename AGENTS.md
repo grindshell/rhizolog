@@ -41,7 +41,7 @@ workspace** whose members are `backend/` and `desktop/`.
 | `desktop/` | The Tauri app (crate and binary `rhizolog-desktop`; the *product* is Rhizolog) |
 | `frontend/` | The TypeScript frontend, served by the backend |
 | `site/` | The static product site at rhizolog.com. Astro, built separately and deployed on its own; the backend neither serves it nor knows about it |
-| `example-wiki/` | A small committed wiki *and time log* to run against; its `index.md` states what the dashboard should report about both |
+| `example-wiki/` | A small committed wiki, *time log*, *word log* and *rules file* to run against; its `index.md` states what the dashboard should report about all four |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
 | `README.md` | Setup and usage, for people who are not this file |
 | `TODO.md` | Known and not done, with why. Keep it current rather than growing a second one |
@@ -60,11 +60,26 @@ itself. See `knowledge-base/desktop-app.md`.
 `.rhizolog/index.db` anywhere. Do not develop against `example-wiki/`: it is a
 fixture, and changing it changes what the docs claim.
 
-That now includes `example-wiki/.rhizolog/times/`: 18 committed entries whose
-totals `example-wiki/index.md` states exactly. Pointing `RHIZOLOG_ROOT` at the
-example wiki to *look* at it is fine and is what the README tells people to do;
-starting a timer while it is pointed there writes a new file into the fixture
-and breaks those numbers. Check `git status example-wiki` afterwards.
+That now includes three trees under `example-wiki/.rhizolog/`, each with numbers
+`example-wiki/index.md` states exactly: `times/` is 18 entries, `words/` is 18
+logged lines, and `prose.toml` is five rules.
+
+**Pointing `RHIZOLOG_ROOT` at the example wiki to *look* at it writes nothing**,
+which is what the README tells people to do and is now a property rather than a
+hope. The word log already holds a line for every page and every one of those
+lines agrees with the page it describes, so the startup scan finds nothing to
+record. Before that log was committed, merely starting a server against the
+fixture appended nine baselines to it.
+
+Two things still change it. Starting a timer writes a time entry, and **editing a
+page writes a word observation**, which the numbers in `index.md` do not account
+for. Check `git status example-wiki` afterwards.
+
+Anything that changes `index.md` changes its own word count, which the log's last
+line for `index` has to match or the next scan records the difference as a `net`.
+The chain is baseline 1040, then `+260 -40`, then `+220 -21`, ending at 1459. Fix
+it by moving the **baseline**, which carries no churn and so changes no total on
+the chart.
 
 **`.rhizolog/` is not all disposable.** `index.db` is derived and rebuilds on
 startup. Four things beside it are authored data with no other copy:

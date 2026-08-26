@@ -34,6 +34,12 @@ What makes it different from the wikis you already know:
   behind every word it says about them. When one is ready it becomes an ordinary
   page. No LLM, no embeddings, no network request, and nothing is ever connected
   without you saying so.
+- **It assembles manuscripts.** A page can name the pages it is made of, in
+  order, and compile into one document with a map back to every part. It counts
+  words added and words removed rather than their difference, and by which tool,
+  because a day an assistant rewrote two thousand words into nineteen hundred is
+  not "minus one hundred". And it holds prose to rules you wrote down in one
+  file, quoting the text every finding fired on.
 
 ## Quick start
 
@@ -63,10 +69,17 @@ unpacked at build time.
 `example-wiki/` is nine pages arranged to show the features off: nested slugs,
 wikilinks, a page that is linked but not written, two orphans, and the same
 directory name in two places, which is what makes the two path filters differ.
-It also carries a week of tracked time: eighteen entries, two overlapping
-timers, a session that runs past midnight, and hours logged against the page
-nobody has written. Read [its index](example-wiki/index.md) first; it explains
-what the dashboard will say about it and why, including why Today is empty.
+It also carries a week of tracked time (eighteen entries, two overlapping timers,
+a session that runs past midnight, hours logged against the page nobody has
+written), a week of writing in the word log, and a rules file with one of each
+kind of prose rule in it. Read [its index](example-wiki/index.md) first; it
+explains what the dashboard will say about it and why, including why Today is
+empty.
+
+Reading it changes nothing on disk: the word log already agrees with every page,
+so the startup scan finds nothing to record. Start a timer or edit a page while
+`RHIZOLOG_ROOT` points there and it does write, and the numbers that index states
+stop being true.
 
 To use your own notes instead, point `RHIZOLOG_ROOT` at any directory of
 markdown files. Nothing needs importing.
@@ -223,6 +236,103 @@ you create an ordinary page with the ordinary page API, and
 `PUT /api/ideas/{id}/promotion` records what it became. The dashboard does all
 three from one form. The captures stay exactly where they were.
 
+## Long-form writing
+
+A wiki page is something you have decided. A manuscript is something you hand
+over, on a date, at a length, in a format. Three fields in a page's frontmatter
+turn one into the other, and they do nothing at all on a wiki that never writes
+them:
+
+```yaml
+---
+title: The Long Way Round
+target: 90000
+due: 2027-03-01
+contents:
+  - book/one/opening
+  - book/one/the-ferry
+  - book/two
+---
+```
+
+**A page contributes its body, then each page in its `contents:` list, in order,
+recursively.** That is the whole rule. Holding a list is what makes a page a
+contents page; there is no flag and no depth parameter, and a link written in
+prose is never structure. Structure lives in frontmatter so that reflowing a
+paragraph cannot reorder a book, and so that "insert a chapter after the ferry"
+is an unambiguous edit an assistant can make without touching a word of prose.
+
+`GET /api/compile?root=book` assembles it. Headings shift down by depth, so an H1
+in a chapter becomes an H3 under a book with parts, and the whole document is
+rendered after assembly rather than page by page. `?format=` takes `markdown`
+(the default), `html` or `json`.
+
+It comes back with a **manifest**: every section in order with its slug, depth,
+word count and byte range in the output. A chapter nobody has written yet holds
+its position and is reported as `wanted`, which is the difference between a gap
+and an omission; a mistyped slug is `invalid` and costs its position rather than
+the page it was written on. Compile is a context loader before it is an export:
+handing an assistant chapter nine in the light of chapter two is the thing the
+manifest makes possible, because a finding over the whole book maps back to the
+page and offset that produced it.
+
+Every page has a `words` count, prose rather than bytes: code fences, inline
+code, frontmatter and raw HTML blocks are all excluded, so a page that is mostly
+a code sample is large and nearly wordless. `?sort=words` orders by it and the
+listing carries a total over the whole filtered set.
+
+### Where the words went
+
+Every write is observed: **words added and words removed**, never their
+difference. An assistant rewriting two thousand words into nineteen hundred is
+not "minus one hundred", and knowing who produced the minus one hundred does not
+recover either figure. `GET /api/word-stats` answers the series by day, by tool
+and by page, and the dashboard draws it beside the hours: added above the line,
+removed below it.
+
+Each write also records an **actor**: `web` for the dashboard, `file` for an edit
+your own editor made, `scan` for the startup reconciliation, and whatever a
+caller sends in `X-Rhizolog-Actor` for everything else. That is a claim rather
+than a proof, which is fine, because the question it answers is bookkeeping about
+your own tools rather than security. On a wiki with accounts the account comes
+from the session and no header can touch it.
+
+The log is files, at `<root>/.rhizolog/words/<YYYY-MM>.log`, one line a write.
+Deleting `index.db` and restarting reproduces the whole series and adds nothing
+to the log, which is the property that made it a file rather than a table.
+
+### Prose rules you wrote down
+
+`.rhizolog/prose.toml` holds rules; `prose/v1` runs them. It is voice defence
+rather than a grammar checker, because drafting alone with an assistant the
+failure is drift and you cannot see it happening: you read the prose as it
+arrives.
+
+```toml
+[[rule]]
+id       = "no-em-dash"
+kind     = "forbid"
+severity = "error"
+literals = ["\u2014"]
+```
+
+Five kinds: `forbid` for a literal, `phrase` for a sequence of words, `echo` for
+a word used twice close together, `uniformity` for a run of sentences that are
+all the same length, and `consistent` for one name spelled two ways. Code blocks
+and inline code are excluded from all of them, always, so a page documenting a
+syntax is never flagged for containing it.
+
+**Every finding quotes the text it fired on and carries the arithmetic behind
+it**, and there is no dismissal store on purpose: a finding is your own rule
+firing on your own text, so if it fires where it should not, the rule is wrong
+and the fix is one edit to one file. `GET /api/prose/rules` returns the rules
+with their defaults filled in and a digest that findings quote, so an agent
+handed a finding can reproduce it without ever reading the file. Nothing here
+calls a model or touches the network.
+
+The editor grows a findings strip under the textarea, and clicking a finding
+selects it in the text.
+
 ## Configuration
 
 All optional, all environment variables.
@@ -234,6 +344,7 @@ All optional, all environment variables.
 | none | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
 | none | `<root>/.rhizolog/ideas/` | Captures, threads and decisions. **Not** derived; back it up. |
 | none | `<root>/.rhizolog/words/` | The word log: what was written, when, and by which tool. **Not** derived; back it up. |
+| none | `<root>/.rhizolog/prose.toml` | Your prose rules. Authored configuration, and absent is the ordinary case. |
 | none | `<root>/.rhizolog/users/` | Accounts. **Not** derived, and secret; back it up, don't commit it. |
 | none | `<root>/.rhizolog/server.json` | Where the running server is. Gone when it stops. |
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Where to listen. |
@@ -536,9 +647,10 @@ The MVP is complete: pages, search, tags, the link graph, meta-stats, live
 pickup of outside edits, and a dashboard you can write in. Since then: pinned
 pages, time tracking end to end (timers, manual entries, notes, groups, search
 over the log, and the statistics section), the drawn graph, the desktop app
-described above, accounts with per-page visibility, and Idea Inbox end to end
+described above, accounts with per-page visibility, Idea Inbox end to end
 (capture, local candidates, lifecycle receipts, rediscovery and promotion into a
-page).
+page), and long-form writing end to end (compile with its manifest, the word log
+and its chart, and `prose/v1` with its rules over HTTP).
 
 What is still thin about serving one over a network is the operational half:
 there is no TLS of its own, no rate limiting on sign-in, and no audit log.

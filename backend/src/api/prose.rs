@@ -137,6 +137,15 @@ pub struct ProseReport {
     /// fired.
     #[schema(example = "sha256:9f2bcd00")]
     pub rules_digest: String,
+    /// How many rules were applied.
+    ///
+    /// **Zero and no findings is not a clean page**, it is a wiki that has never
+    /// written a rules file, and without this a caller cannot tell the two
+    /// apart. `GET /api/prose/rules` answers an empty ruleset rather than a
+    /// `404` for the same reason: no rules is a state a wiki is genuinely in,
+    /// and it is worth being able to say so.
+    #[schema(example = 5)]
+    pub rules: usize,
     /// What `span` indexes: `page` for one page's body, `document` for a
     /// compiled manuscript.
     #[schema(example = "page")]
@@ -201,13 +210,7 @@ pub async fn check_prose(
     let ruleset = prose::load(state.store.root()).await?;
     let analysis = prose::analyze(&request.content, &ruleset);
 
-    Ok(Json(report(
-        ruleset.digest().to_owned(),
-        IN_PAGE,
-        None,
-        analysis,
-        &[],
-    )))
+    Ok(Json(report(&ruleset, IN_PAGE, None, analysis, &[])))
 }
 
 /// Check a page, or everything it compiles to.
@@ -253,7 +256,7 @@ pub async fn read_prose(
         let analysis = prose::analyze(&compiled.markdown, &ruleset);
 
         return Ok(Json(report(
-            ruleset.digest().to_owned(),
+            &ruleset,
             IN_DOCUMENT,
             Some(slug.to_string()),
             analysis,
@@ -274,7 +277,7 @@ pub async fn read_prose(
     let analysis = prose::analyze(&page.body, &ruleset);
 
     Ok(Json(report(
-        ruleset.digest().to_owned(),
+        &ruleset,
         IN_PAGE,
         Some(slug.to_string()),
         analysis,
@@ -313,7 +316,7 @@ pub async fn read_prose_rules(State(state): State<AppState>) -> AppResult<Json<R
 // -------------------------------------------------------------------- helpers
 
 fn report(
-    rules_digest: String,
+    ruleset: &prose::Ruleset,
     offsets: &'static str,
     slug: Option<String>,
     analysis: Analysis,
@@ -327,7 +330,8 @@ fn report(
 
     ProseReport {
         analyzer: prose::ANALYZER,
-        rules_digest,
+        rules_digest: ruleset.digest().to_owned(),
+        rules: ruleset.rules().len(),
         offsets,
         slug,
         warnings: analysis.findings.len() - errors,

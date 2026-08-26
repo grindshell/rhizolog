@@ -26,7 +26,7 @@ vi.mock('../api/client', async (importOriginal) => {
   return { ...actual, ...api }
 })
 
-const { default: Editor } = await import('./Editor')
+const { default: Editor, parseDue, parseLines, parseTarget } = await import('./Editor')
 
 function page(overrides: Partial<PageView> = {}): PageView {
   return {
@@ -47,14 +47,23 @@ function page(overrides: Partial<PageView> = {}): PageView {
   }
 }
 
-/** The form's fields, in the order the editor lays them out. */
+/**
+ * The form's fields.
+ *
+ * The three text inputs are in layout order; the body is found by its
+ * placeholder rather than by being the first `textarea`. It is not: a page that
+ * assembles others grows a contents textarea above it, so the positional version
+ * would quietly type a manuscript's chapter list into the wrong box.
+ */
 function fields(container: HTMLElement) {
   const inputs = container.querySelectorAll('input')
   return {
     slug: inputs[0] as HTMLInputElement,
     title: inputs[1] as HTMLInputElement,
     tags: inputs[2] as HTMLInputElement,
-    body: container.querySelector('textarea') as HTMLTextAreaElement,
+    body: container.querySelector(
+      'textarea[placeholder^="# Heading"]',
+    ) as HTMLTextAreaElement,
   }
 }
 
@@ -200,6 +209,99 @@ describe('saving', () => {
     openEditor('/new')
 
     expect(api.getPage).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Saving is a `PUT`, so a field left out is a field cleared. An editor that did
+ * not send these back would unmake a book on the first save of any page in it,
+ * which is the same failure that once handed pages to the wrong owner.
+ */
+describe('the manuscript fields survive a save', () => {
+  const manuscript = () =>
+    page({
+      slug: 'book',
+      contents: ['book/one/opening', 'book/one/the-ferry'],
+      target: 90000,
+      due: '2027-03-01T00:00:00Z',
+    })
+
+  async function saveLoaded(container: HTMLElement, getByText: (text: string) => HTMLElement) {
+    await waitFor(() => expect(fields(container).slug.value).toBe('book'))
+    getByText('Save').click()
+    await waitFor(() => expect(api.replacePage).toHaveBeenCalled())
+    return api.replacePage.mock.calls[0]?.[1] as {
+      contents: string[] | null
+      target: number | null
+      due: string | null
+    }
+  }
+
+  it('sends the contents list back untouched', async () => {
+    api.getPage.mockResolvedValue(manuscript())
+    const { container, getByText } = openEditor('/edit/book')
+
+    const body = await saveLoaded(container, getByText)
+
+    expect(body.contents).toEqual(['book/one/opening', 'book/one/the-ferry'])
+    expect(body.target).toBe(90000)
+    expect(body.due).toBe('2027-03-01T00:00:00Z')
+  })
+
+  /**
+   * Absent and empty are different values, and the API keeps them apart:
+   * absent is an ordinary page, `[]` is a manuscript with nothing in it yet.
+   */
+  it('keeps an empty contents list empty rather than clearing it', async () => {
+    api.getPage.mockResolvedValue(page({ slug: 'book', contents: [] }))
+    const { container, getByText } = openEditor('/edit/book')
+
+    const body = await saveLoaded(container, getByText)
+
+    expect(body.contents).toEqual([])
+    expect(body.target).toBeNull()
+    expect(body.due).toBeNull()
+  })
+
+  it('sends null for a page that assembles nothing', async () => {
+    api.getPage.mockResolvedValue(page({ slug: 'book' }))
+    const { container, getByText } = openEditor('/edit/book')
+
+    const body = await saveLoaded(container, getByText)
+
+    expect(body.contents).toBeNull()
+  })
+})
+
+describe('parsing the manuscript fields', () => {
+  it('reads a target, and refuses one that is not a whole count', () => {
+    expect(parseTarget(' 90000 ')).toBe(90000)
+    expect(parseTarget('')).toBeNull()
+    // A negative target is not a small one, and reading `9.5` as nine would be
+    // inventing a number nobody typed.
+    expect(parseTarget('-1')).toBeNull()
+    expect(parseTarget('9.5')).toBeNull()
+    expect(parseTarget('lots')).toBeNull()
+  })
+
+  /** Midnight UTC, which is what a bare date in a file already means. */
+  it('sends a day as the instant the API wants', () => {
+    expect(parseDue('2027-03-01')).toBe('2027-03-01T00:00:00Z')
+    expect(parseDue('')).toBeNull()
+  })
+
+  /**
+   * Duplicates are kept, unlike a tag list. A contents list is positions, and an
+   * appendix under two parts is a real thing the manifest reports as a
+   * `duplicate` in its second position rather than an error.
+   */
+  it('splits a contents list by line and keeps repeats', () => {
+    expect(parseLines('book/one\n\n  book/two  \nbook/one\n')).toEqual([
+      'book/one',
+      'book/two',
+      'book/one',
+    ])
+    expect(parseLines('')).toEqual([])
   })
 })
 

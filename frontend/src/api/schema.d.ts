@@ -263,8 +263,15 @@ export interface paths {
          *        reaches it. The one thing it obeys is the walk, or `depth` would be a
          *        promise broken at the edges.
          *
-         *     Time is not in here at all. A page collects a time entry every time a timer
-         *     starts, so those edges would drown the links — see `/api/times?page=`.
+         *     **A manuscript's spine is in here**, marked `part` on the edge. A page has
+         *     exactly one parent, so a `contents:` entry is an edge the graph wants, and a
+         *     chapter that a book assembles is reachable from it by a walk. A contents
+         *     entry that is not a valid slug is not drawn: it is `invalid` in the manifest,
+         *     and drawing it would advertise `../etc/passwd` as a page worth writing.
+         *
+         *     Time is not in here at all, and that is the same decision landing the other
+         *     way. A page collects a time entry every time a timer starts, so those edges
+         *     would drown the links. See `/api/times?page=`.
          */
         get: operations["link_graph"];
         put?: never;
@@ -1589,11 +1596,24 @@ export interface components {
             /**
              * @description `wiki`, `internal`, or both when the same page is linked twice over.
              *     One line to draw either way.
+             *
+             *     **Empty** on an edge that is only a `contents:` entry, which is a real
+             *     state and not a missing value: nothing links those two pages, one of them
+             *     assembles the other.
              * @example [
              *       "wiki"
              *     ]
              */
             kinds: string[];
+            /**
+             * @description Whether the source's `contents:` list names the target: the spine of a
+             *     manuscript rather than a link in its prose.
+             *
+             *     Not a sixth `kind`, because a part is not a kind of link. That is the
+             *     distinction `page_parts` exists to keep, and a client is free to draw
+             *     both the same way; this one does not.
+             */
+            part: boolean;
             /** @example notes/rust/async */
             source: string;
             /** @example notes/rust/pinning */
@@ -1608,15 +1628,18 @@ export interface components {
             /** @description `false` for a wanted page. Not an error — see `/api/stats`. */
             exists: boolean;
             /**
-             * @description Distinct pages linking here, across the **whole wiki** rather than this
-             *     view. A hub therefore still reads as one inside a filter, and the gap
-             *     between this and the edges actually returned says the branch reaches
+             * @description Distinct pages that name this one, across the **whole wiki** rather than
+             *     this view. A hub therefore still reads as one inside a filter, and the
+             *     gap between this and the edges actually returned says the branch reaches
              *     outside what was asked for.
+             *
+             *     A `contents:` entry counts, because it is drawn. A book with sixty
+             *     chapters and no links would otherwise be the size of a leaf.
              * @example 3
              */
             inbound: number;
             /**
-             * @description Distinct pages this one links to, likewise wiki-wide.
+             * @description Distinct pages this one names, likewise wiki-wide.
              * @example 2
              */
             outbound: number;
@@ -2581,6 +2604,17 @@ export interface components {
              */
             offsets: string;
             /**
+             * @description How many rules were applied.
+             *
+             *     **Zero and no findings is not a clean page**, it is a wiki that has never
+             *     written a rules file, and without this a caller cannot tell the two
+             *     apart. `GET /api/prose/rules` answers an empty ruleset rather than a
+             *     `404` for the same reason: no rules is a state a wiki is genuinely in,
+             *     and it is worth being able to say so.
+             * @example 5
+             */
+            rules: number;
+            /**
              * @description The stamp of the ruleset these findings came from.
              *
              *     The same string `GET /api/prose/rules` reports. A finding and a ruleset
@@ -2686,6 +2720,11 @@ export interface components {
              *     and for the same reason.
              */
             times: components["schemas"]["SyncCountsView"];
+            /**
+             * @description The word log under `.rhizolog/words/`, which is read and replaced rather
+             *     than reconciled, and so is not counted like the rest.
+             */
+            words: components["schemas"]["WordSyncView"];
         };
         /** @description Markdown to render, with the context its links need. */
         RenderRequest: {
@@ -3406,6 +3445,36 @@ export interface components {
              */
             to: string;
             totals: components["schemas"]["WordTotalsView"];
+        };
+        /**
+         * @description What reading the word log found.
+         *
+         *     A different shape from the five trees above, because it is a different
+         *     operation. Those are compared file by file and their rows corrected; this one
+         *     is read whole and the table over it replaced, so `indexed`, `unchanged` and
+         *     `removed` would every one of them be zero for reasons that say nothing.
+         */
+        WordSyncView: {
+            /**
+             * @description Observations read back out of `.rhizolog/words/`, which is what the log
+             *     held **before** the page scan had a chance to append to it.
+             * @example 412
+             */
+            observations: number;
+            /**
+             * @description Whether the log could be read at all.
+             *
+             *     `false` is a wiki being served with an empty series rather than a wiki
+             *     refusing to start. It is also the one case worth acting on: the writing
+             *     history is the thing here with no other copy.
+             */
+            read: boolean;
+            /**
+             * @description Lines that would not parse. Each costs itself and nothing else, so a
+             *     truncated last line after a hard power-off does not lose a year.
+             * @example 0
+             */
+            skipped: number;
         };
         WordTotalsView: {
             /** Format: int64 */

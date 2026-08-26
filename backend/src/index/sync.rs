@@ -47,6 +47,29 @@ impl SyncCounts {
     }
 }
 
+/// What reading the word log found.
+///
+/// Deliberately **not** [`SyncCounts`], and the difference is the whole reason
+/// this type exists. The five trees below are compared file by file, so
+/// `indexed`, `unchanged` and `removed` each mean something about them. The word
+/// log is read and replaced wholesale on every run, so all three would be zero
+/// for reasons that say nothing, and a report shaped like the others would be
+/// inviting somebody to read those zeroes as news.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WordSync {
+    /// Observations folded into `page_words`.
+    pub observations: usize,
+    /// Lines that would not parse. Each costs itself and nothing else: a
+    /// truncated last line after a hard power-off should not lose a year.
+    pub skipped: usize,
+    /// Whether the log could be read at all.
+    ///
+    /// False is a wiki being served with an empty series rather than a wiki
+    /// refusing to start, which is the same stance a directory that cannot be
+    /// watched gets.
+    pub read: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SyncReport {
     pub pages: SyncCounts,
@@ -54,9 +77,17 @@ pub struct SyncReport {
     pub captures: SyncCounts,
     pub ideas: SyncCounts,
     pub events: SyncCounts,
+    /// The word log, which is read rather than reconciled. See [`WordSync`].
+    pub words: WordSync,
 }
 
 impl SyncReport {
+    /// Whether the wiki on disk turned out to differ from what was indexed.
+    ///
+    /// The word log is not consulted, and that is not an omission. It is
+    /// replaced on every run, so it would answer "yes" every time a wiki had any
+    /// history at all, and the question this is asked is whether anything
+    /// *changed*.
     pub fn changed_anything(&self) -> bool {
         self.every_tree().iter().any(SyncCounts::changed_anything)
     }
@@ -97,7 +128,7 @@ pub async fn sync(
     // a first sighting from an edit. On a database that has just been deleted
     // the answer is nothing at all until the log has been read back in, and
     // every page in the wiki would be reported as written today.
-    sync_words(words, index).await?;
+    let read = sync_words(words, index).await?;
 
     // Captures, then threads, then events, which is the order that folds each
     // idea the fewest times. Correctness does not depend on it: every write
@@ -109,6 +140,7 @@ pub async fn sync(
         captures: sync_captures(ideas, index).await?,
         ideas: sync_idea_threads(ideas, index).await?,
         events: sync_idea_events(ideas, index).await?,
+        words: read,
     };
 
     index.set_last_sync(Utc::now()).await?;
@@ -126,12 +158,18 @@ pub async fn sync(
 /// Not an error if the log is unreadable: a wiki whose word history cannot be
 /// loaded should still be served, with the series empty, exactly as a wiki that
 /// cannot be watched is still served. It is loud about it.
-async fn sync_words(words: &WordLog, index: &Index) -> Result<(), IndexError> {
+///
+/// What comes back is what the log **held when it was read**, which is before
+/// the page scan below has had any chance to append to it. That is the right
+/// figure for a report about what reconciling found: three pages written while
+/// the server was down are three lines the scan writes, not three lines it
+/// discovered.
+async fn sync_words(words: &WordLog, index: &Index) -> Result<WordSync, IndexError> {
     let (observations, skipped) = match words.read().await {
         Ok(read) => read,
         Err(error) => {
             tracing::error!(%error, "could not read the word log; the series will be empty");
-            return Ok(());
+            return Ok(WordSync::default());
         }
     };
 
@@ -142,7 +180,11 @@ async fn sync_words(words: &WordLog, index: &Index) -> Result<(), IndexError> {
     index.rebuild_words(&observations).await?;
     tracing::debug!(observations = observations.len(), "loaded the word log");
 
-    Ok(())
+    Ok(WordSync {
+        observations: observations.len(),
+        skipped,
+        read: true,
+    })
 }
 
 async fn sync_pages(
@@ -1295,8 +1337,60 @@ mod tests {
 
         let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
 
-        assert_eq!(report, SyncReport::default());
+        assert_eq!(
+            report,
+            SyncReport {
+                // An empty log that was read is not the same as a log that could
+                // not be read, which is the one thing this field is for.
+                words: WordSync {
+                    observations: 0,
+                    skipped: 0,
+                    read: true,
+                },
+                ..SyncReport::default()
+            }
+        );
+        assert!(!report.changed_anything());
         assert_eq!(index.count(&EVERYONE).await.unwrap(), 0);
         assert_eq!(index.count_times().await.unwrap(), 0);
+    }
+
+    /// The word log is read and replaced rather than reconciled, so the report
+    /// says what it held rather than pretending to five fields that would be
+    /// zero for reasons that mean nothing.
+    #[tokio::test]
+    async fn the_report_says_what_the_word_log_held_when_it_was_read() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+        write(&store, "a", "One two three.\n").await;
+
+        // The first scan reads an empty log and then writes a baseline into it.
+        let first = sync(&store, &times, &ideas, &words, &index).await.unwrap();
+        assert_eq!(first.words.observations, 0);
+        assert!(first.words.read);
+
+        // The second reads the line the first one wrote.
+        let second = sync(&store, &times, &ideas, &words, &index).await.unwrap();
+        assert_eq!(second.words.observations, 1);
+        assert_eq!(second.words.skipped, 0);
+
+        // A rebuild is not a change to the wiki, and must not be reported as one.
+        assert!(!second.changed_anything());
+    }
+
+    #[tokio::test]
+    async fn a_line_that_will_not_parse_is_counted_in_the_report() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+        tokio::fs::write(
+            words.root().join("2026-08.log"),
+            "not a line at all\nnor this one\n",
+        )
+        .await
+        .expect("write a broken log");
+
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        assert_eq!(report.words.skipped, 2);
+        assert_eq!(report.words.observations, 0);
+        assert!(report.words.read);
     }
 }

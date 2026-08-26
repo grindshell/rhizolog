@@ -53,6 +53,21 @@ export type StatsResponse = Schemas['StatsResponse']
 export type RenderRequest = Schemas['RenderRequest']
 export type RenderedHtml = Schemas['RenderedHtml']
 export type ReindexResponse = Schemas['ReindexResponse']
+export type SyncCountsView = Schemas['SyncCountsView']
+export type WordSyncView = Schemas['WordSyncView']
+export type CompiledView = Schemas['CompiledView']
+export type SectionView = Schemas['SectionView']
+export type ProseRequest = Schemas['ProseRequest']
+export type ProseReport = Schemas['ProseReport']
+export type FindingView = Schemas['FindingView']
+export type SpanView = Schemas['SpanView']
+export type RulesView = Schemas['RulesView']
+export type NormalizedRule = Schemas['NormalizedRule']
+export type WordStatsResponse = Schemas['WordStatsResponse']
+export type DayView = Schemas['DayView']
+export type ActorWordsView = Schemas['ActorWordsView']
+export type PageWordsView = Schemas['PageWordsView']
+export type WordTotalsView = Schemas['WordTotalsView']
 export type Health = Schemas['Health']
 export type ErrorResponse = Schemas['ErrorResponse']
 export type ErrorDetail = Schemas['ErrorDetail']
@@ -108,6 +123,9 @@ export type TimeStatsQuery = NonNullable<operations['time_statistics']['paramete
 export type ListCapturesQuery = NonNullable<operations['list_captures']['parameters']['query']>
 export type ListIdeasQuery = NonNullable<operations['list_ideas']['parameters']['query']>
 export type ReceiptQuery = NonNullable<operations['read_idea_receipt']['parameters']['query']>
+export type CompileQuery = operations['compile_pages']['parameters']['query']
+export type ProseQuery = operations['read_prose']['parameters']['query']
+export type WordStatsQuery = NonNullable<operations['word_statistics']['parameters']['query']>
 
 /**
  * Every failure the API reports, whatever the status, arrives as
@@ -418,6 +436,87 @@ export function renderMarkdown(
   signal?: AbortSignal,
 ): Promise<RenderedHtml> {
   return request<RenderedHtml>('/render', { method: 'POST', body, signal })
+}
+
+/* -------------------------------------------------------------- compile -- */
+
+/**
+ * `GET /api/compile`: a page and everything its `contents:` list assembles,
+ * as one document plus the manifest saying where each part landed.
+ *
+ * A query parameter rather than `/api/pages/{slug}/compiled`, for the reason
+ * that already produced `/api/move`: a slug is a catch-all and `matchit` wants
+ * a catch-all last.
+ */
+export function compilePages(
+  query: CompileQuery,
+  signal?: AbortSignal,
+): Promise<CompiledView> {
+  return request<CompiledView>('/compile', { query, signal })
+}
+
+/** Where a manuscript is read as one document rather than as a page. */
+export function assembledHref(slug: string): string {
+  return `${pageHref(slug)}?assembled=1`
+}
+
+/* ---------------------------------------------------------------- prose -- */
+
+/**
+ * `POST /api/prose`: check markdown that has not been saved.
+ *
+ * The editor's path, and it matches `POST /api/render`: nothing is read or
+ * written except the rules file, so it is safe on a debounce. A wiki with no
+ * `.rhizolog/prose.toml` is not an error here, it is the ordinary case, and the
+ * answer is no findings.
+ */
+export function checkProse(
+  body: ProseRequest,
+  signal?: AbortSignal,
+): Promise<ProseReport> {
+  return request<ProseReport>('/prose', { method: 'POST', body, signal })
+}
+
+/**
+ * `GET /api/prose`: findings over a stored page, or over everything it
+ * assembles when `compiled` is set.
+ *
+ * `compiled` moves what the offsets mean, which the response says: `page` for
+ * one body, `document` for a manuscript. It is not a convenience. Two of the
+ * five rules are cross-page questions and see nothing without it.
+ */
+export function pageProse(
+  query: ProseQuery,
+  signal?: AbortSignal,
+): Promise<ProseReport> {
+  return request<ProseReport>('/prose', { query, signal })
+}
+
+/** `GET /api/prose/rules`: the normalized ruleset and the digest findings quote. */
+export function proseRules(signal?: AbortSignal): Promise<RulesView> {
+  return request<RulesView>('/prose/rules', { signal })
+}
+
+/* ---------------------------------------------------------------- words -- */
+
+/**
+ * `GET /api/word-stats`: where the words went, by day, by tool and by page.
+ *
+ * The offset defaults to this browser's, exactly as `timeStats` does: which
+ * local day an observation falls in is a question about a wall clock and the
+ * server has no way to guess.
+ *
+ * Refused for a caller with no account even under `RHIZOLOG_ANONYMOUS_READ`, so
+ * this is only ever called from behind the session gate.
+ */
+export function wordStats(
+  query: WordStatsQuery = {},
+  signal?: AbortSignal,
+): Promise<WordStatsResponse> {
+  return request<WordStatsResponse>('/word-stats', {
+    query: { offset: utcOffsetMinutes(), ...query },
+    signal,
+  })
 }
 
 /* --------------------------------------------------------------- search -- */

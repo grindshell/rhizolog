@@ -36,8 +36,8 @@ const graph = (over: Partial<GraphResponse> = {}): GraphResponse => ({
     },
   ],
   edges: [
-    { source: 'index', target: 'notes/rust', kinds: ['wiki'] },
-    { source: 'notes/rust', target: 'notes/rust/streams', kinds: ['wiki'] },
+    { source: 'index', target: 'notes/rust', kinds: ['wiki'], part: false },
+    { source: 'notes/rust', target: 'notes/rust/streams', kinds: ['wiki'], part: false },
   ],
   matched: 2,
   truncated: false,
@@ -117,6 +117,39 @@ describe('drawing the graph', () => {
 
     expect(container.querySelectorAll('circle')).toHaveLength(0)
     expect(container.querySelector('svg')).toBeTruthy()
+  })
+
+  /**
+   * A `contents:` entry is a different claim from a link: one page mentioning
+   * another, against one page being inside another. Drawing them alike would
+   * hide the one relationship in a wiki that has an order to it.
+   */
+  it('draws a part edge unlike a link, and keys it', () => {
+    const { container, queryByText } = draw({
+      edges: [
+        { source: 'index', target: 'notes/rust', kinds: [], part: true },
+        { source: 'notes/rust', target: 'notes/rust/streams', kinds: ['wiki'], part: false },
+      ],
+    })
+
+    const paths = [...container.querySelectorAll('path[marker-end]')]
+    const part = paths.find((path) =>
+      (path.getAttribute('class') ?? '').includes('stroke-secondary'),
+    )
+
+    expect(part).toBeTruthy()
+    expect(part?.getAttribute('marker-end')).toBe('url(#graph-arrow-part)')
+    // Heavier at rest than a link, because there are far fewer of them and they
+    // are what gives a branch of the wiki an order.
+    expect(Number(part?.getAttribute('stroke-width'))).toBeGreaterThan(1.2)
+    expect(queryByText('part of')).toBeTruthy()
+  })
+
+  /** A wiki with no manuscripts should not carry a key to a thing it has none of. */
+  it('leaves the part key out when nothing is assembled', () => {
+    const { queryByText } = draw()
+
+    expect(queryByText('part of')).toBeNull()
   })
 })
 

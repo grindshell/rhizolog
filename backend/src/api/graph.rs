@@ -241,13 +241,16 @@ pub struct GraphNodeView {
     pub title: String,
     /// `false` for a wanted page. Not an error — see `/api/stats`.
     pub exists: bool,
-    /// Distinct pages linking here, across the **whole wiki** rather than this
-    /// view. A hub therefore still reads as one inside a filter, and the gap
-    /// between this and the edges actually returned says the branch reaches
+    /// Distinct pages that name this one, across the **whole wiki** rather than
+    /// this view. A hub therefore still reads as one inside a filter, and the
+    /// gap between this and the edges actually returned says the branch reaches
     /// outside what was asked for.
+    ///
+    /// A `contents:` entry counts, because it is drawn. A book with sixty
+    /// chapters and no links would otherwise be the size of a leaf.
     #[schema(example = 3)]
     pub inbound: usize,
-    /// Distinct pages this one links to, likewise wiki-wide.
+    /// Distinct pages this one names, likewise wiki-wide.
     #[schema(example = 2)]
     pub outbound: usize,
     /// Empty for a wanted page, which has no frontmatter to carry any.
@@ -266,8 +269,19 @@ pub struct GraphEdgeView {
     pub target: String,
     /// `wiki`, `internal`, or both when the same page is linked twice over.
     /// One line to draw either way.
+    ///
+    /// **Empty** on an edge that is only a `contents:` entry, which is a real
+    /// state and not a missing value: nothing links those two pages, one of them
+    /// assembles the other.
     #[schema(example = json!(["wiki"]))]
     pub kinds: Vec<String>,
+    /// Whether the source's `contents:` list names the target: the spine of a
+    /// manuscript rather than a link in its prose.
+    ///
+    /// Not a sixth `kind`, because a part is not a kind of link. That is the
+    /// distinction `page_parts` exists to keep, and a client is free to draw
+    /// both the same way; this one does not.
+    pub part: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -309,8 +323,15 @@ pub struct GraphResponse {
 ///    reaches it. The one thing it obeys is the walk, or `depth` would be a
 ///    promise broken at the edges.
 ///
-/// Time is not in here at all. A page collects a time entry every time a timer
-/// starts, so those edges would drown the links — see `/api/times?page=`.
+/// **A manuscript's spine is in here**, marked `part` on the edge. A page has
+/// exactly one parent, so a `contents:` entry is an edge the graph wants, and a
+/// chapter that a book assembles is reachable from it by a walk. A contents
+/// entry that is not a valid slug is not drawn: it is `invalid` in the manifest,
+/// and drawing it would advertise `../etc/passwd` as a page worth writing.
+///
+/// Time is not in here at all, and that is the same decision landing the other
+/// way. A page collects a time entry every time a timer starts, so those edges
+/// would drown the links. See `/api/times?page=`.
 #[utoipa::path(
     get,
     path = "/api/graph",
@@ -372,6 +393,7 @@ pub async fn link_graph(
                     .into_iter()
                     .map(|kind| kind.as_str().to_owned())
                     .collect(),
+                part: edge.part,
             })
             .collect(),
         matched: graph.matched,

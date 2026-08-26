@@ -1,10 +1,11 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createResource, createSignal } from 'solid-js'
 import { A } from '@solidjs/router'
-import { health, pageHref, reindex, stats, tagHref, timeStats } from '../api/client'
+import { health, pageHref, reindex, stats, tagHref, timeStats, wordStats } from '../api/client'
 import type { StatsResponse } from '../api/client'
 import { Async, ErrorNotice } from '../components/Async'
 import TimeStats from '../components/TimeStats'
+import WordStats from '../components/WordStats'
 import { formatDate } from './PageDetail'
 
 /**
@@ -22,6 +23,10 @@ export default function Dashboard() {
   // where the hours went are two questions, the second one needs the reader's
   // timezone to mean anything, and only one of them changes minute to minute.
   const [time, { refetch: refetchTime }] = createResource(() => timeStats())
+  // A third, for the same reason the second is separate: where the words went
+  // is a question about a wall clock and about the word log, and neither the
+  // wiki's shape nor the hours can answer it.
+  const [words, { refetch: refetchWords }] = createResource(() => wordStats())
   const [rebuilding, setRebuilding] = createSignal(false)
   const [failure, setFailure] = createSignal<unknown>()
 
@@ -29,9 +34,20 @@ export default function Dashboard() {
     setRebuilding(true)
     setFailure(undefined)
     try {
-      await reindex()
+      const report = await reindex()
+      // The word log is the one tree here with no other copy, so a rebuild that
+      // could not read it is worth interrupting for rather than leaving as an
+      // empty chart somebody might read as a quiet quarter.
+      if (!report.words.read) {
+        setFailure(
+          new Error(
+            'The index was rebuilt, but .rhizolog/words/ could not be read, so the word series is empty. Nothing was lost: the log is on disk and the server log says why.',
+          ),
+        )
+      }
       await refetch()
       await refetchTime()
+      await refetchWords()
     } catch (error) {
       setFailure(error)
     } finally {
@@ -117,6 +133,8 @@ export default function Dashboard() {
       <Async resource={graph}>{(data) => <Graph data={data} />}</Async>
 
       <Async resource={time}>{(data) => <TimeStats stats={data} />}</Async>
+
+      <Async resource={words}>{(data) => <WordStats stats={data} />}</Async>
     </div>
   )
 }

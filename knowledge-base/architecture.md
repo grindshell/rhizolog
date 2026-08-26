@@ -45,6 +45,7 @@ harmless and needs no suppression logic.
       events/2026-08/
     words/
       2026-08.log                         # NOT derived; the only copy
+    prose.toml                            # NOT derived; authored configuration
     users/
       tim.md                              # NOT derived, and secret
 ```
@@ -66,8 +67,14 @@ Four kinds of thing live there, and they want different treatment:
 | `times/` | **authored** — the only copy; back it up, commit it |
 | `ideas/` | **authored** as well: captures, threads and decisions, and the only copy of them |
 | `words/` | **authored** too: what was written, when, and by which tool. See [Long-form writing](long-form.md) |
+| `prose.toml` | **authored configuration**, and absent on most wikis, which is the ordinary case rather than a fault |
 | `users/` | **authored, and secret** — the only copy; back it up, do *not* commit it |
 | `server.json` | **volatile** — where a running server is; meaningless once it stops |
+
+`prose.toml` is the one thing here that is configuration rather than a record. It
+sits with `times/` and `ideas/` rather than with `users/` because it is worth
+committing and holds no secrets, and it is read on every request rather than
+cached, so tuning a rule is a matter of saving the file and asking again.
 
 `words/` is the one that departs from the shape the others use: a file per month
 holding a line per observation, rather than a file per record. The reason is
@@ -301,6 +308,18 @@ itself.
 branches someone gestured at but has not written yet — and they surface in
 `/api/stats`. Combined with orphans (pages nothing links to), that is the main
 meta-stat the dashboard exists to show.
+
+**A `contents:` entry is not a link, and it is still an edge.** It lives in
+`page_parts` rather than in `links`, because that table is keyed
+`(src_slug, target, kind)` and cannot hold the same child twice under one parent,
+which is exactly the case an appendix listed under two parts is. But a page has
+one parent where it has hundreds of time entries, so the graph unions the spine
+in where it keeps time out: a chapter named by its book is not an orphan, the
+drawing marks that line `part` rather than giving it a sixth `kind`, and a walk
+crosses it, so a chapter's neighbourhood holds the book it belongs to. A
+`contents:` entry that is not a valid slug is reported in the manifest and never
+drawn: it is a mistake somebody made, not a page worth writing. See
+[Long-form writing](long-form.md).
 
 This is also why page moves do not rewrite backlinks in the MVP: a move turns
 inbound links into wanted pages, which shows up in the stats rather than

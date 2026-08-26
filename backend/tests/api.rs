@@ -1663,6 +1663,83 @@ async fn removing_a_chapter_from_the_spine_makes_it_an_orphan_again() {
     assert_eq!(app.get("/api/stats").await.body["orphan_count"], 2);
 }
 
+/// The half of the L1 plan that waited for a panel to exist. Orphans needed the
+/// union straight away, because a chapter reported as unreferenced is a number
+/// being wrong; drawing needed somebody to decide what a part edge looks like.
+#[tokio::test]
+async fn the_graph_draws_the_spine_and_says_which_lines_are_parts() {
+    let app = App::new().await;
+    seed_book(&app).await;
+
+    let graph = app.get("/api/graph").await;
+    let edges = graph.body["edges"].as_array().expect("edges");
+
+    let spine: Vec<(&str, &str)> = edges
+        .iter()
+        .filter(|edge| edge["part"] == true)
+        .map(|edge| {
+            (
+                edge["source"].as_str().unwrap(),
+                edge["target"].as_str().unwrap(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        spine,
+        [
+            ("book", "book/one"),
+            ("book/one", "book/one/opening"),
+            ("book/one", "book/one/the-ferry"),
+        ]
+    );
+
+    // Not a sixth kind of link. A part is not a kind of link, which is the whole
+    // reason `page_parts` is its own table.
+    for edge in edges {
+        assert_eq!(edge["kinds"], json!([]), "nothing in this book links");
+    }
+
+    // ...and a chapter's neighbourhood holds the book it belongs to, or the one
+    // page it is certain to be connected to would be the one a walk cannot find.
+    let walk = app.get("/api/graph?root=book/one/opening&depth=2").await;
+    let reached: Vec<&str> = walk.body["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["slug"].as_str().unwrap())
+        .collect();
+    assert!(reached.contains(&"book"), "got {reached:?}");
+    assert!(reached.contains(&"book/one/the-ferry"), "got {reached:?}");
+}
+
+/// `page_parts.target` is the entry as it was written, so a mistyped one is in
+/// the table. Drawing it would advertise a path as a page worth writing.
+#[tokio::test]
+async fn a_contents_entry_that_is_not_a_slug_is_not_drawn() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "# Book\n", "contents": ["../etc/passwd", "a"] }),
+    )
+    .await;
+    app.seed("a", json!({ "content": "# A\n" })).await;
+
+    let graph = app.get("/api/graph").await;
+    let slugs: Vec<&str> = graph.body["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["slug"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(slugs, ["a", "book"]);
+    // It is still reported in position by the manifest, which is where a
+    // mistyped chapter belongs.
+    let sections = app.get("/api/compile?root=book").await;
+    assert_eq!(sections.body["sections"][1]["status"], "invalid");
+}
+
 // -------------------------------------------------------------- word log
 
 /// The fields of one logged line, by name rather than by index.
@@ -1965,6 +2042,43 @@ async fn a_reindex_of_an_untouched_wiki_adds_nothing_to_the_series() {
     assert_eq!(app.log().len(), 1, "and no new line was written");
 }
 
+/// The word log is read and replaced rather than reconciled, so it is reported
+/// differently. Three of the five fields the other trees carry would be zero
+/// here for reasons that mean nothing, and zeroes that mean nothing read as news.
+#[tokio::test]
+async fn a_reindex_reports_what_the_word_log_held() {
+    let app = App::new().await;
+    app.seed("a", json!({ "content": "One two three.\n" }))
+        .await;
+
+    let res = app.post("/api/reindex", json!({})).await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["words"]["observations"], 1);
+    assert_eq!(res.body["words"]["skipped"], 0);
+    assert_eq!(res.body["words"]["read"], true);
+    // And nothing that would be a lie about an operation that does not compare
+    // files.
+    assert!(res.body["words"]["scanned"].is_null());
+    assert!(res.body["words"]["unchanged"].is_null());
+}
+
+/// A truncated last line after a hard power-off costs that line and nothing
+/// else, and the report says how many it cost.
+#[tokio::test]
+async fn a_reindex_counts_log_lines_it_could_not_read() {
+    let app = App::new().await;
+    let month = app.directory.path().join(".rhizolog/words/2026-08.log");
+    std::fs::create_dir_all(month.parent().expect("a parent")).expect("the words directory");
+    std::fs::write(&month, "half a line\nnor this one\n").expect("write a broken log");
+
+    let res = app.post("/api/reindex", json!({})).await;
+
+    assert_eq!(res.body["words"]["skipped"], 2);
+    assert_eq!(res.body["words"]["observations"], 0);
+    assert_eq!(res.body["words"]["read"], true);
+}
+
 // ----------------------------------------------------------------- prose
 
 /// This repository's own rule, written the way the file has to be written: with
@@ -2065,6 +2179,28 @@ async fn a_wiki_with_no_rules_answers_an_empty_ruleset_rather_than_a_404() {
     let read = app.get("/api/prose?slug=a").await;
     assert_eq!(read.status, StatusCode::OK);
     assert_eq!(read.body["findings"], json!([]));
+
+    // And every report says how many rules ran, so a caller can tell the two
+    // silences apart. No findings from no rules is not a clean page.
+    assert_eq!(posted.body["rules"], 0);
+    assert_eq!(read.body["rules"], 0);
+}
+
+/// The other half of the pair above: rules ran and found nothing.
+#[tokio::test]
+async fn a_report_says_how_many_rules_it_applied() {
+    let app = App::new().await;
+    app.rules(NO_EM_DASH);
+
+    let clean = app
+        .post(
+            "/api/prose",
+            json!({ "content": "A clause, and another.\n" }),
+        )
+        .await;
+
+    assert_eq!(clean.body["rules"], 1);
+    assert_eq!(clean.body["findings"], json!([]));
 }
 
 /// A file that will not parse is a mistake somebody just made, which is a

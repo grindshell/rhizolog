@@ -11,8 +11,8 @@ use utoipa::{IntoParams, ToSchema};
 use crate::api::AppState;
 use crate::auth::Viewer;
 use crate::error::AppResult;
-use crate::index::SyncCounts;
 use crate::index::sync::rebuild;
+use crate::index::{SyncCounts, WordSync};
 use crate::slug::Slug;
 
 const DEFAULT_LIMIT: usize = 20;
@@ -152,6 +152,40 @@ impl From<SyncCounts> for SyncCountsView {
     }
 }
 
+/// What reading the word log found.
+///
+/// A different shape from the five trees above, because it is a different
+/// operation. Those are compared file by file and their rows corrected; this one
+/// is read whole and the table over it replaced, so `indexed`, `unchanged` and
+/// `removed` would every one of them be zero for reasons that say nothing.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WordSyncView {
+    /// Observations read back out of `.rhizolog/words/`, which is what the log
+    /// held **before** the page scan had a chance to append to it.
+    #[schema(example = 412)]
+    pub observations: usize,
+    /// Lines that would not parse. Each costs itself and nothing else, so a
+    /// truncated last line after a hard power-off does not lose a year.
+    #[schema(example = 0)]
+    pub skipped: usize,
+    /// Whether the log could be read at all.
+    ///
+    /// `false` is a wiki being served with an empty series rather than a wiki
+    /// refusing to start. It is also the one case worth acting on: the writing
+    /// history is the thing here with no other copy.
+    pub read: bool,
+}
+
+impl From<WordSync> for WordSyncView {
+    fn from(words: WordSync) -> Self {
+        Self {
+            observations: words.observations,
+            skipped: words.skipped,
+            read: words.read,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReindexResponse {
     /// The markdown pages.
@@ -167,6 +201,9 @@ pub struct ReindexResponse {
     /// threads because they are read by different code and go wrong in
     /// different ways.
     pub events: SyncCountsView,
+    /// The word log under `.rhizolog/words/`, which is read and replaced rather
+    /// than reconciled, and so is not counted like the rest.
+    pub words: WordSyncView,
 }
 
 /// Rebuild the index from the files on disk.
@@ -199,6 +236,7 @@ pub async fn reindex(State(state): State<AppState>) -> AppResult<Json<ReindexRes
         captures = report.captures.indexed,
         ideas = report.ideas.indexed,
         events = report.events.indexed,
+        observations = report.words.observations,
         removed = report.removed(),
         failed = report.failed(),
         "index rebuilt on request"
@@ -210,5 +248,6 @@ pub async fn reindex(State(state): State<AppState>) -> AppResult<Json<ReindexRes
         captures: report.captures.into(),
         ideas: report.ideas.into(),
         events: report.events.into(),
+        words: report.words.into(),
     }))
 }

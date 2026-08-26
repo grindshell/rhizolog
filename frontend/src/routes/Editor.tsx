@@ -15,6 +15,7 @@ import {
 } from '../api/client'
 import { sessionState } from '../api/session'
 import { ErrorNotice } from '../components/Async'
+import Findings, { byteToIndex } from '../components/Findings'
 import Markdown from '../components/Markdown'
 
 /**
@@ -130,6 +131,25 @@ export default function Editor() {
    * somebody the owner shared it with.
    */
   const [owner, setOwner] = createSignal<string | undefined>()
+  /**
+   * The three manuscript fields, and they are here whether or not the page is
+   * one.
+   *
+   * Saving is a `PUT`, so a field left out is a field cleared, and an editor
+   * that dropped these would unmake a book on the first save of any page in it.
+   * That is the same failure that once handed pages to the wrong owner, which is
+   * why `owner` above is carried the same way.
+   *
+   * `contents` needs two pieces of state rather than one, because absent and
+   * empty are different values and the API keeps them apart: **absent** is an
+   * ordinary page, **`[]`** is a manuscript with nothing in it yet, which is
+   * what a book looks like on the day it is started. A textarea alone can only
+   * say one of those.
+   */
+  const [target, setTarget] = createSignal('')
+  const [due, setDue] = createSignal('')
+  const [assembles, setAssembles] = createSignal(false)
+  const [contents, setContents] = createSignal('')
   /** What the server called the page when it was loaded, for the placeholder. */
   const [inheritedTitle, setInheritedTitle] = createSignal('')
   const [dirty, setDirty] = createSignal(false)
@@ -153,6 +173,13 @@ export default function Editor() {
     setVisibility(page.visibility)
     setReaders((page.readers ?? []).join(', '))
     setOwner(page.owner ?? undefined)
+    setTarget(page.target === undefined || page.target === null ? '' : String(page.target))
+    // The first ten characters of an RFC 3339 timestamp in UTC, which is the
+    // day. A due date is a day rather than an instant, and reading it in the
+    // browser's zone would show the day before to anybody west of Greenwich.
+    setDue(page.due ? page.due.slice(0, 10) : '')
+    setAssembles(page.contents !== undefined && page.contents !== null)
+    setContents((page.contents ?? []).join('\n'))
     setDirty(false)
     setFailure(undefined)
   })
@@ -220,6 +247,29 @@ export default function Editor() {
   // there is one write and one render, with the right content.
   const [preview] = createResource(previewOf, render)
 
+  /* ------------------------------------------------------------ findings -- */
+
+  let body: HTMLTextAreaElement | undefined
+
+  /**
+   * Put the cursor on what a rule fired on.
+   *
+   * This is the whole reason spans are byte offsets into the page **source**
+   * rather than positions in rendered HTML: a finding you cannot find is not a
+   * finding. Bytes are not JavaScript string indices, so they go through
+   * `byteToIndex` on the way; handing them over raw would select the wrong words
+   * on any page with an accent in it, and further out the longer the page ran.
+   */
+  const reveal = (finding: { span: { start: number; end: number } }) => {
+    if (!body) return
+    const text = content()
+    body.focus()
+    body.setSelectionRange(
+      byteToIndex(text, finding.span.start),
+      byteToIndex(text, finding.span.end),
+    )
+  }
+
   /* ------------------------------------------------------------- actions -- */
 
   const save = async () => {
@@ -240,11 +290,18 @@ export default function Editor() {
         // you would take it away from them.
         owner: owner(),
         readers: parseList(readers()),
+        // The same rule, for the same reason. `null` rather than omitted so it
+        // is a request rather than a silence, which is also what makes clearing
+        // one of these possible at all.
+        target: parseTarget(target()),
+        due: parseDue(due()),
+        contents: assembles() ? parseLines(contents()) : null,
       }
 
-      const target = editing()
-      const page = target
-        ? await replacePage(target, body)
+      // `existing` rather than `target`, which now names a word count.
+      const existing = editing()
+      const page = existing
+        ? await replacePage(existing, body)
         : await createPage({ slug: slug().trim(), ...body })
 
       // Cleared before navigating, or the guard below would ask to discard the
@@ -332,6 +389,9 @@ export default function Editor() {
   /* ------------------------------------------------------------------ ui -- */
 
   const canSave = () => !busy() && (editing() !== undefined || slug().trim() !== '')
+
+  /** Whether this page carries any of the three, and so is worth opening. */
+  const isManuscript = () => assembles() || target().trim() !== '' || due() !== ''
 
   return (
     <div class="flex flex-col gap-4">
@@ -530,6 +590,105 @@ export default function Editor() {
               </Show>
             </Show>
 
+            {/*
+              Collapsed by default, because most pages are not manuscripts and a
+              form that asks every page for a word target is a form that reads as
+              a project tracker. The three fields are round-tripped whether or
+              not this is ever opened; see the signals above.
+            */}
+            <details class="collapse-arrow border-base-300 collapse border" open={isManuscript()}>
+              <summary class="collapse-title px-4 py-2 text-sm font-medium">
+                Manuscript
+                <Show when={isManuscript()}>
+                  <span class="badge badge-ghost badge-sm ml-2">
+                    {assembles() ? `${parseLines(contents()).length} parts` : 'target'}
+                  </span>
+                </Show>
+              </summary>
+              <div class="collapse-content flex flex-col gap-3">
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <label class="form-control">
+                    <div class="label">
+                      <span class="label-text">Target</span>
+                      <span class="label-text-alt opacity-60">words</span>
+                    </div>
+                    <input
+                      class="input input-bordered w-full"
+                      type="number"
+                      min="0"
+                      value={target()}
+                      placeholder="90000"
+                      onInput={(event) => {
+                        setTarget(event.currentTarget.value)
+                        setDirty(true)
+                      }}
+                    />
+                    <div class="label">
+                      <span class="label-text-alt opacity-60">
+                        Measured against the compiled total, so on a page that
+                        assembles others it is the whole book.
+                      </span>
+                    </div>
+                  </label>
+
+                  <label class="form-control">
+                    <div class="label">
+                      <span class="label-text">Due</span>
+                      <span class="label-text-alt opacity-60">a day, not a time</span>
+                    </div>
+                    <input
+                      class="input input-bordered w-full"
+                      type="date"
+                      value={due()}
+                      onInput={(event) => {
+                        setDue(event.currentTarget.value)
+                        setDirty(true)
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <label class="label cursor-pointer justify-start gap-3">
+                  <input
+                    type="checkbox"
+                    class="checkbox checkbox-sm"
+                    checked={assembles()}
+                    onChange={(event) => {
+                      setAssembles(event.currentTarget.checked)
+                      setDirty(true)
+                    }}
+                  />
+                  <span class="label-text">This page assembles others</span>
+                </label>
+
+                <Show when={assembles()}>
+                  <label class="form-control">
+                    <div class="label">
+                      <span class="label-text">Contents</span>
+                      <span class="label-text-alt opacity-60">one slug per line, in order</span>
+                    </div>
+                    <textarea
+                      class="textarea textarea-bordered h-32 w-full resize-y font-mono text-sm"
+                      value={contents()}
+                      placeholder="book/one/opening&#10;book/one/the-ferry&#10;book/two"
+                      onInput={(event) => {
+                        setContents(event.currentTarget.value)
+                        setDirty(true)
+                      }}
+                    />
+                    <div class="label">
+                      <span class="label-text-alt opacity-60">
+                        Slugs from the wiki root, never relative. A chapter
+                        nobody has written yet is a gap in the manuscript rather
+                        than an error, and it fills itself in when the page
+                        appears.
+                      </span>
+                    </div>
+                  </label>
+                </Show>
+              </div>
+            </details>
+
             <label class="form-control">
               <div class="label">
                 <span class="label-text">Body</span>
@@ -538,6 +697,7 @@ export default function Editor() {
                 </span>
               </div>
               <textarea
+                ref={body}
                 class="textarea textarea-bordered editor-pane w-full resize-y font-mono text-sm"
                 classList={{ 'editor-pane-solo': layout() === 'editor' }}
                 value={content()}
@@ -548,6 +708,13 @@ export default function Editor() {
                 }}
               />
             </label>
+
+            {/*
+              Under the textarea rather than beside the preview, because it is
+              about the text you are typing and not about what it will look
+              like. It runs your own rules; there is nothing here from a model.
+            */}
+            <Findings content={content()} onReveal={reveal} />
           </div>
         </section>
         </Show>
@@ -607,6 +774,49 @@ async function render(draft: Draft) {
     }
     throw error
   }
+}
+
+/**
+ * A word target, or `null` to clear it.
+ *
+ * `null` rather than `undefined`, because a field left out of a `PUT` and a
+ * field set to null mean the same thing to the API and only one of them says so.
+ * Anything that is not a whole number is sent as no target: a negative target is
+ * not a small one, and the backend refuses it either way.
+ */
+export function parseTarget(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (trimmed === '') return null
+
+  const value = Number(trimmed)
+  return Number.isInteger(value) && value >= 0 ? value : null
+}
+
+/**
+ * A day, as the instant the API wants.
+ *
+ * `<input type="date">` gives `YYYY-MM-DD` and the API takes a full timestamp,
+ * because this is JSON and a client has a clock. Midnight **UTC** is what a bare
+ * date in a file means, so that is what this sends: reading the day back in the
+ * browser's own zone and re-encoding it would move a due date by a day for most
+ * of the world.
+ */
+export function parseDue(raw: string): string | null {
+  return raw ? `${raw}T00:00:00Z` : null
+}
+
+/** Split a field written one entry per line, dropping blanks. */
+export function parseLines(raw: string): string[] {
+  return (
+    raw
+      .split('\n')
+      .map((line) => line.trim())
+      // Duplicates are **kept**, unlike a tag list. A contents list is
+      // positions, and an appendix listed under two parts is a real thing that
+      // the manifest reports as a `duplicate` in its second position rather
+      // than an error.
+      .filter((line) => line !== '')
+  )
 }
 
 /** Split a comma-separated field, dropping blanks and duplicates. */

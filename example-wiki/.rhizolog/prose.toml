@@ -1,0 +1,86 @@
+# Rules for this wiki's prose, read by `prose/v1`.
+#
+# This is a starter file. Every rule here is one somebody wrote down, which is
+# the whole point: there is no model behind any of it, no network call, and no
+# second machine opinion about your voice. Delete what you disagree with.
+#
+# `GET /api/prose/rules` reports these back with their defaults filled in and a
+# digest over the lot, so an assistant handed a finding can reproduce it without
+# ever reading this file.
+
+# The rule this project holds itself to, written with TOML's escape rather than
+# the character itself. That is not a workaround: a rules file is largely a list
+# of things somebody is trying not to write, so naming a character you have
+# banned from your own repository has to be possible.
+#
+# It searches the text rather than the tokens, so it can name one character, and
+# code fences and inline code are excluded from every rule always. A page
+# documenting a syntax is not flagged for containing it.
+[[rule]]
+id       = "no-em-dash"
+kind     = "forbid"
+severity = "error"
+literals = ["\u2014"]
+message  = "em dash"
+
+# Phrases that arrive when nobody is watching. A token sequence rather than a
+# substring, so punctuation between the words does not defeat it and it never
+# fires inside a longer word.
+#
+# Shipped as a file rather than compiled into the server, because a built-in list
+# of banned phrases is a claim about taste and taste is the thing being defended.
+[[rule]]
+id       = "tells"
+kind     = "phrase"
+severity = "warn"
+phrases  = [
+  "it is not just",
+  "a testament to",
+  "delve into",
+  "in the realm of",
+  "it is worth noting that",
+]
+
+# A word used twice close together. `within` is counted in words, and it is far
+# more aggressive than it looks: this is a lexical count with no stemming and no
+# stop-word list anywhere in the analyzer, so `ignore` is the only lever there is.
+#
+# The list below is not a stop-word list smuggled back in. It is authored, it is
+# per-rule, and it defaults to empty: every wiki writes its own, and the point of
+# the rule is the words it does *not* hold. Widen it before you lower `within`,
+# because the repeats worth seeing are the ones nobody would have listed.
+[[rule]]
+id       = "echo"
+kind     = "echo"
+severity = "warn"
+within   = 8
+ignore   = [
+  "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "has",
+  "have", "in", "is", "it", "its", "not", "of", "on", "one", "or", "that", "the",
+  "them", "there", "they", "this", "to", "was", "were", "what", "which", "with",
+  "you", "your",
+]
+
+# Sentences that are all the same length, which is what prose sounds like when
+# nobody has read it aloud. Reads sentences from paragraphs only: a bulleted list
+# is uniform by construction and firing on every one in the wiki is a rule nobody
+# leaves switched on.
+[[rule]]
+id       = "uniformity"
+kind     = "uniformity"
+severity = "warn"
+run      = 5
+spread   = 3
+
+# One name spelled two ways. The only rule here nobody wrote, and so the only one
+# with an escape hatch: `allow` is for the pairs that are genuinely two words.
+#
+# `length` and the capitalisation filter are what keep it from reporting `If` as
+# a misspelling of `It`. A wiki full of three-letter names lowers the number.
+[[rule]]
+id       = "names"
+kind     = "consistent"
+severity = "warn"
+distance = 1
+length   = 4
+allow    = ["Rhizome", "Rhizomes"]

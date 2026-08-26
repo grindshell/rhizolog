@@ -8,9 +8,9 @@ Setup and versions live in [Tech stack](tech-stack.md).
 
 | Route | What it is |
 |---|---|
-| `/` | Stats: counts, orphans, wanted pages, tag histogram, API usage, and where the time went |
+| `/` | Stats: counts, orphans, wanted pages, tag histogram, API usage, where the time went and where the words went |
 | `/pages` | Listing, or search results when there is a `?q=`; narrowed by `?tag=`, `?prefix=`, `?segment=` |
-| `/pages/*slug` | One page, rendered, with both directions of its links and the time spent on it |
+| `/pages/*slug` | One page, rendered, with both directions of its links, the time spent on it, and its Manuscript panel when it has one |
 | `/new`, `/edit/*slug` | The editor |
 | `/tags` | Every tag, linking into the filtered listing |
 | `/graph` | The link graph, drawn; narrowed by `?root=`, `?depth=`, `?prefix=`, `?tag=`, `?wanted=` |
@@ -21,6 +21,13 @@ Setup and versions live in [Tech stack](tech-stack.md).
 | `/accounts` | Accounts, and — on a wiki that has none — the form that creates the first |
 
 `/new` accepts `?slug=`, which is how a wanted page offers to be written.
+
+`/pages/*slug` accepts `?assembled=1`, which shows the compiled manuscript in
+place of the page's own body. In the URL rather than in component state because
+it is a **different document**: it is the proof-reading view, and that is a thing
+somebody sends themselves a link to. It replaces the body rather than sitting
+beside it, since the compiled document starts with that same prose and showing
+both would print the first chapter twice.
 
 `/inbox` accepts `?capture=1`, which focuses the text field. It is what the
 Create menu links to, and it is a parameter rather than the default because
@@ -280,6 +287,25 @@ missing owner in from whoever is saving — so an editor that dropped it would h
 every page it touched to the last person who pressed Save, including pages shared
 *with* that person by somebody else.
 
+That rule caught a second field a phase later. `target`, `due` and `contents` are
+round-tripped by the same reasoning, and the last of them is the expensive one to
+get wrong: an editor that dropped `contents` would **unmake a book** on the first
+save of any page in it, silently, and the manuscript panel is the only place the
+damage would show. It is the owner bug again with a different field, which is
+worth saying out loud because it will happen a third time.
+
+`contents` needs two pieces of state rather than one, because the API keeps
+absent and empty apart and a textarea can only say one of them. A checkbox says
+whether the page assembles others at all; the textarea holds the list, one slug
+per line, in order. Unchecked sends `null` and makes an ordinary page; checked
+with nothing in it sends `[]`, which is what a book looks like on the day it is
+started.
+
+Blank lines are dropped and **duplicates are kept**, unlike the tag and reader
+fields beside it. A contents list is positions rather than a set, and an appendix
+listed under two parts is a real thing the manifest reports in its second
+position rather than an error.
+
 ## The editor divides its space three ways
 
 Editor / Split / Preview, chosen from a segmented control in the editor's
@@ -310,6 +336,82 @@ while the draft signal still held the content from *before* the pane was
 collapsed, and render that — a visible flash of stale text on every re-open. The
 effect owns the transition instead, so re-opening is one write and one render,
 with the right content and no debounce (nobody is typing; they clicked).
+
+## The findings strip follows the preview's rule, and one of its own
+
+Under the textarea rather than beside the preview, because it is about the text
+you are typing and not about what it will look like. It is fed by
+`POST /api/prose` on the same shape of debounce, and a **closed strip issues no
+request at all** for exactly the reasons above: the effect returns before reading
+the content, and the draft signal is `null` while it is closed. Whether it was
+left open is remembered in `localStorage` beside the layout.
+
+Two things are its own.
+
+**A finding is clickable, and clicking it selects the text in the editor.** That
+is the whole reason `prose/v1` spans are byte offsets into the page **source**
+rather than positions in rendered HTML: a finding you cannot find is not a
+finding. Bytes are not JavaScript string indices, so they go through
+`byteToIndex` on the way: one `é` is two bytes and one code unit, one emoji is
+four bytes and two, and handing a raw byte offset to `setSelectionRange` selects
+the wrong words on any page with an accent in it, drifting further out the longer
+the page runs.
+
+**No findings and no rules are different sentences.** A wiki that has never
+written a `prose.toml` is the ordinary case, not a fault, so the report carries
+how many rules ran and the strip says "no rules yet" rather than calling the page
+clean. Calling it clean would be claiming an answer nobody asked for.
+
+There is no dismiss control, and that is the design rather than a gap. A finding
+is your own rule firing on your own text: if it fires where it should not, the
+rule is wrong, and the fix is one edit to one file. See
+[Long-form writing](long-form.md), "There is no dismissal store".
+
+## The Manuscript panel is the only place the spine is drawn
+
+On `/pages/*slug`, under the page and above the links, for any page carrying
+`contents`, `target` or `due`. It is not a nicety. Order moved into frontmatter
+so that reflowing a paragraph could not reorder a book, and the price of that
+decision was stated when it was made: a contents page opened raw is a YAML list
+rather than a clickable index. This panel is what pays it back, which means
+**anything hidden here is hidden everywhere**.
+
+So a gap, a duplicate and a mistyped entry are all shown in position rather than
+filtered out. A manuscript short of a chapter says where the chapter was going,
+and that is the whole difference between a gap and an omission. `duplicate` is
+deliberately not coloured as a warning: the commonest case is not a cycle at all
+but an appendix listed under two parts.
+
+Progress is arithmetic over the manifest rather than a field on the page, and
+that is a decision rather than an omission. `target` is measured against the
+**compiled** total, so a `progress` field on `GET /api/pages/{slug}` would mean
+assembling the whole book on every page read. The panel pays one compile when it
+is shown, which is the same walk the assembled view does.
+
+The bar is a bar. No streak, no encouragement, and nothing that changes tone when
+the number goes up: the same terms the hours heat map is on.
+
+## The words chart draws both halves, because that is the argument
+
+Beside the hours on `/`, and the shape is the feature's own claim made visible: a
+day's column has words **added above the line and removed below it**, scaled to
+one peak so the two sides are comparable. One bar per day would draw a net figure,
+which is precisely the metric this feature exists to replace: an assistant
+rewriting two thousand words into nineteen hundred is not "minus one hundred".
+The net is a number in the tooltip and third in the stat block, after both halves
+it is computed from.
+
+Removed words are drawn in the same weight as added ones. A day of revision is
+not a day of damage.
+
+A day with nothing written draws nothing, rather than the minimum height the
+hours chart gives an empty bucket. An empty day is not a small amount of writing,
+and a sliver on both sides of the line would make an empty quarter look busy.
+
+The day labels never go through `new Date(value)`. The server has already cut the
+day in the offset that was asked for and sends back a bare `YYYY-MM-DD`, which
+`Date` reads as midnight **UTC**, labelling every column a day early for half the
+planet. The parts are read out of the string and handed over as parts.
 
 ## The log's search box is one more filter, not a mode
 
@@ -404,8 +506,25 @@ What is covered is the part where the bugs were, not the part that is easy:
   the whole job of the gravity term.
 - **What the graph draws**, since none of it is legible from the markup: a
   wanted page is a node rather than an absence, the root of a walk is ringed,
-  the `viewBox` is four finite numbers, and labels are rationed once the graph
-  outgrows reading them all.
+  the `viewBox` is four finite numbers, labels are rationed once the graph
+  outgrows reading them all, and a part edge is drawn unlike a link and keyed
+  only when there is one.
+- **That a closed findings strip issues no request**, which is the preview's rule
+  and is invisible in the source, and that a finding's quote renders as text: a
+  quote is cut from the page, and page content is what agents write. Beside them,
+  `byteToIndex` over ASCII, a two-byte character and an astral one, because the
+  editor selection is wrong on any page with an accent in it if that is wrong.
+- **That the manuscript panel shows a gap, a duplicate and a mistyped entry in
+  position**, since it is the only rendering of the spine and anything hidden
+  there is hidden everywhere. Also that an absent contents list and an empty one
+  get different sentences, and that progress is measured against the compiled
+  total rather than the page's own.
+- **That the words chart draws both halves rather than their difference**, with
+  one tool, with several and with none. The last is every wiki on its first day
+  and has to look quiet rather than broken.
+- **That the editor sends `contents`, `target` and `due` back on every save.**
+  Dropping the first would unmake a book on the first save of any page in it,
+  and an empty list has to survive as an empty list rather than as no list.
 - **Duration formatting**, which has three spellings on purpose — a list drops
   seconds, a running clock keeps them, an axis label uses hours — and none of
   them may render a negative.
@@ -483,6 +602,15 @@ Selection is a signal rather than a URL parameter, unlike every filter on the
 screen. The filters say what is drawn and are worth linking to; which node you
 happen to be pointing at is not, and putting it in the URL would push a history
 entry on every click.
+
+A `contents:` entry is drawn too, and not like a link: the second colour, heavier
+at rest, with its own arrowhead and a key that appears only on a wiki that has
+one. A link is one page mentioning another; a part is one page being *inside*
+another, and drawing them alike would hide the one relationship in a wiki that
+has an order to it. It bows exactly as a link does, and for the link's reason
+rather than out of uniformity: two pages can each name the other in their
+contents lists, and drawn straight those would be one line with an arrowhead
+buried under the other.
 
 ## The time section draws its own charts
 

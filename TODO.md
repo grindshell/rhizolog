@@ -237,7 +237,7 @@ not missing pieces of it.
 
 ## Long-form writing
 
-**Four phases of five are built.** The plan and the reasoning are in
+**Built**, L0 through L4, and recorded in
 [Long-form writing](knowledge-base/long-form.md): compile a tree of pages into
 one addressable document, give a page and a manuscript a length and a target, and
 check prose against rules the author wrote down. It is aimed at drafting
@@ -245,7 +245,7 @@ long-form work alone with an assistant, which is what makes compile a context
 loader before it is an export and what makes a net word count worth splitting by
 who wrote it.
 
-Five phases. L4 is what is left, and it is not started:
+Every phase and what it turned out to be:
 
 - **L0: words.** **Built.** `markdown::count_words`, `pages.words` at schema
   version 10, `target`, `due` and `contents` in frontmatter, `?sort=words`, and
@@ -254,10 +254,9 @@ Five phases. L4 is what is left, and it is not started:
   turned out to be".
 - **L1: compile and the manifest.** **Built.** `page_parts` at schema version 11,
   `GET /api/compile` in three formats, the heading shift, the five section
-  statuses, and the three limits. **The graph does not draw part edges yet**:
-  orphans are unioned, because a chapter reported as unreferenced is a number
-  being wrong, and drawing is a display decision that belongs with the panel in
-  L4. See "What L1 turned out to be" on the plan page.
+  statuses, and the three limits. See "What L1 turned out to be" on the plan
+  page. The graph draws part edges as of L4, marked `part` rather than given a
+  sixth link `kind`, and a walk crosses them.
 - **L2: `prose/v1`.** **Built.** Rules in `.rhizolog/prose.toml`, five rule
   kinds, every finding quoting the text it fired on and carrying the arithmetic
   behind it, and `GET /api/prose/rules` so a remote caller can reproduce one. No
@@ -268,10 +267,6 @@ Five phases. L4 is what is left, and it is not started:
   anything. See "What L2 turned out to be" on the plan page, and in particular
   the two filters `consistent` needed before it stopped reporting `If` as a
   misspelling of `It`.
-- **No starter `prose.toml` ships, and there is nowhere for one to ship from.**
-  A rules file belongs to a wiki: `backend/wiki/` is gitignored and
-  `example-wiki/` is a fixture the documentation makes claims about. The starter
-  is the worked example on the plan page. Giving it a home is part of L4.
 - **L3: actor and the word log.** **Built.** An `X-Rhizolog-Actor` header, and
   `.rhizolog/words/`: a fourth authored tree, one file a month and one line an
   observation, with `page_words` derived from it at schema version 12. Every
@@ -284,23 +279,56 @@ Five phases. L4 is what is left, and it is not started:
   enumerate the authored trees were updated here rather than in L4, because the
   tree exists now. See "What L3 turned out to be" on the plan page, and in
   particular the `*.log` line in `.gitignore` that had been quietly ignoring it.
-- **The word log is not in the sync report.** The other five trees are compared
-  file by file and counted as scanned, indexed, unchanged, removed and failed;
-  this one is read and replaced wholesale on every sync, and three of those five
-  fields would be zero for reasons that mean nothing. `POST /api/reindex`
-  therefore says nothing about it. It belongs with L4's dashboard work, where
-  there is somewhere to put it.
-- **L4: dashboard and documentation closure**: the Manuscript panel, the
-  assembled view, the findings strip, and the words chart beside the hours.
+- **L4: dashboard and documentation closure.** **Built.** The Manuscript panel on
+  a page that carries `contents`, `target` or `due`; `?assembled=1` for the
+  compiled document; a findings strip under the editor's textarea that issues no
+  request while it is closed and selects a finding in the text when clicked; and
+  a words chart beside the hours, drawing added above the line and removed below
+  it. Part edges are drawn. The word log is in the sync report, in a shape of its
+  own rather than pretending to five fields that would be zero. `example-wiki/`
+  gained the starter `prose.toml` and a committed word log. See "What L4 turned
+  out to be" on the plan page.
+
+**Two things L4 found rather than built**, both worth knowing about:
+
+- **The editor had been clearing `contents`, `target` and `due` on every save**
+  since L0. Saving is a `PUT` and a field left out is a field cleared; the plan
+  says so and the editor did not do it. Any page opened in the dashboard and
+  saved lost its manuscript fields, and nothing could catch it before the panel
+  that would have shown the damage existed. It is the same failure that once
+  handed pages to the wrong owner, with a different field.
+- **L3 had made the example wiki dirty itself.** Merely starting a server against
+  the fixture appended nine baseline lines to `example-wiki/.rhizolog/words/`,
+  while `AGENTS.md` still said that pointing `RHIZOLOG_ROOT` there to look was
+  fine. Eighteen committed lines fix it as a property rather than a warning: every
+  page already agrees with the log, so the scan finds nothing to record.
+
+What is not done:
+
+- **`example-wiki/` has no manuscript in it**, so the Manuscript panel and the
+  assembled view are the two screens the fixture cannot demonstrate. Adding one
+  means new pages, which moves the page count, the orphan count and the word
+  totals that `index.md` states exactly, so it is a deliberate change to the
+  fixture rather than a file dropped in. It is also what the product site's demo
+  would want.
+- **Compile has no performance evidence.** It is the one thing here whose cost
+  grows with the work, and the plan's gate is scratch manuscripts of 50, 200 and
+  500 sections, measured three times each with the minimum kept. Nothing has been
+  measured. The note under "Verification gaps" about a noisy machine applies: a
+  single timing on this machine is not evidence.
+- **The Manuscript panel compiles the whole book on every page view** of a page
+  that has one. That is one walk, the same one `?assembled=1` does, and it is
+  fine at the sizes anybody has written here. It is the first thing to look at if
+  a large manuscript makes its own contents page slow to open.
 
 **The recursion rule is settled.** A page contributes its body, then each page in
 its `contents:` list, in order, recursively; a link in prose is never structure,
-anywhere. Six alternatives and why each lost are on the plan page. What it leaves
-as work rather than as an objection: `contents:` entries have to be indexed as
-links or every chapter becomes an orphan in `/api/stats`, the Manuscript panel
-becomes the only rendering of the spine, and the list has to be read as strings
-and validated at compile time so a mistyped chapter does not make the whole page
-malformed and drop it out of every listing.
+anywhere. Six alternatives and why each lost are on the plan page. What it left as
+work rather than as an objection, all of it now done: `contents:` entries are
+indexed so a chapter is not an orphan, the Manuscript panel is the only rendering
+of the spine, and the list is read as strings and validated at compile time so a
+mistyped chapter does not make the whole page malformed and drop it out of every
+listing.
 
 **A review of the plan found five things worth fixing and they are fixed on the
 page**, three of them contradictions with decisions this repository had already

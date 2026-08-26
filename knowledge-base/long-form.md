@@ -1,9 +1,14 @@
 # Long-form writing
 
-Status: **part built**. L0 through L3 are in; L4 is not. This page is still the
-implementation plan and the reasoning behind it, with a record of what each phase
-actually turned out to be appended as it landed. Where it and the code disagree,
-the code is what runs and this page is why.
+Status: **built**, L0 through L4. This page was the implementation plan and is
+now the record: the reasoning is kept as it was written, and what each phase
+actually turned out to be is appended under it. Where the two disagree, the code
+is what runs and the plan is why it was expected to be otherwise.
+
+Every place the code departed from the plan is named in one of the five "What L*n*
+turned out to be" sections at the end. Nothing above them has been quietly
+corrected to match, because a plan edited into agreement with its outcome is a
+plan that never taught anybody anything.
 
 Rhizolog can capture a thought, turn it into a page, and say where the hours
 went. What it cannot do is anything that happens after a first draft exists. A
@@ -952,6 +957,8 @@ accumulated: every week it was not running is a week missing from a chart.
 
 ### L4: dashboard and documentation closure
 
+**Built.** See [What L4 turned out to be](#what-l4-turned-out-to-be).
+
 The panel, the assembled view, the findings strip, the chart. Then update
 [Architecture](architecture.md), [API design](api-design.md),
 [The dashboard](dashboard.md), `AGENTS.md` and `TODO.md` from what was actually
@@ -1464,6 +1471,168 @@ as a directory appearing is attributed to `scan` rather than `file`. The
 directory forces a rescan, the rescan picks the edit up, and a rescan genuinely
 does not know when the change happened. That is what `scan` means, and it is a
 limit of watching a filesystem rather than a fault.
+
+## What L4 turned out to be
+
+`components/{Manuscript,Findings,WordStats}.tsx` are the three new screens'
+worth, `?assembled=1` is the fourth, and the spine is drawn. Eight things differ
+from what this page said above, and two of them are bugs this phase found rather
+than features it built.
+
+### The editor was clearing `contents` on every save
+
+The plan states the rule under
+[Absent and empty are different](#absent-and-empty-are-different-and-a-put-can-tell-them-apart)
+and states it correctly: a field left out of a `PUT` is a field cleared, so the
+editor has to round-trip `contents` whether or not it renders a control for it.
+It did not. From L0 until L4 the dashboard's Save sent `title`, `tags`,
+`content`, `visibility`, `owner` and `readers`, and **any page opened in the
+editor and saved lost its contents list, its target and its due date.**
+
+Nothing caught it because nothing could: L0 through L3 were backend phases, the
+manuscript panel that would have shown the damage did not exist yet, and the
+first page anybody would have opened in the editor was a chapter rather than the
+contents page holding the book together.
+
+It is the same failure that once handed pages to the wrong owner, which the
+dashboard page already records, with a different field. Three tests now pin it,
+and the one that matters is the empty list: `[]` has to come back as `[]` rather
+than as no list, because those are the two states the API is careful to keep
+apart.
+
+### `contents` needs two controls, because a textarea can only say one thing
+
+A list of slugs is a textarea, one per line. Absent and empty are different
+values and an empty textarea can only be one of them, so a checkbox says whether
+the page assembles others at all and the textarea holds the list. Unchecked sends
+`null`; checked and empty sends `[]`.
+
+Duplicates are **kept**, unlike the tag and reader fields it sits beside, which
+both drop them. A contents list is positions rather than a set, and an appendix
+under two parts is the case the manifest has a `duplicate` status for.
+
+### Progress is arithmetic, not a field
+
+The API surface says "compiled `progress` on a page that carries them", and that
+field does not exist. It cannot cheaply: `target` is measured against the
+**compiled** total, so filling it in on `GET /api/pages/{slug}` would mean
+assembling the whole book on every page read, including every read of every
+chapter.
+
+The panel pays one compile when it is shown and divides. That is the same walk
+`?assembled=1` does, and a manifest-only endpoint was considered and skipped: the
+walk is where the cost is, the assembly is concatenation, and a second code path
+for the same tree would be a second answer about what the book is.
+
+### A part edge does not look like a wikilink, and bows the same way
+
+The two questions L1 deferred, answered. Drawn in the second colour and heavier
+at rest, with its own arrowhead and a key that appears only on a wiki that has
+one, because a link is one page mentioning another and a part is one page being
+*inside* another.
+
+It bows exactly as a link does, and for the link's own reason rather than out of
+uniformity: two contents pages can each name the other, and drawn straight those
+two lines would be one with an arrowhead buried under the other. A page both
+linked to and assembled by one parent is a single line carrying both, so that
+case never arises.
+
+Three things the plan had not thought about came with it. **A walk crosses the
+spine**, or the one page a chapter is certain to be connected to would be the one
+page its neighbourhood could not reach. **A degree counts a `contents:` entry**,
+or a book with sixty chapters and no links would be drawn the size of a leaf.
+And **an entry that is not a valid slug is not drawn**: `page_parts.target` holds
+the entry as written, so `../etc/passwd` is in the table, and drawing it would
+advertise a path as a page worth writing. It stays where it belongs, `invalid` in
+the manifest.
+
+`visible_part` grew the second half of `visible_link` at the same time, which it
+had deliberately gone without. That second condition exists to stop a link to a
+private page appearing as a **wanted** page, named by a slug that is usually its
+title, and it became necessary the moment these rows started being drawn. It
+costs nothing where the rows were already used: the orphan query asks about a
+page the caller can already see, so the condition is trivially true there.
+
+### A report says how many rules ran
+
+A new field on every `/api/prose` response, and the strip needed it before it
+could say anything honest. No findings from no rules is **not** a clean page, and
+a wiki that has never written a `prose.toml` is the ordinary case rather than a
+fault, so the two silences have to be tellable apart. The alternative the client
+reached for first was comparing the digest against the digest of an empty
+ruleset, which is a constant copied out of the server into the browser: exactly
+the sort of thing that is right on the day it is written and rots invisibly.
+
+### The word log is in the sync report, and is not shaped like the rest
+
+`SyncReport` gained a sixth field that is not a `SyncCounts`. The other five
+trees are compared file by file, so `scanned`, `indexed`, `unchanged`, `removed`
+and `failed` each mean something about them; the word log is read whole and the
+table over it replaced, so three of those five would be zero for reasons that
+mean nothing, and zeroes that mean nothing read as news.
+
+What it carries instead is what the log **held when it was read** and how many
+lines would not parse, plus whether it could be read at all. That last one is the
+field worth acting on and the dashboard does: a rebuild that could not read
+`.rhizolog/words/` says so, because it is the one tree here with no other copy.
+
+`changed_anything` deliberately does not consult it. The log is replaced on every
+run, so it would answer yes every time a wiki had any history at all, and the
+question that is asked is whether anything *changed*.
+
+### Spans are bytes and a textarea indexes UTF-16
+
+Clicking a finding selects it in the editor, which is the whole reason the spans
+are offsets into the page source rather than positions in rendered HTML. It is
+also the first place those offsets meet JavaScript, where one `é` is two bytes
+and one code unit and one emoji is four bytes and two. Handing a byte offset
+straight to `setSelectionRange` selects the wrong words on any page with an
+accent in it, and does it further and further out as the page goes on.
+
+`byteToIndex` walks code points accumulating UTF-8 lengths. An offset landing
+inside a character rounds forward to its start, which cannot happen for a span
+the analyzer produced and is the only sane answer if it ever does.
+
+### The starter rules file found a home, and it was the fixture
+
+L2 recorded that nothing shipped and that finding it a home was L4's job. It is
+`example-wiki/.rhizolog/prose.toml`: a rules file belongs to a wiki, this
+repository has exactly one committed wiki, and the README already tells people to
+point `RHIZOLOG_ROOT` at it. Five rules, one of each kind, with the em dash rule
+written using TOML's escape because that is the demonstration.
+
+The fixture gained a word log at the same time, and that was a bug rather than a
+flourish. **L3 had quietly made the example wiki unreadable without changing
+it**: the startup scan wrote nine baselines into `example-wiki/.rhizolog/words/`,
+so merely running the server against the fixture dirtied it, and `AGENTS.md` was
+still saying that pointing `RHIZOLOG_ROOT` there to look was fine. Eighteen
+committed lines fix it properly rather than by warning: every page's count
+already agrees with the log, so the scan finds nothing to record and the files
+come back byte for byte identical. The property that made this a log on disk,
+demonstrated on a wiki anybody can look at.
+
+`example-wiki/index.md` states what both should report, exactly, as it already
+did for the time log. Which makes its own word count load-bearing, because the
+log's last line for `index` has to match it: editing that page means moving the
+**baseline**, which carries no churn and so changes no total on the chart. The
+note is in `AGENTS.md`.
+
+### Verified against the fixture
+
+Not a scratch wiki this time. `/api/word-stats?at=2026-08-06T18:00:00Z&offset=0`
+answers 1,061 added and 114 removed across 10 observations and 8 pages, split
+`file` 417, `web` 414, `claude-code` 230; `/api/prose?slug=index` answers 9
+errors and 36 warnings; the orphan count, the wanted count and the time totals are
+what they were. Then the whole thing again after deleting `index.db`, with the
+two log files hashed before and after: identical.
+
+One number in that set is worth keeping. `echo` at `within = 12` was the plan's
+neighbourhood and it reported **60 warnings on a single page**. At `within = 8`
+with a three-line `ignore` list it reports 36 on the same page and four or fewer
+on every other page in the wiki. The rule is a lexical count with no stemming and
+no stop-word list anywhere in the analyzer, so `ignore` is the only lever there
+is, and a long page of documentation repeats its own vocabulary constantly. Widen
+the list before lowering the number, or the repeats worth seeing go with the rest.
 
 ## Test strategy
 

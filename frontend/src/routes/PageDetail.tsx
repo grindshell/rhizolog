@@ -1,7 +1,8 @@
 import { For, Match, Show, Switch, createResource, createSignal } from 'solid-js'
-import { A, useParams } from '@solidjs/router'
+import { A, useParams, useSearchParams } from '@solidjs/router'
 import {
   ApiError,
+  compilePages,
   decodeSlug,
   editHref,
   getPage,
@@ -15,10 +16,11 @@ import {
   slugSegments,
   tagHref,
 } from '../api/client'
-import type { PageLinksResponse } from '../api/client'
+import type { PageLinksResponse, PageView } from '../api/client'
 import { pins } from '../api/pins'
 import { Async, ErrorNotice } from '../components/Async'
 import Duration, { formatDuration } from '../components/Duration'
+import Manuscript from '../components/Manuscript'
 import Markdown from '../components/Markdown'
 import SlugPath from '../components/SlugPath'
 import { PageTimerButton } from '../components/TimerMenu'
@@ -37,8 +39,20 @@ import VisibilityBadge from '../components/VisibilityBadge'
  */
 export default function PageDetail() {
   const params = useParams<{ slug: string }>()
+  const [searchParams, setSearchParams] = useSearchParams()
   const slug = () => decodeSlug(params.slug ?? '')
   const [showSource, setShowSource] = createSignal(false)
+
+  /**
+   * Whether to show the whole manuscript rather than this page.
+   *
+   * In the URL rather than in component state, because it is a different
+   * document and somebody should be able to keep the link to it. It is also the
+   * proof-reading view, which is a thing you send yourself.
+   */
+  const assembled = () => searchParams.assembled === '1'
+  const setAssembled = (on: boolean) =>
+    setSearchParams({ assembled: on ? '1' : undefined }, { replace: true })
   const [pinning, setPinning] = createSignal(false)
   const [pinFailure, setPinFailure] = createSignal<unknown>()
 
@@ -60,6 +74,18 @@ export default function PageDetail() {
   const [page] = createResource(slug, (target) => getPage(target, { render: true }))
   const [links, { refetch: refetchLinks }] = createResource(slug, (target) =>
     pageLinks(target),
+  )
+
+  /**
+   * The assembled document, fetched only while it is being looked at.
+   *
+   * A null source is what makes that true: Solid skips the fetcher for one, so
+   * an ordinary page view costs no compile at all. That matters more here than
+   * it does for the editor's preview, because a compile walks a whole book.
+   */
+  const [document] = createResource(
+    () => (assembled() ? slug() : null),
+    (root) => compilePages({ root, format: 'html' }),
   )
 
   /**
@@ -194,6 +220,22 @@ export default function PageDetail() {
                     >
                       Graph
                     </A>
+                    {/*
+                      Only offered where it means something. Every page compiles,
+                      a leaf to itself, so a button on all of them would promise
+                      a second reading that is the same reading.
+                    */}
+                    <Show when={isManuscript(loaded())}>
+                      <button
+                        class="btn btn-ghost btn-sm"
+                        classList={{ 'btn-active': assembled() }}
+                        aria-pressed={assembled()}
+                        onClick={() => setAssembled(!assembled())}
+                        title="Read this page and everything its contents list assembles"
+                      >
+                        Assembled
+                      </button>
+                    </Show>
                     <button
                       class="btn btn-ghost btn-sm"
                       onClick={() => setShowSource((shown) => !shown)}
@@ -253,10 +295,42 @@ export default function PageDetail() {
                     </pre>
                   }
                 >
-                  <Markdown
-                    class="prose dark:prose-invert mt-2 max-w-none"
-                    html={loaded().html ?? ''}
-                  />
+                  {/*
+                    The assembled document replaces the body rather than sitting
+                    beside it: it is the same prose with the chapters after it,
+                    and showing both would print the first one twice.
+                  */}
+                  <Show
+                    when={assembled()}
+                    fallback={
+                      <Markdown
+                        class="prose dark:prose-invert mt-2 max-w-none"
+                        html={loaded().html ?? ''}
+                      />
+                    }
+                  >
+                    <Async resource={document}>
+                      {(compiled) => (
+                        <>
+                          <div class="mt-2 text-xs opacity-60">
+                            {compiled.sections.length}{' '}
+                            {compiled.sections.length === 1 ? 'section' : 'sections'} ·{' '}
+                            {compiled.words.toLocaleString()} words ·{' '}
+                            <span class="font-mono">{compiled.compiler}</span>
+                          </div>
+                          {/*
+                            Rendered by the server after assembly, so comrak sees
+                            one document and the shifted heading levels nest the
+                            way the manifest says they do.
+                          */}
+                          <Markdown
+                            class="prose dark:prose-invert mt-2 max-w-none"
+                            html={compiled.content ?? ''}
+                          />
+                        </>
+                      )}
+                    </Async>
+                  </Show>
                 </Show>
               </div>
             </article>
@@ -264,9 +338,39 @@ export default function PageDetail() {
         </Match>
       </Switch>
 
+      {/*
+        Under the page and above the links, because it is the page's own
+        structure rather than its neighbourhood. Only on a page that has some:
+        this panel is the only place the spine is rendered as something you can
+        click, and on an ordinary page there is no spine to render.
+      */}
+      <Show when={isManuscript(page())}>
+        {(loaded) => <Manuscript page={loaded()} />}
+      </Show>
+
       <Async resource={links}>{(data) => <LinkPanels links={data} />}</Async>
     </div>
   )
+}
+
+/**
+ * Whether this page is a manuscript, in the sense the plan gives the word.
+ *
+ * Three things make one, and each on its own is enough. A `contents:` list makes
+ * a page assemble others, **including an empty one**, which is what a book looks
+ * like on the day it is started and is why this checks for the field rather than
+ * for entries in it. A `target` makes a page something you are working toward,
+ * measured against its compiled total. A `due` makes it something with a day
+ * attached.
+ *
+ * A leaf page carrying only a `target` is a manuscript of one section, which is
+ * the recursive definition doing what it promised rather than a special case.
+ */
+function isManuscript(page: PageView | undefined): PageView | undefined {
+  if (!page) return undefined
+  const carries =
+    page.contents !== undefined || page.target !== undefined || page.due !== undefined
+  return carries ? page : undefined
 }
 
 /**

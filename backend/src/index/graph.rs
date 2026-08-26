@@ -157,19 +157,22 @@ pub struct GraphNode {
     /// The page's title, or the slug itself when there is no page.
     pub title: String,
     pub exists: bool,
-    /// Distinct pages linking here, counted across the **whole wiki** rather
-    /// than the view. A hub therefore still looks like one inside a filter, and
-    /// the gap between this number and the lines actually drawn at the node is
-    /// itself the useful signal: it says the branch reaches outside.
+    /// Distinct pages that name this one, counted across the **whole wiki**
+    /// rather than the view. A hub therefore still looks like one inside a
+    /// filter, and the gap between this number and the lines actually drawn at
+    /// the node is itself the useful signal: it says the branch reaches outside.
+    ///
+    /// A `contents:` entry counts, because it is drawn. Leaving it out would
+    /// make a book with sixty chapters the size of a leaf.
     pub inbound: usize,
-    /// Distinct pages this one links to, likewise wiki-wide.
+    /// Distinct pages this one names, likewise wiki-wide.
     pub outbound: usize,
     pub tags: Vec<String>,
     /// Hops from `root`, when the query had one.
     pub distance: Option<usize>,
 }
 
-/// One line to draw: every link from `source` to `target`, collapsed.
+/// One line to draw: everything joining `source` to `target`, collapsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphEdge {
     pub source: String,
@@ -177,6 +180,14 @@ pub struct GraphEdge {
     /// The kinds that reached it. Two, when a page is linked both as `[[a]]`
     /// and as `[a](a.md)` — which is two rows in `links` and one line to draw.
     pub kinds: Vec<LinkKind>,
+    /// Whether the source's `contents:` list names the target.
+    ///
+    /// Kept apart from `kinds` rather than added to it as a sixth spelling of
+    /// [`LinkKind`], because a part is **not** a kind of link and that is the
+    /// decision `page_parts` exists to record. A page can be both linked to and
+    /// assembled by the same parent, in which case one line carries both, and an
+    /// edge that is only a part has no kinds at all.
+    pub part: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +202,18 @@ pub struct Graph {
 
 /// Only wiki and internal links are part of the page graph.
 const IS_PAGE_LINK: &str = "links.kind != 'external'";
+
+/// Everything joining one ordered pair of pages, before it becomes one line.
+///
+/// Two tables reach this: `links`, which contributes kinds, and `page_parts`,
+/// which contributes a flag. They are collapsed together because the wiki has
+/// one line to draw between two pages however many ways they are joined, and
+/// kept as separate fields because a part is not a kind of link.
+#[derive(Debug, Clone, Default)]
+struct Joined {
+    kinds: Vec<LinkKind>,
+    part: bool,
+}
 
 /// A link both of whose ends this audience is allowed to know about.
 ///
@@ -230,19 +253,29 @@ fn visible_link() -> String {
 
 /// A row in the spine this audience can see.
 ///
-/// Only the first of [`visible_link`]'s two conditions is needed, and the
-/// asymmetry is worth stating rather than looking like an omission. That second
-/// condition exists to stop a link to a private page appearing as a *wanted*
-/// page in the graph, advertising a slug that is usually its title. Nothing here
-/// draws anything: the only question these rows are asked in this module is
-/// whether a page has a parent, and that is answered from the parent's side.
+/// Both of [`visible_link`]'s conditions, for both of its reasons. The first is
+/// obvious: a chapter list is written on a page, and naming the page is naming
+/// it. The second is the one that is easy to leave out, and it became necessary
+/// the moment these rows started being drawn: a `contents:` entry pointing at a
+/// page the caller cannot read would otherwise appear as a **wanted** page,
+/// named by its slug and advertised as a gap somebody should fill.
+///
+/// It was deliberately absent while the only question asked of these rows was
+/// whether a page has a parent, which is answered entirely from the parent's
+/// side. Adding it costs nothing there: the target of that question is a page
+/// the caller can already see, so the condition is trivially true.
 fn visible_part() -> String {
     format!(
         "exists (
              select 1 from pages as parent
              where parent.slug = page_parts.src_slug and {parent}
+         )
+         and not exists (
+             select 1 from pages as chapter
+             where chapter.slug = page_parts.target and not ({chapter})
          )",
         parent = audience::visible_as("parent"),
+        chapter = audience::visible_as("chapter"),
     )
 }
 
@@ -398,6 +431,7 @@ impl Index {
             } = options;
             let visible = audience.params();
             let visible_link = visible_link();
+            let visible_part = visible_part();
 
             // Every page link **this audience may see**, collapsed to one entry
             // per ordered pair. Loaded whole rather than filtered further in SQL
@@ -409,7 +443,7 @@ impl Index {
             // from pages they cannot read would be a number about pages they
             // cannot read — and it means two accounts can legitimately see
             // different degrees for the same page.
-            let mut collapsed: BTreeMap<(String, String), Vec<LinkKind>> = BTreeMap::new();
+            let mut collapsed: BTreeMap<(String, String), Joined> = BTreeMap::new();
             {
                 let mut query = connection.prepare(&format!(
                     "select src_slug, target, kind from links
@@ -428,12 +462,50 @@ impl Index {
                     let Some(kind) = LinkKind::parse(&kind) else {
                         continue;
                     };
-                    collapsed.entry((source, target)).or_default().push(kind);
+                    collapsed
+                        .entry((source, target))
+                        .or_default()
+                        .kinds
+                        .push(kind);
+                }
+            }
+
+            // The spine, on the same footing. This is the half of the L1 plan
+            // that waited for a panel to exist: the orphan count needed the
+            // union immediately, because a chapter reported as unreferenced is a
+            // number being wrong, and drawing it needed somebody to have decided
+            // what a part edge looks like.
+            //
+            // A page listed twice under one parent is one line, because position
+            // is what the manifest is for and two lines between the same pair
+            // would say nothing the first does not.
+            {
+                let mut query = connection.prepare(&format!(
+                    "select src_slug, target from page_parts
+                     where {visible_part}
+                     order by src_slug, ordinal"
+                ))?;
+                let rows = query.query_map(visible.as_slice(), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                for row in rows {
+                    let (source, target) = row?;
+                    // `page_parts.target` is the entry as it was written, so a
+                    // mistyped one is in there: `../etc/passwd` is `invalid` in
+                    // the manifest and must not become a node here, because a
+                    // wanted node is an invitation to write the page. A valid
+                    // slug nobody has written is a different thing entirely, and
+                    // it is exactly the gap the graph should show.
+                    if Slug::parse(&target).is_err() {
+                        continue;
+                    }
+                    collapsed.entry((source, target)).or_default().part = true;
                 }
             }
 
             // (inbound, outbound), wiki-wide, counted over collapsed pairs so a
-            // page linked twice over is one referrer rather than two.
+            // page linked twice over is one referrer rather than two, and a page
+            // both linked to and assembled by one parent is one as well.
             let mut degrees: HashMap<String, (usize, usize)> = HashMap::new();
             for (source, target) in collapsed.keys() {
                 degrees.entry(source.clone()).or_default().1 += 1;
@@ -461,7 +533,14 @@ impl Index {
             }
 
             let distances = match &root {
-                Some(root) => Some(walk_from(connection, root, depth, &visible_link, &visible)?),
+                Some(root) => Some(walk_from(
+                    connection,
+                    root,
+                    depth,
+                    &visible_link,
+                    &visible_part,
+                    &visible,
+                )?),
                 None => None,
             };
 
@@ -512,7 +591,7 @@ impl Index {
 
             let mut edges = Vec::new();
             let mut unwritten: BTreeSet<String> = BTreeSet::new();
-            for ((source, target), kinds) in &collapsed {
+            for ((source, target), joined) in &collapsed {
                 if !pages.contains(source) {
                     continue;
                 }
@@ -535,7 +614,8 @@ impl Index {
                 edges.push(GraphEdge {
                     source: source.clone(),
                     target: target.clone(),
-                    kinds: kinds.clone(),
+                    kinds: joined.kinds.clone(),
+                    part: joined.part,
                 });
             }
 
@@ -908,28 +988,43 @@ impl Index {
 /// neighbourhood being routed *through* a page they cannot read: without it, two
 /// pages joined only by a private one would look adjacent, and the private page's
 /// existence would be legible from the shape of the graph.
+///
+/// **It crosses the spine too**, so a chapter's neighbourhood holds the book it
+/// belongs to. Leaving `page_parts` out would make the one page a chapter is
+/// certain to be connected to the one page a walk could not reach.
 fn walk_from(
     connection: &Connection,
     root: &str,
     depth: usize,
     visible_link: &str,
+    visible_part: &str,
     visible: &[(&'static str, &dyn ToSql); 2],
 ) -> Result<HashMap<String, usize>, IndexError> {
     // `union` rather than `union all` is what stops a cycle looping forever:
     // it drops rows already produced. A node can still be reached at two
     // different distances, which is why the outer query takes the smaller.
+    //
+    // `joined` is a plain, non-recursive term in the same `with recursive`
+    // clause, which is what lets the walk cross links and contents entries
+    // without the recursive half having to name two tables.
     let mut query = connection.prepare(&format!(
-        "with recursive walk(slug, distance) as (
+        "with recursive
+         joined(src_slug, target) as (
+             select src_slug, target from links where {visible_link}
+             union
+             select src_slug, target from page_parts where {visible_part}
+         ),
+         walk(slug, distance) as (
              select :root, 0
              union
-             select case when links.src_slug = walk.slug
-                         then links.target
-                         else links.src_slug
+             select case when joined.src_slug = walk.slug
+                         then joined.target
+                         else joined.src_slug
                     end,
                     walk.distance + 1
-             from links
-             join walk on links.src_slug = walk.slug or links.target = walk.slug
-             where {visible_link} and walk.distance < :depth
+             from joined
+             join walk on joined.src_slug = walk.slug or joined.target = walk.slug
+             where walk.distance < :depth
          )
          select slug, min(distance) from walk group by slug"
     ))?;
@@ -1482,6 +1577,191 @@ mod tests {
         // island goes first.
         assert_eq!(slugs(&graph), ["index", "notes/rust", "notes/rust/streams"]);
         assert!(!slugs(&graph).contains(&"scratch/inbox"));
+    }
+
+    // ------------------------------------------------------------- the spine
+
+    fn contents(slug: &str, parts: &[&str], body: &str) -> Page {
+        let mut page = page(slug, &[], body);
+        page.frontmatter.contents = Some(parts.iter().map(|part| (*part).to_string()).collect());
+        page
+    }
+
+    /// A book with two chapters, one of them unwritten, and an appendix listed
+    /// under both parts. Nothing in it links to anything.
+    async fn book() -> Index {
+        let index = index().await;
+        index
+            .upsert(&contents("book", &["book/one", "book/two"], "# The book\n"))
+            .await
+            .expect("upsert");
+        index
+            .upsert(&contents(
+                "book/one",
+                &["book/one/opening", "book/appendix"],
+                "## Part one\n",
+            ))
+            .await
+            .expect("upsert");
+        index
+            .upsert(&contents("book/two", &["book/appendix"], "## Part two\n"))
+            .await
+            .expect("upsert");
+        index
+            .upsert(&page("book/one/opening", &[], "The ferry was late.\n"))
+            .await
+            .expect("upsert");
+        index
+            .upsert(&page("book/appendix", &[], "Sources.\n"))
+            .await
+            .expect("upsert");
+        index
+    }
+
+    /// The half of the L1 plan that waited for somebody to decide what a part
+    /// edge looks like.
+    #[tokio::test]
+    async fn a_contents_entry_is_an_edge_and_says_it_is_a_part() {
+        let graph = book()
+            .await
+            .graph(GraphOptions::default(), &EVERYONE)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            pairs(&graph),
+            [
+                ("book", "book/one"),
+                ("book", "book/two"),
+                ("book/one", "book/appendix"),
+                ("book/one", "book/one/opening"),
+                ("book/two", "book/appendix"),
+            ]
+        );
+        assert!(
+            graph
+                .edges
+                .iter()
+                .all(|edge| edge.part && edge.kinds.is_empty()),
+            "nothing in this book links to anything, so every line is a part"
+        );
+
+        // An appendix under two parts is two lines, which is what makes a
+        // diamond visible rather than a mystery about why one part is short.
+        let appendix = graph
+            .nodes
+            .iter()
+            .find(|node| node.slug == "book/appendix")
+            .unwrap();
+        assert_eq!(appendix.inbound, 2);
+    }
+
+    /// A gap in a manuscript is a branch somebody gestured at, which is exactly
+    /// what a wanted node already means.
+    #[tokio::test]
+    async fn a_chapter_nobody_has_written_is_a_wanted_node() {
+        let index = book().await;
+        index
+            .upsert(&contents(
+                "book/two",
+                &["book/two/the-ferry"],
+                "## Part two\n",
+            ))
+            .await
+            .unwrap();
+
+        let graph = index
+            .graph(GraphOptions::default(), &EVERYONE)
+            .await
+            .unwrap();
+
+        let ferry = graph
+            .nodes
+            .iter()
+            .find(|node| node.slug == "book/two/the-ferry")
+            .expect("drawn");
+        assert!(!ferry.exists);
+        assert!(pairs(&graph).contains(&("book/two", "book/two/the-ferry")));
+    }
+
+    /// `page_parts.target` is the entry as it was written, so a mistyped one is
+    /// in the table. Drawing it would advertise a path as a page worth writing.
+    #[tokio::test]
+    async fn a_contents_entry_that_is_not_a_slug_is_not_a_node() {
+        let index = index().await;
+        index
+            .upsert(&contents(
+                "book",
+                &["../etc/passwd", "book/one"],
+                "# The book\n",
+            ))
+            .await
+            .unwrap();
+
+        let graph = index
+            .graph(GraphOptions::default(), &EVERYONE)
+            .await
+            .unwrap();
+
+        assert_eq!(slugs(&graph), ["book", "book/one"]);
+        assert_eq!(pairs(&graph), [("book", "book/one")]);
+    }
+
+    /// One line, carrying both, because the wiki has one relationship to draw
+    /// between two pages however many ways they are joined.
+    #[tokio::test]
+    async fn a_chapter_that_is_also_linked_is_one_edge_carrying_both() {
+        let index = index().await;
+        index
+            .upsert(&contents(
+                "book",
+                &["book/one"],
+                "# The book\n\nSee [[book/one]].\n",
+            ))
+            .await
+            .unwrap();
+        index
+            .upsert(&page("book/one", &[], "Part one.\n"))
+            .await
+            .unwrap();
+
+        let graph = index
+            .graph(GraphOptions::default(), &EVERYONE)
+            .await
+            .unwrap();
+
+        assert_eq!(graph.edges.len(), 1);
+        assert!(graph.edges[0].part);
+        assert_eq!(graph.edges[0].kinds, [LinkKind::Wiki]);
+        // ...and one referrer, so the degree matches the picture.
+        let one = graph.nodes.iter().find(|n| n.slug == "book/one").unwrap();
+        assert_eq!(one.inbound, 1);
+    }
+
+    /// The one page a chapter is certain to be connected to must not be the one
+    /// page a walk cannot reach.
+    #[tokio::test]
+    async fn a_walk_climbs_the_spine() {
+        let graph = book()
+            .await
+            .graph(
+                GraphOptions {
+                    root: Some("book/one/opening".to_owned()),
+                    depth: 2,
+                    ..GraphOptions::default()
+                },
+                &EVERYONE,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            slugs(&graph),
+            ["book", "book/appendix", "book/one", "book/one/opening"],
+            "one hop to its part, two to the book and to what else the part holds"
+        );
+        let distances: Vec<Option<usize>> = graph.nodes.iter().map(|node| node.distance).collect();
+        assert_eq!(distances, [Some(2), Some(2), Some(1), Some(0)]);
     }
 
     #[tokio::test]
