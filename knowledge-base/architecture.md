@@ -306,19 +306,33 @@ itself.
 
 **Unresolved links are a feature, not an error.** They are "wanted pages" —
 branches someone gestured at but has not written yet — and they surface in
-`/api/stats`. Combined with orphans (pages nothing links to), that is the main
+`/api/stats`. Combined with orphans (pages nothing names), that is the main
 meta-stat the dashboard exists to show.
+
+The two are one phenomenon read from either end, and that is what decides what
+counts as naming: **a wikilink or a `contents:` entry, on both sides**. A chapter
+is not an orphan because the book named it, and a chapter nobody has written is
+wanted because the book asked for it. Unioning the spine into one of those and
+not the other left the drawing and the number describing different wikis, which
+is how the second half was found. The link totals beside them stay narrower on
+purpose: those count links, and a contents entry is not one.
 
 **A `contents:` entry is not a link, and it is still an edge.** It lives in
 `page_parts` rather than in `links`, because that table is keyed
 `(src_slug, target, kind)` and cannot hold the same child twice under one parent,
 which is exactly the case an appendix listed under two parts is. But a page has
 one parent where it has hundreds of time entries, so the graph unions the spine
-in where it keeps time out: a chapter named by its book is not an orphan, the
-drawing marks that line `part` rather than giving it a sixth `kind`, and a walk
-crosses it, so a chapter's neighbourhood holds the book it belongs to. A
-`contents:` entry that is not a valid slug is reported in the manifest and never
-drawn: it is a mistake somebody made, not a page worth writing. See
+in where it keeps time out: a chapter named by its book is not an orphan, a
+chapter nobody has written is wanted, the drawing marks that line `part` rather
+than giving it a sixth `kind`, and a walk crosses it, so a chapter's
+neighbourhood holds the book it belongs to.
+
+A `contents:` entry that is not a valid slug is reported in the manifest and
+nowhere else: it is a mistake somebody made, not a page worth writing. That is
+`page_parts.is_slug`, which is slug validation answered once when the row is
+written rather than by each query that reads it. The entry is still stored as
+typed, because the manifest has to show it in position; what the column records
+is whether anything else should treat it as naming a page. See
 [Long-form writing](long-form.md).
 
 This is also why page moves do not rewrite backlinks in the MVP: a move turns
@@ -330,11 +344,13 @@ silently rotting. Link-rewriting on move is a post-MVP convenience.
 Derived from the wiki, and therefore disposable:
 
 ```sql
-pages(slug PK, title, created, updated, size, visibility, owner)
+pages(slug PK, title, created, updated, size, words, visibility, owner)
 page_tags(slug, tag)
 page_readers(slug, username)            -- who a restricted page admits
 page_segments(slug, segment, depth)     -- the directories a page sits in
 links(src_slug, target, display, kind)  -- kind: wiki | internal | external
+page_parts(src_slug, ordinal, target, is_slug)  -- the spine, keyed by position
+page_words(id PK, at, slug, actor, account, kind, added, removed, total, src)
 pages_fts                               -- FTS5 over (slug unindexed, title, body)
 times(id PK, name, started, ended, has_note, updated, size)
 time_pages(time_id, target)             -- the pages an entry was spent on
@@ -361,6 +377,12 @@ reconcile rather than one and a version bump rebuilds both.
 these every time a timer starts, so hundreds is ordinary, and mixing them in
 would drown its backlinks and make it the most-linked page in the wiki. See
 [Time tracking](time-tracking.md).
+
+`page_words` is the odd one in this list: it is folded from `.rhizolog/words/`
+rather than from the markdown, so it is the one derived table whose source is
+neither the pages nor one of the trees that came before it. The log on disk is
+the only copy and this is an index over it. See
+[Long-form writing](long-form.md).
 
 `ended` and `started`, not `end` and `start`: `end` closes a `case` in SQLite,
 and a column that must be quoted in every query it appears in is a column that

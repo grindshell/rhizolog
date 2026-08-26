@@ -12,9 +12,16 @@ import { formatDate } from './PageDetail'
  * What shape the wiki is in.
  *
  * Orphans and wanted pages are the two numbers worth watching, and they are the
- * same phenomenon from either end: pages nothing reaches, and links that reach
- * nothing. A wiki that branches the way this one is meant to accumulates both,
- * and the useful thing a dashboard can do is name them.
+ * same phenomenon from either end: pages nothing names, and names with nothing
+ * behind them. A wiki that branches the way this one is meant to accumulates
+ * both, and the useful thing a dashboard can do is name them.
+ *
+ * That symmetry is load-bearing rather than a nice sentence, and it was false
+ * for a while. Naming is a wikilink **or** a `contents:` entry: the orphan count
+ * unioned the spine in the moment manuscripts existed, because a chapter
+ * reported as unreferenced is a number being wrong, and the wanted count did not
+ * follow until a book in the example wiki made the graph draw a gap this card
+ * refused to count.
  */
 export default function Dashboard() {
   const [live] = createResource(() => health())
@@ -161,12 +168,12 @@ function Graph(props: { data: StatsResponse }) {
         <div class="stat">
           <div class="stat-title">Orphans</div>
           <div class="stat-value text-2xl">{props.data.orphan_count}</div>
-          <div class="stat-desc">nothing links to them</div>
+          <div class="stat-desc">nothing names them</div>
         </div>
         <div class="stat">
           <div class="stat-title">Wanted</div>
           <div class="stat-value text-2xl">{props.data.wanted_count}</div>
-          <div class="stat-desc">linked but unwritten</div>
+          <div class="stat-desc">named but unwritten</div>
         </div>
       </div>
 
@@ -188,7 +195,7 @@ function Graph(props: { data: StatsResponse }) {
 
         <Panel
           title="Wanted pages"
-          empty="Every link lands somewhere."
+          empty="Every link and every chapter lands somewhere."
           items={props.data.wanted}
         >
           {(page) => (

@@ -350,15 +350,18 @@ findings it could not reproduce. And a `contents:` entry was going to be a row i
 `links`, whose key cannot hold the same child twice under one parent, so it is
 its own `page_parts` table.
 
-**A contents gap is not counted as a wanted page, and the graph draws it as one.**
-The orphan query unions `page_parts`, so a chapter has a parent; the wanted count
-does not, so a `contents:` entry pointing at nothing leaves `/api/stats` reporting
-only the wikilink gaps. The graph disagrees with its own card: an unwritten
-chapter is a node with `exists: false`, drawn exactly as a wanted page is. Left
-alone deliberately, since a hole in a manuscript is already reported in position
-by the manifest and merging the two would make one number answer two questions,
-but the dashboard says both without saying they differ. `example-wiki/index.md`
-explains it; the dashboard does not.
+**A contents gap is a wanted page now, which it was not until the fixture said
+so.** Adding a book turned up an asymmetry: the orphan query unioned
+`page_parts` the moment manuscripts existed, and the wanted count never did, so
+an outlined and unwritten chapter left `/api/stats` reporting a wiki that wanted
+nothing while the graph beside it drew the gap as a wanted node. Orphans and
+wanted pages are meant to be one phenomenon read from either end, so the union
+belongs on both sides: `named_but_unwritten()` sits next to `referenced()` and is
+the same rule turned around. `links.wanted` stays link-only, inside the link
+totals where it belongs. The rule about which contents entries name a page at all
+became `page_parts.is_slug` at schema version 13, decided once by `Slug::parse`
+at index time, because a wanted page is named on the dashboard as somewhere to
+write and a query that forgot to filter would have put `../etc/passwd` there.
 
 Two decisions are still open and both are cheap: whether `target` on a leaf page
 earns the recursive definition, and whether the word log ever wants pruning.

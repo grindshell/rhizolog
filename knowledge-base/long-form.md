@@ -1683,26 +1683,60 @@ The chapter that carries the rarer spelling says out loud that the name is
 written two ways and that nobody on the pier would settle it, which is the fixture
 being a fixture: the finding and the reason for it are both in the wiki.
 
-### A contents gap is not a wanted page, and the two figures disagree
+### A contents gap was not a wanted page, and the fixture is what found it
 
-Writing this surfaced an asymmetry nobody had had a reason to look at.
+Writing the book surfaced an asymmetry nobody had had a reason to look at.
 `referenced()` unions `page_parts`, so a chapter is not an orphan. `wanted_count`
-does not, so `book/two/the-crossing` leaves `/api/stats` reporting one wanted
-page, which is the wikilink to `notes/rust/streams` and nothing else.
+did not, so `book/two/the-crossing` left `/api/stats` reporting one wanted page,
+which was the wikilink to `notes/rust/streams` and nothing else.
 
-The graph does not agree with that. A `contents:` entry pointing at nothing
+The graph did not agree with that. A `contents:` entry pointing at nothing
 becomes a node with `exists: false`, which the dashboard draws exactly as it
-draws a wanted page, so the drawing shows two and the card beside it says one.
+draws a wanted page, so the drawing showed two and the card beside it said one.
 
-Both halves are defensible on their own. A wanted page is a branch somebody
-gestured at in prose; a gap in a manuscript is a hole reported in position by the
-manifest, which is a different question with a better answer already. And the
-plan only ever asked for the orphan query and the graph to union the spine in.
-What is not defensible is that the dashboard states both without saying they
-count different things, so `example-wiki/index.md` now says which is which. Left
-as it stands rather than changed, because merging them would make the wanted
-count answer two questions at once, and that is the number this wiki's own
-statistics exist for.
+The first instinct was to leave it and explain it, on the reading that a wanted
+page is a branch gestured at in prose while a gap in a manuscript is a hole the
+manifest already reports in position. That does not survive looking at what
+`referenced()` is. Orphans and wanted pages are the same phenomenon from either
+end, which is written in the dashboard component's own doc comment: pages nothing
+names, and names with nothing behind them. L1 merged the two kinds of naming on
+one side of that sentence and left the other side alone, so the sentence had been
+false since the day manuscripts existed. Splitting the mirror of a question you
+have already merged is not two answers to two questions, it is one answer and one
+oversight.
+
+And on the merits, a chapter somebody put in a contents list is the strongest
+statement this wiki has that a page ought to exist. It is more deliberate than a
+wikilink, not less. A wanted list that omits it is answering something narrower
+than its name.
+
+So `named_but_unwritten()` is the union, and it sits next to `referenced()`
+because they are one rule read in two directions. `links.wanted` stays link-only
+and says so in its own description: it lives inside the link totals and a
+contents entry is not a link.
+
+### The rule about what counts as a slug became a column
+
+Unioning the spine into a query that **names** pages made an existing bit of
+caution load-bearing. `page_parts.target` is stored as written, because the
+manifest has to report a mistyped chapter as `invalid` in its own position, so
+`../etc/passwd` is genuinely in that table. The graph filtered it out with a
+`Slug::parse` call in the loader. A wanted page is named on the dashboard as
+somewhere to write, so a wanted query that forgot the same filter would have
+advertised a path as a page somebody should create.
+
+The filter could have been copied. It was made a property of the row instead:
+`page_parts.is_slug`, decided by `Slug::parse` when the row is written, at schema
+version 13. `visible_part()` checks it, so every reader gets it for free and the
+graph's own call is gone. Slug validation is called security-critical in
+[Architecture](architecture.md) precisely because it is the sort of rule that
+gets spelled twice and drifts, and one query's private caution is exactly that
+shape.
+
+Not rebuilding this bump is the interesting failure rather than a stale row,
+which puts it with version 7 rather than with the rest: an index written before
+the column has nothing in it, and the entry that is not a slug goes on the
+dashboard.
 
 ### What it cost, which was what was predicted
 

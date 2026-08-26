@@ -358,10 +358,17 @@ impl Index {
             transaction.execute("delete from page_parts where src_slug = ?1", params![&slug])?;
             {
                 let mut insert = transaction.prepare(
-                    "insert into page_parts (src_slug, ordinal, target) values (?1, ?2, ?3)",
+                    "insert into page_parts (src_slug, ordinal, target, is_slug)
+                     values (?1, ?2, ?3, ?4)",
                 )?;
                 for (ordinal, target) in parts.iter().enumerate() {
-                    insert.execute(params![&slug, ordinal as i64, target])?;
+                    // The one place this question is asked. The entry is stored
+                    // as written either way, because the manifest reports a
+                    // mistyped chapter as `invalid` in its own position; what
+                    // this records is whether any reader should treat it as
+                    // naming a page at all.
+                    let is_slug = Slug::parse(target).is_ok();
+                    insert.execute(params![&slug, ordinal as i64, target, is_slug])?;
                 }
             }
 

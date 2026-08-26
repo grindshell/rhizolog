@@ -821,8 +821,13 @@ export interface paths {
         /**
          * The wiki's meta-stats.
          * @description Orphans and wanted pages are the two most useful numbers here, and they are
-         *     two sides of the same thing: pages nothing reaches, and reaches with nothing
-         *     at the end. A wiki that branches chaotically accumulates both.
+         *     two sides of the same thing: pages nothing names, and names with nothing
+         *     behind them. A wiki that branches chaotically accumulates both.
+         *
+         *     Naming means a wikilink **or** a `contents:` entry, on both sides. A chapter
+         *     is not an orphan because the page assembling it named it, and a chapter
+         *     nobody has written is wanted because the page assembling it asked for it.
+         *     The link totals in `links` are narrower on purpose: those count links.
          */
         get: operations["stats"];
         put?: never;
@@ -1977,6 +1982,11 @@ export interface components {
             resolved: number;
             /**
              * @description Internal links whose target has not been written yet.
+             *
+             *     Links only, and every figure in this object is. It is deliberately a
+             *     narrower count than `wanted_count`, which also counts the chapters a
+             *     `contents:` list names and nobody has written. These are link totals, and
+             *     a contents entry is not a link.
              * @example 1
              */
             wanted: number;
@@ -3052,7 +3062,11 @@ export interface components {
             /** @description The most-referenced of them, capped. */
             wanted: components["schemas"]["WantedPageView"][];
             /**
-             * @description Distinct slugs that are linked to but do not exist.
+             * @description Distinct slugs something names and nothing has written.
+             *
+             *     A wikilink to a page nobody has written, or a `contents:` entry naming a
+             *     chapter nobody has written. Both are somewhere the wiki says a page
+             *     should be, which is the question this number answers.
              * @example 1
              */
             wanted_count: number;
@@ -3396,12 +3410,15 @@ export interface components {
         Visibility: "public" | "internal" | "restricted" | "private";
         WantedPageView: {
             /**
-             * @description How many pages link to it — how badly it is wanted.
+             * @description How many pages name it, which is how badly it is wanted.
+             *
+             *     One page counts once however many ways it asked: linking to a chapter
+             *     and also listing it in `contents:` is one page waiting on it.
              * @example 2
              */
             referrers: number;
             /**
-             * @description The slug that is linked to but does not exist.
+             * @description The slug that something names and nothing has written.
              * @example notes/rust/streams
              */
             slug: string;

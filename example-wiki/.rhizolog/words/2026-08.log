@@ -1,4 +1,4 @@
-2026-08-01T11:20:00.000000000Z	index	web		observed	260	40	2129	
+2026-08-01T11:20:00.000000000Z	index	web		observed	260	40	2195	
 2026-08-02T16:00:00.000000000Z	scratch/old-notes	web		observed	48	0	48	
 2026-08-03T09:35:00.000000000Z	notes/rust/async	web		moved	0	0	150	notes/async
 2026-08-03T09:40:00.000000000Z	notes/rhizome	web		observed	30	8	118	
@@ -12,7 +12,7 @@
 2026-08-05T09:15:00.000000000Z	scratch/rust/from-a-talk	file		observed	167	0	167	
 2026-08-05T10:40:00.000000000Z	book/two	file		observed	29	0	29	
 2026-08-05T11:15:00.000000000Z	book/two/the-return	web		observed	137	0	137	
-2026-08-05T13:35:00.000000000Z	index	file		observed	220	21	2328	
+2026-08-05T13:35:00.000000000Z	index	file		observed	220	21	2394	
 2026-08-05T15:40:00.000000000Z	book/one/the-ferry	claude-code		observed	96	120	188	
 2026-08-05T22:35:00.000000000Z	scratch/inbox	file		observed	30	5	85	
 2026-08-06T10:05:00.000000000Z	scratch/rust/from-a-talk	claude-code		observed	24	24	167	

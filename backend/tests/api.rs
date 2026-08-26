@@ -1738,6 +1738,52 @@ async fn a_contents_entry_that_is_not_a_slug_is_not_drawn() {
     // mistyped chapter belongs.
     let sections = app.get("/api/compile?root=book").await;
     assert_eq!(sections.body["sections"][1]["status"], "invalid");
+
+    // And it is not somewhere to write. The dashboard names a wanted page, so
+    // this is the query that must never carry a path.
+    let stats = app.get("/api/stats").await;
+    assert_eq!(stats.body["wanted_count"], 0);
+    assert_eq!(stats.body["wanted"], json!([]));
+}
+
+/// The two numbers `/api/stats` exists for, agreeing about one wiki.
+///
+/// A chapter listed in a `contents:` list is not an orphan and is wanted, and it
+/// took a book in the example wiki to notice that only the first half was true:
+/// the graph drew the gap as a wanted node while the card beside it counted
+/// links alone and said the wiki wanted nothing.
+#[tokio::test]
+async fn a_chapter_nobody_has_written_is_wanted_and_its_siblings_are_not_orphans() {
+    let app = App::new().await;
+    app.seed(
+        "book",
+        json!({ "content": "# The Long Way Round\n", "contents": ["book/one"] }),
+    )
+    .await;
+    app.seed(
+        "book/one",
+        json!({
+            "content": "# Part One\n",
+            "contents": ["book/one/opening", "book/one/the-crossing"],
+        }),
+    )
+    .await;
+    app.seed("book/one/opening", json!({ "content": "# Opening\n" }))
+        .await;
+
+    let stats = app.get("/api/stats").await;
+
+    assert_eq!(stats.body["wanted_count"], 1);
+    assert_eq!(stats.body["wanted"][0]["slug"], "book/one/the-crossing");
+    assert_eq!(stats.body["wanted"][0]["referrers"], 1);
+
+    // The narrower figure stays narrow: nothing here is a link.
+    assert_eq!(stats.body["links"]["wanted"], 0);
+
+    // And the written chapters are still not orphans, which is the half that
+    // was already true.
+    assert_eq!(stats.body["orphan_count"], 1);
+    assert_eq!(stats.body["orphans"][0]["slug"], "book");
 }
 
 // -------------------------------------------------------------- word log

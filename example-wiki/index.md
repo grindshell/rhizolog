@@ -8,8 +8,8 @@ tags:
 Sixteen pages, a week of tracked time and a week of writing, arranged to show
 what Rhizolog does with them. Seven of the pages are a short book, because a
 manuscript is a thing a wiki full of notes cannot demonstrate. Run the server
-against this directory and the dashboard reports two orphans and one wanted
-page — all three on purpose.
+against this directory and the dashboard reports two orphans and two wanted
+pages — all four on purpose.
 
 Nothing here is special. It is markdown in a directory; delete the whole thing
 and point `RHIZOLOG_ROOT` at your own notes.
@@ -99,10 +99,11 @@ The three that are not assembled are why the book is shaped the way it is:
 
 - **A chapter nobody has written.** `book/two/the-crossing` holds its position
   rather than being skipped, so the manuscript says where the missing chapter was
-  going to go. Write the page and it fills with nothing to reindex. It does *not*
-  move the wanted-page count above, which counts wikilinks: a gap in a contents
-  list is a gap in a manuscript, and the two are different statements. It is a
-  wanted node in `/api/graph` all the same.
+  going to go. Write the page and it fills with nothing to reindex. It is also
+  the second of the two wanted pages this wiki reports, beside the one
+  [[notes/rust/async]] links to: naming a page and not writing it is the same
+  statement whether it was said in a wikilink or in a contents list, and a
+  chapter you have outlined is if anything the more deliberate of the two.
 - **A page in two places.** `book/appendix` is listed under both parts, because a
   timetable belongs with the outward leg and the return equally. The second
   position reports `duplicate`, which is the manifest working rather than
@@ -114,6 +115,11 @@ The three that are not assembled are why the book is shaped the way it is:
   typo in a list of chapters must not take the page holding the book together out
   of every listing. Every entry is a slug from the wiki root, so the spelling that
   works is `book/one/the-ferry`, which Part One already assembles anyway.
+
+  It is the one thing here the manifest reports and nothing else does. It is not
+  drawn in the graph and it is not a third wanted page, because a wanted page is
+  somewhere the dashboard suggests you write, and no wiki should be invited to
+  write `../one/the-ferry`.
 
 `?assembled=1` on the same page renders the whole thing, with headings shifted by
 depth: the book's `#`, each part's `##`, each chapter's `###`. Nothing is
@@ -245,7 +251,7 @@ opinion about your voice.
 `GET /api/prose/rules` reports them with their defaults filled in and a digest
 over the lot, so an assistant handed a finding can reproduce it without reading
 the file. `GET /api/prose?slug=index` runs them over this page and should answer
-**10 errors and 65 warnings**: an em dash for each of the first, and a word used
+**10 errors and 69 warnings**: an em dash for each of the first, and a word used
 twice inside eight of another for each of the second.
 
 The first rule is the one this project holds itself to, and it is written with

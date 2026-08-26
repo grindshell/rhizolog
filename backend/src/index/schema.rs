@@ -53,7 +53,14 @@
 /// it. An index written before this has none of it, and the series would come
 /// back empty rather than wrong. Rebuilding reads the log, which is a few
 /// hundred kilobytes and is the only reason it was worth putting on disk.
-pub const SCHEMA_VERSION: i64 = 12;
+///
+/// Version 13 adds `page_parts.is_slug`, which is [`crate::slug::Slug::parse`]
+/// answered once at index time instead of by every reader. An index written
+/// before it defaults the column to nothing, and a contents entry that is not a
+/// slug would then be advertised as a page worth writing. That is the bump
+/// where not rebuilding puts `../etc/passwd` on the dashboard, so it is closer
+/// to version 7 than to a stale row.
+pub const SCHEMA_VERSION: i64 = 13;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -234,10 +241,19 @@ create index links_by_target on links(target);
 -- with nothing to reindex. It is not a `references`, for the same reason: a
 -- contents list may name a page that does not exist yet, and that is a gap in
 -- the manuscript rather than an error.
+--
+-- Which means a mistyped entry is in this table: `../etc/passwd` is stored as
+-- written, because the manifest has to report it as `invalid` in its own
+-- position. `is_slug` is whether it parses, decided once by `Slug::parse` when
+-- the row is written. The rule is security-critical and belongs in exactly one
+-- place, so no reader spells it again -- the graph filtered these rows in Rust
+-- until this column existed, and a query that forgot to would have advertised a
+-- path as a page somebody should write.
 create table page_parts (
     src_slug text    not null references pages(slug) on delete cascade,
     ordinal  integer not null,
     target   text    not null,
+    is_slug  integer not null,
     primary key (src_slug, ordinal)
 ) strict;
 

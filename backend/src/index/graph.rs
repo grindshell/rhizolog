@@ -251,7 +251,7 @@ fn visible_link() -> String {
     )
 }
 
-/// A row in the spine this audience can see.
+/// A row in the spine that names a page, and that this audience can see.
 ///
 /// Both of [`visible_link`]'s conditions, for both of its reasons. The first is
 /// obvious: a chapter list is written on a page, and naming the page is naming
@@ -264,9 +264,19 @@ fn visible_link() -> String {
 /// whether a page has a parent, which is answered entirely from the parent's
 /// side. Adding it costs nothing there: the target of that question is a page
 /// the caller can already see, so the condition is trivially true.
+///
+/// And one condition [`visible_link`] has no need of, because `links.target`
+/// comes off a parser and `page_parts.target` is whatever somebody typed into
+/// frontmatter. An entry that is not a slug is not a row of the spine at all: it
+/// is a typo, reported as `invalid` in its own position by the manifest, which
+/// is the one reader that should ever see it. Everything else drops it here.
+/// This lived in the graph loader as a `Slug::parse` call until `is_slug` was a
+/// column, and the trouble with that spelling is that it was one query's private
+/// caution rather than a property of the rows.
 fn visible_part() -> String {
     format!(
-        "exists (
+        "page_parts.is_slug = 1
+         and exists (
              select 1 from pages as parent
              where parent.slug = page_parts.src_slug and {parent}
          )
@@ -298,6 +308,40 @@ fn referenced() -> String {
              select 1 from page_parts
              where page_parts.target = pages.slug and {part}
          )",
+        link = visible_link(),
+        part = visible_part(),
+    )
+}
+
+/// Every slug something names and nothing has written, with what named it.
+///
+/// The mirror of [`referenced`], and it has to be the same union or the two
+/// numbers this module exists for stop describing the same wiki from either
+/// end. `referenced` decided that a wikilink and a `contents:` entry are one
+/// question when asking whether anything points *at* a page; asking what points
+/// at a page that is not there is that question turned around, and answering it
+/// from `links` alone reported a book with an outlined, unwritten chapter as a
+/// wiki wanting nothing.
+///
+/// A chapter somebody put in a contents list is the strongest statement this
+/// wiki has that a page ought to exist. It is more deliberate than a wikilink,
+/// not less.
+///
+/// `union` and not `union all`, which is what makes the caller's `count(*)` per
+/// target a count of **referrers** rather than of mentions: a page that both
+/// links to a missing chapter and lists it collapses to one, exactly as the
+/// graph collapses those two into one line.
+fn named_but_unwritten() -> String {
+    format!(
+        "select links.target as target, links.src_slug as source
+         from links
+         where {link}
+           and not exists (select 1 from pages where pages.slug = links.target)
+         union
+         select page_parts.target as target, page_parts.src_slug as source
+         from page_parts
+         where {part}
+           and not exists (select 1 from pages where pages.slug = page_parts.target)",
         link = visible_link(),
         part = visible_part(),
     )
@@ -490,15 +534,11 @@ impl Index {
                 })?;
                 for row in rows {
                     let (source, target) = row?;
-                    // `page_parts.target` is the entry as it was written, so a
-                    // mistyped one is in there: `../etc/passwd` is `invalid` in
-                    // the manifest and must not become a node here, because a
-                    // wanted node is an invitation to write the page. A valid
-                    // slug nobody has written is a different thing entirely, and
-                    // it is exactly the gap the graph should show.
-                    if Slug::parse(&target).is_err() {
-                        continue;
-                    }
+                    // No `Slug::parse` here any more: `visible_part` drops an
+                    // entry that is not one, so `../etc/passwd` never reaches a
+                    // node. A wanted node is an invitation to write the page,
+                    // and a valid slug nobody has written is a different thing
+                    // entirely: exactly the gap the graph should show.
                     collapsed.entry((source, target)).or_default().part = true;
                 }
             }
@@ -775,12 +815,11 @@ impl Index {
             // A link to a page this caller cannot read is already gone from
             // `visible_link`, so it is not counted here — which is the whole
             // point. Counting it would report a private page as one that wants
-            // writing, and name it.
+            // writing, and name it. The same holds of `visible_part`.
             let wanted_count: i64 = connection.query_row(
                 &format!(
-                    "select count(distinct links.target) from links
-                     where {visible_link}
-                       and not exists (select 1 from pages where pages.slug = links.target)"
+                    "select count(distinct target) from ({named})",
+                    named = named_but_unwritten()
                 ),
                 visible.as_slice(),
                 |row| row.get(0),
@@ -800,13 +839,12 @@ impl Index {
             let top_n = TOP_N as i64;
 
             let mut wanted_query = connection.prepare(&format!(
-                "select links.target, count(distinct links.src_slug) as referrers
-                 from links
-                 where {visible_link}
-                   and not exists (select 1 from pages where pages.slug = links.target)
-                 group by links.target
-                 order by referrers desc, links.target asc
-                 limit :top_n"
+                "select target, count(*) as referrers
+                 from ({named})
+                 group by target
+                 order by referrers desc, target asc
+                 limit :top_n",
+                named = named_but_unwritten()
             ))?;
             let wanted = wanted_query
                 .query_map(
@@ -1705,6 +1743,72 @@ mod tests {
 
         assert_eq!(slugs(&graph), ["book", "book/one"]);
         assert_eq!(pairs(&graph), [("book", "book/one")]);
+    }
+
+    /// The mirror of the orphan union, and the reason it has to be one.
+    ///
+    /// The drawing said this page was wanted and the number beside it did not,
+    /// because `referenced` unioned the spine in and the wanted count never did.
+    #[tokio::test]
+    async fn a_chapter_nobody_has_written_is_a_wanted_page() {
+        let index = book().await;
+        index
+            .upsert(&contents(
+                "book/two",
+                &["book/two/the-ferry"],
+                "## Part two\n",
+            ))
+            .await
+            .unwrap();
+
+        let stats = index.stats(&EVERYONE).await.unwrap();
+
+        assert_eq!(stats.wanted_count, 1);
+        assert_eq!(stats.wanted[0].slug, "book/two/the-ferry");
+        assert_eq!(stats.wanted[0].referrers, 1);
+    }
+
+    /// The guard that made this a column rather than one query's private
+    /// caution. A wanted page is named on the dashboard as somewhere to write,
+    /// so the one entry that must never reach it is the one nobody typed as a
+    /// slug.
+    #[tokio::test]
+    async fn a_contents_entry_that_is_not_a_slug_is_not_a_wanted_page() {
+        let index = index().await;
+        index
+            .upsert(&contents(
+                "book",
+                &["../etc/passwd", "book/one"],
+                "# The book\n",
+            ))
+            .await
+            .unwrap();
+
+        let stats = index.stats(&EVERYONE).await.unwrap();
+
+        assert_eq!(stats.wanted_count, 1);
+        assert_eq!(stats.wanted[0].slug, "book/one");
+    }
+
+    /// `union` rather than `union all`. One page wanting one page is one
+    /// referrer, however many ways it said so, which is what the graph already
+    /// does when it collapses a link and a part into a single line.
+    #[tokio::test]
+    async fn naming_a_missing_chapter_twice_over_is_one_referrer() {
+        let index = index().await;
+        index
+            .upsert(&contents(
+                "book",
+                &["book/one"],
+                "# The book\n\nIt starts at [[book/one]].\n",
+            ))
+            .await
+            .unwrap();
+
+        let stats = index.stats(&EVERYONE).await.unwrap();
+
+        assert_eq!(stats.wanted_count, 1);
+        assert_eq!(stats.wanted[0].referrers, 1);
     }
 
     /// One line, carrying both, because the wiki has one relationship to draw
