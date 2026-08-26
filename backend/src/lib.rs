@@ -16,6 +16,7 @@ pub mod ideas;
 pub mod index;
 pub mod markdown;
 pub mod page;
+pub mod prose;
 pub mod server;
 pub mod slug;
 pub mod store;
@@ -37,6 +38,7 @@ pub use ideas::{
 };
 pub use index::{Index, IndexError, SyncReport};
 pub use page::{Frontmatter, Page, PageError};
+pub use prose::{Analysis, Finding, ProseError, Rule, Ruleset, Severity};
 pub use server::Server;
 pub use slug::{Slug, SlugError};
 pub use store::{Store, StoreError};

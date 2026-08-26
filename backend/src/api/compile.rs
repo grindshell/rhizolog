@@ -30,9 +30,9 @@ use crate::store::{Store, StoreError};
 /// against the file that was just read rather than against the index, exactly as
 /// `GET /api/pages/{slug}` does, so a page whose frontmatter changed a moment
 /// ago is not compiled under its old visibility.
-struct Readable<'a> {
-    store: &'a Store,
-    viewer: &'a Viewer,
+pub(crate) struct Readable<'a> {
+    pub store: &'a Store,
+    pub viewer: &'a Viewer,
 }
 
 impl Pages for Readable<'_> {

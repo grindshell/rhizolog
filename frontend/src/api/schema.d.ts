@@ -681,6 +681,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/prose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Check a page, or everything it compiles to. */
+        get: operations["read_prose"];
+        put?: never;
+        /**
+         * Check markdown without storing it.
+         * @description The editor's path, and it matches `POST /api/render`, which already takes
+         *     markdown and returns something derived from it. Nothing is read or written
+         *     except the rules file, so this is safe to call on a debounce.
+         *
+         *     A wiki with no rules file is not an error here. It is the ordinary case, and
+         *     the answer is no findings.
+         */
+        post: operations["check_prose"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/prose/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The rules, as the analyzer resolved them.
+         * @description Normalized rather than the file's bytes, because a caller wanting to
+         *     reproduce a finding needs the values the analyzer used, and TOML has more
+         *     than one way to write most of them.
+         *
+         *     Not writable through the API in this version. The file is authored
+         *     configuration, editing it is a text edit, and a second way to write it would
+         *     be a second place for it to be wrong.
+         */
+        get: operations["read_prose_rules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reindex": {
         parameters: {
             query?: never;
@@ -1427,6 +1479,48 @@ export interface components {
          * @enum {string}
          */
         EventKind: "capture_connected" | "capture_disconnected" | "candidate_rejected" | "candidate_reconsidered" | "interest_affirmed" | "capture_archived" | "capture_restored" | "capture_deleted" | "idea_retired" | "idea_reopened" | "idea_promoted" | "rediscovery_dismissed";
+        FindingView: {
+            /** @example late repeated within 12 words */
+            message: string;
+            /**
+             * @description The text the rule fired on, cut from the source at exactly `span`.
+             *
+             *     Nothing around it: a caller that wants context has the offsets and the
+             *     text, and a context window would be a number nobody asked for. Render it
+             *     as text and never as HTML. Page content is what agents write.
+             * @example the ferry was late, and being late was the only thing it had ever been
+             */
+            quote: string;
+            /**
+             * @description The numbers the rule actually compared.
+             *
+             *     Without it, "late repeated within 12 words" is a sentence asking to be
+             *     believed rather than an arithmetic anybody can check. Its shape depends
+             *     on the rule: token positions and a distance for `echo`, sentence lengths
+             *     and a mean for `uniformity`, both spellings and both counts for
+             *     `consistent`, the matched literal for `forbid` and `phrase`.
+             */
+            receipt: unknown;
+            /**
+             * @description The `id` of the rule that fired.
+             * @example echo
+             */
+            rule: string;
+            /**
+             * @description `error` or `warn`, as the rule declares it. It carries no behaviour:
+             *     nothing here blocks a save.
+             * @example warn
+             */
+            severity: string;
+            /**
+             * @description Which page this fell in. Only on a compiled report, where it is the whole
+             *     point: a finding over a whole book is no use if it cannot say which
+             *     chapter owns it.
+             * @example book/one/the-ferry
+             */
+            slug?: string | null;
+            span: components["schemas"]["SpanView"];
+        };
         GraphEdgeView: {
             /**
              * @description `wiki`, `internal`, or both when the same page is linked twice over.
@@ -1855,6 +1949,52 @@ export interface components {
              * @example 7200
              */
             seconds: number;
+        };
+        /**
+         * @description One rule as `GET /api/prose/rules` reports it.
+         *
+         *     Flat rather than tagged by kind, and each option present only on the rules
+         *     that have it. A caller reproducing a finding needs the values the analyzer
+         *     used, and TOML has more than one way to write most of them.
+         */
+        NormalizedRule: {
+            allow?: string[] | null;
+            /** @example 1 */
+            distance?: number | null;
+            /** @example no-em-dash */
+            id: string;
+            ignore?: string[] | null;
+            /**
+             * @description One of `forbid`, `phrase`, `echo`, `uniformity`, `consistent`.
+             * @example forbid
+             */
+            kind: string;
+            /**
+             * @description The shortest a spelling may be and still be taken for a name.
+             * @example 4
+             */
+            length?: number | null;
+            literals?: string[] | null;
+            /**
+             * @description What a finding says, when the rules file gave one. Absent means the rule
+             *     describes its own findings.
+             */
+            message?: string | null;
+            phrases?: string[] | null;
+            /** @example 5 */
+            run?: number | null;
+            /**
+             * @description `error` or `warn`.
+             * @example warn
+             */
+            severity: string;
+            /**
+             * Format: double
+             * @example 3
+             */
+            spread?: number | null;
+            /** @example 40 */
+            within?: number | null;
         };
         OutboundLinkView: {
             /**
@@ -2337,6 +2477,58 @@ export interface components {
              */
             pins: components["schemas"]["PinView"][];
         };
+        ProseReport: {
+            /**
+             * @description Which analyzer produced this. Changing any rule's arithmetic, the
+             *     tokenizer or the sentence splitter is a version change here, following
+             *     `tfidf/v1`.
+             * @example prose/v1
+             */
+            analyzer: string;
+            /** @example 0 */
+            errors: number;
+            /** @description Ordered by start offset, then by rule id. */
+            findings: components["schemas"]["FindingView"][];
+            /**
+             * @description What `span` indexes: `page` for one page's body, `document` for a
+             *     compiled manuscript.
+             * @example page
+             */
+            offsets: string;
+            /**
+             * @description The stamp of the ruleset these findings came from.
+             *
+             *     The same string `GET /api/prose/rules` reports. A finding and a ruleset
+             *     that disagree on it were produced from different rules, which is
+             *     otherwise an invisible way to be confidently wrong about why something
+             *     fired.
+             * @example sha256:9f2bcd00
+             */
+            rules_digest: string;
+            /**
+             * @description The page asked about. Absent when the body was posted rather than stored.
+             * @example book/one/the-ferry
+             */
+            slug?: string | null;
+            /**
+             * @description Whether the list was cut short.
+             *
+             *     A `forbid` rule naming one common letter would otherwise return a finding
+             *     per occurrence across a whole book. Unlike a compile, a short answer here
+             *     is safe to give because it says it is short.
+             */
+            truncated: boolean;
+            /** @example 4 */
+            warnings: number;
+        };
+        /** @description Markdown to check, for an editor that has not saved yet. */
+        ProseRequest: {
+            /**
+             * @description Markdown body, without frontmatter.
+             * @example The ferry was late, and being late was all it had ever been.
+             */
+            content: string;
+        };
         /**
          * @description Why an idea is in the state it is in.
          *
@@ -2518,6 +2710,22 @@ export interface components {
              */
             route: string;
         };
+        RulesView: {
+            /** @example prose/v1 */
+            analyzer: string;
+            /**
+             * @description Every rule, sorted by `id`, with its options resolved and its defaults
+             *     filled in. A wiki that has never written rules answers an empty list
+             *     rather than a `404`: no rules is a state a wiki is genuinely in.
+             */
+            rules: components["schemas"]["NormalizedRule"][];
+            /**
+             * @description Taken over the normalized rules below rather than over the file's bytes,
+             *     so a caller can recompute it from this response and check.
+             * @example sha256:9f2bcd00
+             */
+            rules_digest: string;
+        };
         SearchHitView: {
             /**
              * Format: double
@@ -2677,6 +2885,15 @@ export interface components {
          * @example notes/rust/async
          */
         Slug: string;
+        SpanView: {
+            /** @example 1908 */
+            end: number;
+            /**
+             * @description Byte offset, not a character index and not a position in rendered HTML.
+             * @example 1840
+             */
+            start: number;
+        };
         StatsResponse: {
             /** @description API calls per route since the wiki was created, busiest first. */
             api_usage: components["schemas"]["RouteUsageView"][];
@@ -4892,6 +5109,151 @@ export interface operations {
             };
             /** @description That page was not pinned */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_prose: {
+        parameters: {
+            query: {
+                /**
+                 * @description The page to check.
+                 * @example book/one/the-ferry
+                 */
+                slug: string;
+                /**
+                 * @description Check what this page **compiles to** rather than its own body.
+                 *
+                 *     The whole manuscript, assembled exactly as `GET /api/compile` assembles
+                 *     it. Two of the five rules are cross-page questions by nature: a name
+                 *     spelled two ways in two chapters, and a word echoed across a section
+                 *     break, are invisible to anything reading one page at a time.
+                 *
+                 *     It moves what the offsets mean. See `offsets` on the response.
+                 * @example true
+                 */
+                compiled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The findings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProseReport"];
+                };
+            };
+            /** @description The slug is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No page there, or none this caller may read */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Compiling it exceeded a limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The rules file will not parse */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    check_prose: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProseRequest"];
+            };
+        };
+        responses: {
+            /** @description The findings over the submitted body */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProseReport"];
+                };
+            };
+            /** @description The request body is not valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The rules file will not parse */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_prose_rules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The normalized ruleset and its digest */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulesView"];
+                };
+            };
+            /** @description The rules file will not parse */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,8 +1,9 @@
 # Long-form writing
 
-Status: **planned**. Nothing here is built. This page is the implementation
-plan and the reasoning behind it; where it and the code eventually disagree, the
-code is what runs and this page is why.
+Status: **part built**. L0, L1 and L2 are in; L3 and L4 are not. This page is
+still the implementation plan and the reasoning behind it, with a record of what
+each phase actually turned out to be appended as it landed. Where it and the code
+disagree, the code is what runs and this page is why.
 
 Rhizolog can capture a thought, turn it into a page, and say where the hours
 went. What it cannot do is anything that happens after a first draft exists. A
@@ -634,6 +635,7 @@ id       = "names"
 kind     = "consistent"
 severity = "warn"
 distance = 1
+length   = 4
 allow    = ["Kaltenbrunner", "Kaltenbruner"]
 ```
 
@@ -645,7 +647,10 @@ the parser has to accept the escape and the documentation has to demonstrate it.
 `id` is required and unique; a duplicate is `prose_rules_invalid` rather than a
 last-one-wins. `severity` is `error` or `warn` and carries no behaviour, since
 nothing here blocks a save; it is what the dashboard sorts and colours by.
-`message` defaults to the rule's `id`.
+`message` is optional and replaces what the rule would have said for itself. It
+does **not** default to the rule's `id`, which is what this page said before L2
+and which would have printed the id twice: see
+[What L2 turned out to be](#what-l2-turned-out-to-be).
 
 ### Tokenization, shared with the word counter
 
@@ -656,6 +661,9 @@ Every rule that talks about words uses one tokenizer, and it is the one
 2. Lowercase with Rust's Unicode lowercase conversion.
 3. Split at characters for which `char::is_alphanumeric` is false.
 4. Keep non-empty tokens in source order, each with its byte span in the source.
+
+Steps two and three swap places in the built version, and step four is why. See
+[What L2 turned out to be](#what-l2-turned-out-to-be).
 
 No stemming and no stop-word list, for the reason that page already gives: every
 signal shown appears literally in text the writer wrote. So `delve` does not
@@ -689,7 +697,10 @@ rule about spelling and reads the token as written.
   distance at most `distance`, where neither is in `allow`. Reports every
   occurrence of the rarer spelling. The receipt carries both spellings and both
   counts. It is the one rule nobody wrote and the one with real false positives,
-  which is why it is also the only one with an `allow` list.
+  which is why it is also the only one with an `allow` list. Two further filters
+  turned out to be necessary before it said anything true at all, and they are
+  the substantial change L2 made to this section:
+  [What L2 turned out to be](#what-l2-turned-out-to-be).
 
 Two rules may fire on overlapping spans and both are reported: suppressing one
 would mean ranking rules against each other, and the author wrote them all.
@@ -783,27 +794,29 @@ and that is exactly why it is the one with an `allow` list.
 | `GET` | `/api/compile` | Assemble from `root`; `format`, `style` |
 | `GET` | `/api/word-stats` | The series, by day and by actor; `offset`, `from`, `to` |
 | `POST` | `/api/prose` | Findings over a body, for the editor, like `/api/render` |
-| `GET` | `/api/prose` | Findings over `slug`, or over a whole `root` |
+| `GET` | `/api/prose` | Findings over `slug`, or over what it assembles with `compiled` |
 | `GET` | `/api/prose/rules` | The normalized ruleset and its digest |
 
 Plus fields rather than endpoints: `words` on the page listing and read, `target`,
 `due` and compiled `progress` on a page that carries them.
 
-`/api/prose` takes `slug` and `root` as query parameters for the catch-all reason
-given above. `POST /api/prose` is the editor's path and matches `/api/render`,
-which already takes markdown and returns something derived from it.
-`/api/prose/rules` is a fixed segment under it and cannot collide with anything,
-since `/api/prose` takes no path parameter at all.
+`/api/prose` takes its page as a query parameter for the catch-all reason given
+above. `POST /api/prose` is the editor's path and matches `/api/render`, which
+already takes markdown and returns something derived from it. `/api/prose/rules`
+is a fixed segment under it and cannot collide with anything, since `/api/prose`
+takes no path parameter at all.
 
-Errors keep the standard envelope. At minimum: `compile_root_not_found`,
-`compile_too_large`, `prose_rules_invalid`, `prose_rules_missing`.
-A missing rules file is not an error at `POST /api/prose` (there is nothing to
-check against, and a wiki that has never written rules is the ordinary case), but
-it is worth distinguishing from a rules file that will not parse, which is a
-mistake somebody just made and wants to hear about. `GET /api/prose/rules` on a
-wiki with no rules file answers an empty ruleset rather than `404`: no rules is a
-state the wiki is genuinely in, and it is the answer a caller asking what the
-rules are should get.
+Errors keep the standard envelope: `compile_root_not_found`, `compile_too_large`,
+`prose_rules_invalid`. A missing rules file is not an error at `POST /api/prose`
+(there is nothing to check against, and a wiki that has never written rules is
+the ordinary case), but it is worth distinguishing from a rules file that will
+not parse, which is a mistake somebody just made and wants to hear about.
+`GET /api/prose/rules` on a wiki with no rules file answers an empty ruleset
+rather than `404`: no rules is a state the wiki is genuinely in, and it is the
+answer a caller asking what the rules are should get. A fourth code,
+`prose_rules_missing`, was named here and then left unimplemented, because those
+two sentences between them rule out every place it could fire. See
+[What L2 turned out to be](#what-l2-turned-out-to-be).
 
 ## Backend module seams
 
@@ -905,6 +918,8 @@ no longer an orphan in `/api/stats`, and each of the three limits refuses with
 `compile_too_large` naming the slug rather than returning a short document.
 
 ### L2: `prose/v1`
+
+**Built.** See [What L2 turned out to be](#what-l2-turned-out-to-be).
 
 The rules file, its normalization and digest, the five rule kinds, all three
 endpoints.
@@ -1114,6 +1129,184 @@ A scratch book of three files, none of them written through the API: a root with
 document with `#`, `##` and `###` nesting, the setext heading converted, both bad
 entries reported in position at the right depths, offsets that index into the
 returned bytes, and an orphan list holding only the root.
+
+## What L2 turned out to be
+
+`prose/{mod,rules,text}.rs` is the analyzer, `api/prose.rs` is the seam to HTTP,
+and `markdown::extract` is the piece neither this page nor L0 had thought of.
+Eight things differ from what is written above, and two of them are the rule
+`consistent` needed in order to be usable at all.
+
+### Spans survive because nothing is extracted
+
+The plan says a finding's spans are byte offsets into the page source, and says
+separately that the tokenizer takes "the text extracted from the AST". Those two
+sentences are in tension, and the second one loses: an offset into a
+concatenation of literals is an offset into a string nobody has.
+
+So there is no concatenation. `markdown::extract` returns the body **byte for
+byte** with every byte that is not prose replaced by a space, newlines kept as
+newlines. Code, raw HTML, image alt text, footnote markers, link targets and
+every piece of markdown punctuation in between are simply blanked. Every offset
+into the result is already an offset into the body, with no mapping in between to
+get wrong. `every_token_indexes_the_source_it_came_from` is the test, and the
+integration test reproduces a finding from its own receipt against the page as
+`GET /api/pages` returns it.
+
+That rests on comrak filling in **inline** sourcepos, which it does, and on its
+columns being **byte** offsets within their line, which they are. Both were
+checked against the parser before anything was built on them, because the whole
+design falls over if either is false.
+
+It disagrees with `count_words` in exactly one narrow place, and the difference
+is stated in both modules: markup *inside* a word. `un*believable*` is one word
+to the counter, which follows the literals, and two tokens here, because the `*`
+between them is blanked. The decision that matters, which nodes are prose at all,
+is one `match` that both walks call, so the two cannot drift about whether a
+footnote is prose.
+
+Case folding moved for the same reason. `tfidf/v1` lowercases the whole string
+before splitting; Rust's lowercase conversion can change a string's length, so
+doing that here would move every offset after the first such character. The split
+happens over the text as written and each token is folded on its own. `forbid`,
+which searches the text rather than the tokens, folds **ASCII case only**, which
+is the most that can be done without lowercasing the haystack.
+
+### `?compiled=true`, not `?root=`
+
+The plan gives `GET /api/prose` a `slug` **or** a `root`, exactly one of which
+must be present. That shape needs an error for "you gave me neither" and another
+for "you gave me both", neither of which says anything useful. `slug` is required
+and `compiled` is a flag: findings over that page, or over everything it
+assembles. It reads the way `?render=true` and `?assembled=1` already read, and a
+caller does not have to know the word root.
+
+`compiled` is not a convenience. Two of the five rules are cross-page questions by
+nature: a name spelled two ways in two chapters, and a word echoed across a
+section break, are invisible to anything reading one page at a time.
+`a_repeat_across_a_chapter_break_is_only_visible_compiled` is the test.
+
+It moves what the offsets mean, so the response says which it gave: `offsets` is
+`page` or `document`. Compiled offsets index the assembled document rather than
+any one page's source, because the heading shift moves bytes inside a section.
+Each finding carries the `slug` it fell in, which is what the manifest was for,
+and a finding that straddles a chapter break belongs to the section it starts in.
+
+### `consistent` needed two filters nobody had thought of
+
+Run against this repository's own documents, the rule as specified reported
+almost nothing but false positives: `If` beside `It`, `They` beside `The`, `L0`
+beside `L1`, `UTF` beside `UTC`. Seventy-three findings on this page alone, none
+of them a name. `allow` is the plan's answer and it is the wrong shape for this:
+every wiki would have to enumerate the same list of English sentence openers
+before the rule said anything.
+
+Two filters, and both are about what a name *is* rather than about taste:
+
+- **Capitalised somewhere a capital was not already forced.** A proper noun is
+  capitalised in the middle of a sentence too. `If` and `It` are not two
+  spellings of one name, they are two ordinary words that only ever start one.
+  `text::opens_a_sentence` is deliberately conservative, since every case it gets
+  wrong costs a candidate rather than inventing one.
+- **At least `length` characters**, a new option defaulting to 4. What survived
+  the first filter was initialisms and labels, which are one edit apart on
+  purpose. A wiki with a three-letter name lowers the number.
+
+Together they take `consistent` from seventy-three findings on this page to
+**zero**, and from five on `AGENTS.md` to zero, while
+`consistent_reports_every_occurrence_of_the_rarer_spelling` still catches
+`Kaltenbruner`. `allow` stays for what is left, which is what it was always for.
+
+### `message` says what the rule found, not what the rule is called
+
+The plan says `message` defaults to the rule's `id`. It cannot: a finding already
+carries `rule`, so defaulting to the id would print the same string twice and
+throw away the one sentence the rule had to offer. This page's own example proves
+it, since the `echo` rule there has `id = "echo"` and the example finding says
+"late repeated within 12 words".
+
+So each rule describes its own findings, and a `message` in the file replaces
+that description rather than filling a gap. `forbid` and `phrase` name the literal
+they matched; the other three say the arithmetic. Nothing is lost when an author
+overrides one, because the receipt carries the numbers either way.
+
+### Rhythm is a property of a paragraph
+
+`uniformity` reads sentences only from paragraphs, and a sentence never crosses
+from one paragraph into the next. Headings, table cells and list items contribute
+none.
+
+A list is uniform by construction. Measuring one means firing on every bulleted
+list in the wiki, which is a rule nobody leaves switched on. A run may still span
+consecutive paragraphs, because five one-sentence paragraphs of the same length
+is the same tell as five sentences of the same length in one.
+
+Sentence splitting is the hazard the plan said it was, and its known failure is
+pinned by a test rather than left accidental: `Dr. Kaltenbrunner` splits wrongly
+and always will without a list of abbreviations.
+
+### A findings list is capped, and says so
+
+`MAX_FINDINGS` is 1,000. A `forbid` rule naming one common letter would otherwise
+return a finding per occurrence across a whole book.
+
+This is the opposite of the compile limits and deliberately so. A truncated
+manuscript is dangerous because it looks complete; a truncated findings list
+carries `truncated: true` and is therefore not pretending to be anything. Nothing
+in this repository's own documents comes close: the worst is 348.
+
+### `prose_rules_missing` has nowhere to be
+
+The plan lists it as an error and then, two paragraphs later, rules out both
+places it could fire: a missing rules file is not an error at `POST /api/prose`,
+and `GET /api/prose/rules` answers an empty ruleset rather than a `404`. It is not
+implemented, because an error code with no site is a promise to callers that
+nothing can keep.
+
+`prose_rules_invalid` is a **422**, which is the status a page whose frontmatter
+will not parse already gets, and for the same reason: the request is well formed
+and the authored file it reaches for is not. Its details name the file as well as
+the reason, since the one thing a remote caller cannot do is go and look.
+
+A `toml` dependency came with all this, parsing only. A rules file is largely a
+list of things somebody is trying not to write, and TOML's `\uXXXX` escape is how
+you name a character your repository may not contain. The parser strips a leading
+byte order mark, because PowerShell's `Out-File` writes one and a BOM has already
+cost this project a real bug.
+
+### Verified against this repository's own documents
+
+A scratch wiki holding copies of `AGENTS.md`, this page and
+[Architecture](architecture.md), and a `prose.toml` with all five rules in it.
+Three things came out of it:
+
+- **The em dash rule fires exactly where it should.** On a page with the
+  character in prose, in inline code and in a fence, it reports **one** finding,
+  the prose one. On `AGENTS.md` it reports **none**, which is the right answer
+  and a slightly surprising one: that file's single em dash is inside backticks,
+  which is exactly what makes it a specimen rather than prose.
+- **`consistent` reports nothing false**, after the two filters above.
+- **`echo` is as noisy as its configuration lets it be.** At `within = 12` with
+  an eleven-word `ignore` list it found 63 repeats in `AGENTS.md` and 348 here.
+  That is the rule working: it is a lexical count, `ignore` is the only lever,
+  and the plan's example value of 40 is far more aggressive than it looks. Worth
+  knowing before the dashboard shows anybody a number.
+
+And one finding that is about this repository rather than about the code:
+**the knowledge base carries 353 em dashes**, across thirteen pages, all of them
+in prose. The house rule in `AGENTS.md` has been enforced on new writing and never
+applied backwards. Fixing that is a prose edit across thirteen files and not part
+of this phase, but the linter found it in one request, which is the first time
+anything here has paid for itself.
+
+### There is no starter rules file, and there is nowhere for one
+
+The plan says the `phrase` list ships "as a starter file rather than compiled in".
+Nothing shipped, because a `prose.toml` belongs to a wiki and this repository is
+not one: `backend/wiki/` is gitignored and `example-wiki/` is a fixture whose
+contents the documentation makes claims about. The starter is the example under
+[The rules file](#the-rules-file), and finding it a home is part of L4's
+documentation closure.
 
 ## Test strategy
 

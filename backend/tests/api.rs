@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 struct App {
-    _directory: TempDir,
+    directory: TempDir,
     router: Router,
 }
 
@@ -57,7 +57,7 @@ impl App {
                 secure_cookies: false,
                 anonymous_read: false,
             }),
-            _directory: directory,
+            directory,
         }
     }
 
@@ -115,6 +115,17 @@ impl App {
 
     async fn delete(&self, path: &str) -> Res {
         self.send(Method::DELETE, path, None).await
+    }
+
+    /// Write `.rhizolog/prose.toml` into this wiki.
+    ///
+    /// Straight to disk, because there is no API that writes it: the rules are
+    /// authored configuration, and a second way to write them would be a second
+    /// place for them to be wrong.
+    fn rules(&self, toml: &str) {
+        let internal = self.directory.path().join(".rhizolog");
+        std::fs::create_dir_all(&internal).expect("internal directory");
+        std::fs::write(internal.join("prose.toml"), toml).expect("write the rules");
     }
 
     /// Create a page, asserting it worked.
@@ -199,7 +210,7 @@ async fn usage_counts_survive_a_restart() {
                 secure_cookies: false,
                 anonymous_read: false,
             }),
-            _directory: wiki,
+            directory: wiki,
         };
 
         for _ in 0..3 {
@@ -231,7 +242,7 @@ async fn usage_counts_survive_a_restart() {
             secure_cookies: false,
             anonymous_read: false,
         }),
-        _directory: wiki,
+        directory: wiki,
     };
 
     assert_eq!(
@@ -1592,6 +1603,310 @@ async fn removing_a_chapter_from_the_spine_makes_it_an_orphan_again() {
         .await;
 
     assert_eq!(app.get("/api/stats").await.body["orphan_count"], 2);
+}
+
+// ----------------------------------------------------------------- prose
+
+/// This repository's own rule, written the way the file has to be written: with
+/// an escape, because the file that configures it may not contain the character.
+const NO_EM_DASH: &str = "[[rule]]\n\
+                          id = \"no-em-dash\"\n\
+                          kind = \"forbid\"\n\
+                          severity = \"error\"\n\
+                          literals = [\"\\u2014\"]\n\
+                          message = \"em dash\"\n";
+
+/// The whole promise of `GET /api/prose/rules`, tested as a remote caller would
+/// have to live it: reconstruct the finding from the receipt and the ruleset,
+/// without reading `prose.toml` and without reading the implementation.
+#[tokio::test]
+async fn a_finding_can_be_reproduced_from_the_rules_and_its_own_receipt() {
+    let app = App::new().await;
+    app.rules(
+        "[[rule]]\nid = \"echo\"\nkind = \"echo\"\nwithin = 6\nignore = [\"the\", \"was\"]\n",
+    );
+    app.seed(
+        "chapter",
+        json!({ "content": "The ferry was late, and late was all it was.\n" }),
+    )
+    .await;
+
+    let rules = app.get("/api/prose/rules").await;
+    assert_eq!(rules.status, StatusCode::OK);
+    assert_eq!(rules.body["analyzer"], "prose/v1");
+
+    let rule = &rules.body["rules"].as_array().expect("rules")[0];
+    assert_eq!(rule["id"], "echo");
+    assert_eq!(rule["kind"], "echo");
+    assert_eq!(rule["within"], 6, "the value the analyzer used, resolved");
+    assert_eq!(rule["ignore"], json!(["the", "was"]));
+
+    let res = app.get("/api/prose?slug=chapter").await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["offsets"], "page");
+    assert_eq!(
+        res.body["rules_digest"], rules.body["rules_digest"],
+        "a finding and the ruleset it came from have to agree on the stamp"
+    );
+
+    let finding = &res.body["findings"].as_array().expect("findings")[0];
+    let receipt = &finding["receipt"];
+    assert_eq!(receipt["token"], "late");
+    assert_eq!(receipt["within"], 6);
+
+    // Everything the rule claims, checked against the page itself.
+    let page = app.get("/api/pages/chapter").await;
+    let body = page.body["content"].as_str().expect("content");
+
+    let first = receipt["first"].as_u64().unwrap() as usize;
+    let second = receipt["second"].as_u64().unwrap() as usize;
+    let token = receipt["token"].as_str().unwrap();
+
+    assert_eq!(&body[first..first + token.len()], "late");
+    assert_eq!(&body[second..second + token.len()], "late");
+    assert!(
+        receipt["distance"].as_u64().unwrap() <= 6,
+        "the rule fired outside its own window"
+    );
+
+    let (start, end) = (
+        finding["span"]["start"].as_u64().unwrap() as usize,
+        finding["span"]["end"].as_u64().unwrap() as usize,
+    );
+    assert_eq!(&body[start..end], finding["quote"].as_str().unwrap());
+}
+
+/// No rules is a state a wiki is genuinely in, and it is the answer somebody
+/// asking what the rules are should get.
+#[tokio::test]
+async fn a_wiki_with_no_rules_answers_an_empty_ruleset_rather_than_a_404() {
+    let app = App::new().await;
+    app.seed("a", json!({ "content": "Anything at all.\n" }))
+        .await;
+
+    let rules = app.get("/api/prose/rules").await;
+    assert_eq!(rules.status, StatusCode::OK);
+    assert_eq!(rules.body["rules"], json!([]));
+    assert!(
+        rules.body["rules_digest"]
+            .as_str()
+            .expect("a digest")
+            .starts_with("sha256:"),
+        "an empty ruleset still stamps, so a caller has something to compare"
+    );
+
+    // And nothing to check against is not an error at either of the other two.
+    let posted = app
+        .post("/api/prose", json!({ "content": "Anything at all.\n" }))
+        .await;
+    assert_eq!(posted.status, StatusCode::OK);
+    assert_eq!(posted.body["findings"], json!([]));
+
+    let read = app.get("/api/prose?slug=a").await;
+    assert_eq!(read.status, StatusCode::OK);
+    assert_eq!(read.body["findings"], json!([]));
+}
+
+/// A file that will not parse is a mistake somebody just made, which is a
+/// different thing from a file that is not there.
+#[tokio::test]
+async fn a_rules_file_that_will_not_parse_is_reported_as_itself() {
+    let app = App::new().await;
+    app.rules("[[rule]\nid = \"echo\"\n");
+
+    let res = app.get("/api/prose/rules").await;
+
+    assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(res.code(), "prose_rules_invalid");
+    assert_eq!(res.body["error"]["details"]["file"], ".rhizolog/prose.toml");
+    assert!(res.body["error"]["details"]["reason"].is_string());
+
+    // The same answer wherever the rules are read from.
+    assert_eq!(
+        app.post("/api/prose", json!({ "content": "x\n" }))
+            .await
+            .code(),
+        "prose_rules_invalid"
+    );
+}
+
+#[tokio::test]
+async fn a_rule_that_is_wrong_rather_than_unparseable_says_which_rule() {
+    let app = App::new().await;
+    app.rules("[[rule]]\nid = \"tells\"\nkind = \"phrase\"\nwithin = 4\n");
+
+    let res = app.get("/api/prose/rules").await;
+
+    assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let reason = res.body["error"]["details"]["reason"]
+        .as_str()
+        .expect("a reason");
+    assert!(reason.contains("tells"), "got {reason}");
+    assert!(reason.contains("within"), "got {reason}");
+}
+
+/// The digest is what ties a finding to the rules that produced it. Two calls
+/// either side of an edit have to disagree, or it is a number that proves
+/// nothing.
+#[tokio::test]
+async fn editing_the_rules_between_two_calls_makes_the_stamps_disagree() {
+    let app = App::new().await;
+    app.rules("[[rule]]\nid = \"echo\"\nkind = \"echo\"\nwithin = 6\n");
+
+    let before = app.get("/api/prose/rules").await.body["rules_digest"].clone();
+
+    app.rules("[[rule]]\nid = \"echo\"\nkind = \"echo\"\nwithin = 7\n");
+    let after = app.get("/api/prose/rules").await.body["rules_digest"].clone();
+
+    assert_ne!(before, after);
+
+    // Read on every request rather than cached, so tuning a rule is a matter of
+    // saving the file and asking again.
+    assert_eq!(
+        app.post("/api/prose", json!({ "content": "x\n" }))
+            .await
+            .body["rules_digest"],
+        after
+    );
+}
+
+/// The editor's path. Nothing is stored, so it is safe on a debounce.
+#[tokio::test]
+async fn the_editor_can_check_a_body_it_has_not_saved() {
+    let app = App::new().await;
+    app.rules(NO_EM_DASH);
+
+    let res = app
+        .post(
+            "/api/prose",
+            json!({ "content": "A clause \u{2014} and another.\n" }),
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["offsets"], "page");
+    assert!(res.body["slug"].is_null(), "nothing was stored");
+    assert_eq!(res.body["errors"], 1);
+    assert_eq!(res.body["warnings"], 0);
+
+    let finding = &res.body["findings"].as_array().expect("findings")[0];
+    assert_eq!(finding["rule"], "no-em-dash");
+    assert_eq!(finding["severity"], "error");
+    assert_eq!(finding["message"], "em dash");
+    assert_eq!(finding["quote"], "\u{2014}");
+    assert!(
+        finding["slug"].is_null(),
+        "a finding names its chapter only when there is a book to name it in"
+    );
+
+    // And nothing was written to the wiki by asking.
+    assert_eq!(
+        app.get("/api/pages").await.body["total"],
+        0,
+        "checking is not saving"
+    );
+}
+
+/// The reason `?compiled=true` exists. A word repeated across a chapter break is
+/// invisible to anything reading one page at a time.
+#[tokio::test]
+async fn a_repeat_across_a_chapter_break_is_only_visible_compiled() {
+    let app = App::new().await;
+    app.rules(
+        "[[rule]]\nid = \"echo\"\nkind = \"echo\"\nwithin = 8\nignore = [\"the\", \"was\"]\n",
+    );
+    app.seed(
+        "novel",
+        json!({ "content": "# Novel\n", "contents": ["novel/a", "novel/b"] }),
+    )
+    .await;
+    app.seed("novel/a", json!({ "content": "The ferry was late.\n" }))
+        .await;
+    app.seed("novel/b", json!({ "content": "The ferry was early.\n" }))
+        .await;
+
+    assert_eq!(
+        app.get("/api/prose?slug=novel/a").await.body["findings"],
+        json!([]),
+        "one chapter on its own repeats nothing"
+    );
+
+    let res = app.get("/api/prose?slug=novel&compiled=true").await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["offsets"], "document");
+    assert_eq!(res.body["slug"], "novel");
+
+    let findings = res.body["findings"].as_array().expect("findings");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["receipt"]["token"], "ferry");
+    assert_eq!(
+        findings[0]["slug"], "novel/a",
+        "a finding that straddles a chapter break belongs where it starts"
+    );
+}
+
+/// A finding over a whole book is no use if it cannot say which chapter owns it.
+#[tokio::test]
+async fn a_finding_over_a_manuscript_names_the_chapter_it_fell_in() {
+    let app = App::new().await;
+    seed_book(&app).await;
+    app.rules("[[rule]]\nid = \"tells\"\nkind = \"phrase\"\nphrases = [\"second\"]\n");
+
+    let res = app.get("/api/prose?slug=book&compiled=true").await;
+    let findings = res.body["findings"].as_array().expect("findings");
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["slug"], "book/one/the-ferry");
+    assert_eq!(findings[0]["quote"], "Second");
+
+    // And the offset indexes the document the compiler returns, which is what
+    // `offsets: "document"` says it does.
+    let document = app.get("/api/compile?root=book").await.body["content"]
+        .as_str()
+        .expect("content")
+        .to_owned();
+    let start = findings[0]["span"]["start"].as_u64().unwrap() as usize;
+    let end = findings[0]["span"]["end"].as_u64().unwrap() as usize;
+    assert_eq!(&document[start..end], "Second");
+}
+
+/// A page nobody has written and a page nobody may read are the same answer, as
+/// they are everywhere else.
+#[tokio::test]
+async fn checking_a_page_that_is_not_there_is_a_404() {
+    let app = App::new().await;
+    app.rules(NO_EM_DASH);
+
+    let res = app.get("/api/prose?slug=nowhere").await;
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    assert_eq!(res.code(), "page_not_found");
+
+    let compiled = app.get("/api/prose?slug=nowhere&compiled=true").await;
+    assert_eq!(compiled.status, StatusCode::NOT_FOUND);
+    assert_eq!(compiled.code(), "compile_root_not_found");
+
+    assert_eq!(
+        app.get("/api/prose?slug=../etc/passwd").await.code(),
+        "slug_relative_segment"
+    );
+}
+
+/// Frontmatter is not checked, so a rule cannot fire on a field the author did
+/// not write as prose.
+#[tokio::test]
+async fn a_rule_reads_the_body_and_not_the_frontmatter() {
+    let app = App::new().await;
+    app.rules("[[rule]]\nid = \"tells\"\nkind = \"phrase\"\nphrases = [\"delve\"]\n");
+    app.seed(
+        "a",
+        json!({ "title": "How to delve", "tags": ["delve"], "content": "Nothing here.\n" }),
+    )
+    .await;
+
+    assert_eq!(
+        app.get("/api/prose?slug=a").await.body["findings"],
+        json!([])
+    );
 }
 
 // ---------------------------------------------------------------- search

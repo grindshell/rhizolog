@@ -25,6 +25,7 @@ use utoipa::ToSchema;
 use crate::ideas::{CaptureId, IdError, IdeaId, IdeaServiceError, IdeaStoreError, RecordKind};
 use crate::index::IndexError;
 use crate::page::PageError;
+use crate::prose::ProseError;
 use crate::slug::{Slug, SlugError};
 use crate::store::StoreError;
 use crate::times::{TimeId, TimeIdError, TimeStoreError};
@@ -109,6 +110,19 @@ pub enum AppError {
         ceiling: usize,
         at: String,
     },
+
+    /// `.rhizolog/prose.toml` is there and will not be read.
+    ///
+    /// A 422 rather than a 500, because it is the same shape of failure as a
+    /// page whose frontmatter will not parse: the request is fine, and the
+    /// authored document it names is not. And the same shape of answer, too,
+    /// since the reason is the only thing that lets somebody fix it.
+    ///
+    /// A rules file that is simply **absent** is not this. A wiki that has never
+    /// written rules is the ordinary case, and both endpoints that read them
+    /// have an answer for it.
+    #[error("the prose rules will not parse: {reason}")]
+    ProseRulesInvalid { reason: String },
 
     #[error("invalid time id {raw:?}: {source}")]
     InvalidTimeId {
@@ -383,6 +397,10 @@ impl AppError {
             // request is malformed, and a caller told so would go looking for a
             // typo rather than at the size of what they asked for.
             Self::CompileTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+            // The same status a page whose frontmatter will not parse gets, and
+            // for the same reason: the request is well formed and the authored
+            // file it reaches for is not.
+            Self::ProseRulesInvalid { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::InvalidRecordId { .. }
             | Self::InvalidTimeId { .. }
             | Self::TimeRangeInverted { .. }
@@ -458,6 +476,7 @@ impl AppError {
             Self::TooManyPins { .. } => "too_many_pins",
             Self::CompileRootNotFound { .. } => "compile_root_not_found",
             Self::CompileTooLarge { .. } => "compile_too_large",
+            Self::ProseRulesInvalid { .. } => "prose_rules_invalid",
             Self::InvalidRequestBody { .. } => "invalid_request_body",
             Self::UnknownFields { .. } => "unknown_fields",
             Self::InvalidParameter { .. } => "invalid_parameter",
@@ -519,6 +538,12 @@ impl AppError {
                 "limit": limit,
                 "ceiling": ceiling,
                 "slug": at,
+            })),
+            // Names the file as well as the reason, because the one thing a
+            // remote caller cannot do is go and look for it.
+            Self::ProseRulesInvalid { reason } => Some(json!({
+                "file": format!("{}/{}", crate::store::INTERNAL_DIR, crate::prose::RULES_FILE),
+                "reason": reason,
             })),
             Self::Password(error) => Some(json!({
                 "rule": error.code(),
@@ -712,6 +737,20 @@ impl From<UsernameError> for AppError {
 impl From<PageError> for AppError {
     fn from(source: PageError) -> Self {
         Self::internal(source.to_string())
+    }
+}
+
+impl From<ProseError> for AppError {
+    fn from(source: ProseError) -> Self {
+        match source {
+            // A rules file that cannot be read at all is the server's problem
+            // and carries a filesystem path, so it goes the way every other I/O
+            // failure goes: logged in full, described to nobody.
+            ProseError::Io { .. } => Self::internal(source.to_string()),
+            other => Self::ProseRulesInvalid {
+                reason: other.to_string(),
+            },
+        }
     }
 }
 

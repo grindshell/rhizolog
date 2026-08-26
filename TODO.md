@@ -237,7 +237,7 @@ not missing pieces of it.
 
 ## Long-form writing
 
-**Planned, nothing built.** The plan and the reasoning are in
+**Three phases of five are built.** The plan and the reasoning are in
 [Long-form writing](knowledge-base/long-form.md): compile a tree of pages into
 one addressable document, give a page and a manuscript a length and a target, and
 check prose against rules the author wrote down. It is aimed at drafting
@@ -245,7 +245,7 @@ long-form work alone with an assistant, which is what makes compile a context
 loader before it is an export and what makes a net word count worth splitting by
 who wrote it.
 
-Five phases, in this order, and L3 may swap with L2:
+Five phases. L3 and L4 are what is left, and neither is started:
 
 - **L0: words.** **Built.** `markdown::count_words`, `pages.words` at schema
   version 10, `target`, `due` and `contents` in frontmatter, `?sort=words`, and
@@ -258,10 +258,20 @@ Five phases, in this order, and L3 may swap with L2:
   orphans are unioned, because a chapter reported as unreferenced is a number
   being wrong, and drawing is a display decision that belongs with the panel in
   L4. See "What L1 turned out to be" on the plan page.
-- **L2: `prose/v1`.** Rules in `.rhizolog/prose.toml`, five rule kinds, every
-  finding quoting the text it fired on and carrying the arithmetic behind it, and
-  `GET /api/prose/rules` so a remote caller can reproduce one. No dismissal
-  store, on purpose.
+- **L2: `prose/v1`.** **Built.** Rules in `.rhizolog/prose.toml`, five rule
+  kinds, every finding quoting the text it fired on and carrying the arithmetic
+  behind it, and `GET /api/prose/rules` so a remote caller can reproduce one. No
+  dismissal store, on purpose. Spans are byte offsets into the page source, which
+  works because nothing is extracted: `markdown::extract` keeps the body byte for
+  byte and blanks what is not prose. `?compiled=true` runs the rules over the
+  whole assembled manuscript, which is the only way the two cross-page rules see
+  anything. See "What L2 turned out to be" on the plan page, and in particular
+  the two filters `consistent` needed before it stopped reporting `If` as a
+  misspelling of `It`.
+- **No starter `prose.toml` ships, and there is nowhere for one to ship from.**
+  A rules file belongs to a wiki: `backend/wiki/` is gitignored and
+  `example-wiki/` is a fixture the documentation makes claims about. The starter
+  is the worked example on the plan page. Giving it a home is part of L4.
 - **L3: actor and the word log.** An `X-Rhizolog-Actor` header, and
   `.rhizolog/words/`: a fourth authored tree, with `page_words` derived from it.
 - **L4: dashboard and documentation closure**, which is where the three places
@@ -309,6 +319,12 @@ the book is the worst thing this endpoint could return.
   lines smuggled into a feature commit. Find them with
   `Select-String -Pattern ([char]0x2014)`, and do not do it by round-tripping
   files through PowerShell: `AGENTS.md` records what that costs.
+
+  `prose/v1` now counts them properly, which is a better tool than the search
+  for this job: pointed at a copy of `knowledge-base/` it reports **353 across
+  thirteen pages**, every one of them in prose rather than in a code span, and
+  `AGENTS.md`'s single specimen correctly not among them. The wider figure above
+  includes source files, which the linter does not read.
 - **A time entry's `start` and `end` do not take a bare date.** `created` does,
   on both a page and an account, and these were deliberately left out rather than
   forgotten: a bare date on `created` fills in a time that was never there, while

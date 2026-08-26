@@ -54,6 +54,12 @@ thiserror = "2"
 # browser window.
 time = "0.3"
 tokio = { version = "1", features = ["full"] }
+# `.rhizolog/prose.toml`, and nothing else. TOML rather than the YAML the
+# frontmatter already speaks, because a rules file is largely a list of things
+# somebody is trying not to write, and TOML's `\uXXXX` escape is how you name a
+# character your repository may not contain. Parsing only: nothing here ever
+# writes the file, which is why `display` is off.
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
 # No `cors`: everything is same-origin, including the desktop app's webview.
 # Turning it on is a decision about who may reach a remote instance from a
 # browser context, and it should be made then rather than already switched on.

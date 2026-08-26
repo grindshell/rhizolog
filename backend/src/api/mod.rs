@@ -13,6 +13,7 @@ pub mod ideas;
 pub mod meta;
 pub mod pages;
 pub mod pins;
+pub mod prose;
 pub mod search;
 pub mod times;
 pub mod usage;
@@ -99,6 +100,9 @@ pub struct AppState {
     ),
     tags(
         (name = "pages", description = "Reading and writing wiki pages"),
+        (name = "prose", description = "prose/v1: holding prose to rules you wrote down. Local, \
+                                       deterministic, and never a model. Every finding quotes the \
+                                       text it fired on and carries the arithmetic behind it."),
         (name = "search", description = "Full-text search and index maintenance"),
         (name = "graph", description = "Links between pages, tags, and meta-stats"),
         (name = "pins", description = "Pages kept within reach"),
@@ -184,6 +188,10 @@ fn parts() -> (Router<AppState>, OpenApiDocument) {
         .routes(routes!(pages::move_page))
         .routes(routes!(pages::render_markdown))
         .routes(routes!(compile::compile_pages))
+        .routes(routes!(prose::read_prose, prose::check_prose))
+        // A fixed segment under a path that takes no parameter at all, so
+        // nothing here needs the treatment a slug gets.
+        .routes(routes!(prose::read_prose_rules))
         .routes(routes!(search::search))
         .routes(routes!(search::reindex))
         .routes(routes!(graph::links))

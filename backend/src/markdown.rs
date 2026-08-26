@@ -8,7 +8,9 @@
 //! fence — the parser has already decided what is code and what is prose, and a
 //! regex over the raw text would have to relitigate it and get it wrong.
 
-use comrak::nodes::{AstNode, NodeValue};
+use std::ops::Range;
+
+use comrak::nodes::{AstNode, NodeValue, Sourcepos};
 use comrak::{Arena, Options};
 
 use crate::slug::Slug;
@@ -271,6 +273,46 @@ pub fn count_words(markdown: &str) -> u64 {
         .count() as u64
 }
 
+/// What one node contributes to the readable text of a page.
+///
+/// The one place this wiki decides what counts as prose. Two readers walk the
+/// AST for it and they must never disagree: [`count_words`] concatenates the
+/// literals, and [`extract`] blanks out everything that is not one so that byte
+/// offsets survive. A second copy of this match is where the two would quietly
+/// come apart over whether a footnote is prose.
+enum Role {
+    /// A text literal. Its bytes are the prose.
+    Literal,
+    /// Neither this node nor anything under it is read.
+    Skip,
+    /// Not prose itself, but it keeps what is on either side of it apart.
+    Break,
+    /// Look at the children. `block` says whether this node separates as well.
+    Descend { block: bool },
+}
+
+fn role(value: &NodeValue) -> Role {
+    match value {
+        NodeValue::Text(_) => Role::Literal,
+        // Code is not prose. This is the whole reason both readers go through
+        // the parser: the parser has already decided what is code, and a scan
+        // over the source would have to relitigate it. It is the same argument
+        // `extract_links` makes above.
+        NodeValue::Code(_) | NodeValue::CodeBlock(_) => Role::Skip,
+        // Dropped by the renderer, so it is not on the page to be read.
+        NodeValue::HtmlInline(_) | NodeValue::HtmlBlock(_) => Role::Skip,
+        // Alt text describes a picture rather than being part of the prose, and
+        // the whole subtree goes with it.
+        NodeValue::Image(_) => Role::Skip,
+        // A marker, not a word.
+        NodeValue::FootnoteReference(_) => Role::Skip,
+        NodeValue::SoftBreak | NodeValue::LineBreak => Role::Break,
+        other => Role::Descend {
+            block: other.block(),
+        },
+    }
+}
+
 /// Gather the readable text of a subtree.
 ///
 /// Literals are concatenated **verbatim**, with separators added only where the
@@ -283,30 +325,25 @@ pub fn count_words(markdown: &str) -> u64 {
 /// Blocks and breaks contribute a newline, so the last word of one paragraph and
 /// the first of the next do not run together into one.
 fn collect_text<'a>(node: &'a AstNode<'a>, out: &mut String) {
-    match &node.data.borrow().value {
-        NodeValue::Text(literal) => {
-            out.push_str(literal);
-            return;
-        }
-        // Code is not prose. This is the whole reason the count goes through the
-        // parser: the parser has already decided what is code, and a scan over
-        // the source would have to relitigate it. It is the same argument
-        // `extract_links` makes above.
-        NodeValue::Code(_) | NodeValue::CodeBlock(_) => return,
-        // Dropped by the renderer, so it is not on the page to be read.
-        NodeValue::HtmlInline(_) | NodeValue::HtmlBlock(_) => return,
-        // Alt text describes a picture rather than being part of the prose, and
-        // the whole subtree goes with it.
-        NodeValue::Image(_) => return,
-        // A marker, not a word.
-        NodeValue::FootnoteReference(_) => return,
-        NodeValue::SoftBreak | NodeValue::LineBreak => {
-            out.push('\n');
-            return;
-        }
-        value => {
-            if value.block() {
+    {
+        let data = node.data.borrow();
+
+        match role(&data.value) {
+            Role::Literal => {
+                if let NodeValue::Text(literal) = &data.value {
+                    out.push_str(literal);
+                }
+                return;
+            }
+            Role::Skip => return,
+            Role::Break => {
                 out.push('\n');
+                return;
+            }
+            Role::Descend { block } => {
+                if block {
+                    out.push('\n');
+                }
             }
         }
     }
@@ -314,6 +351,135 @@ fn collect_text<'a>(node: &'a AstNode<'a>, out: &mut String) {
     for child in node.children() {
         collect_text(child, out);
     }
+}
+
+/// A page body with everything that is not prose blanked out.
+///
+/// The trick that makes [`crate::prose`] possible. A finding has to say where in
+/// the source it fired, and the obvious approach, concatenating the text out of
+/// the AST, throws that away: offsets into the concatenation are offsets into a
+/// string nobody has. So instead of building a new string, this keeps the body's
+/// own bytes and blanks everything that is not read: code, raw HTML, image alt
+/// text, footnote markers, link targets, and every piece of markdown punctuation
+/// in between. **Every offset into [`Extracted::text`] is an offset into the
+/// body**, with no mapping in between to get wrong.
+///
+/// What is prose is decided by [`role`], which is the same decision
+/// [`count_words`] follows.
+///
+/// It disagrees with [`count_words`] in one narrow place, and the difference is
+/// worth stating: markup *inside* a word. `un*believable*` is one word to the
+/// counter, which follows the literals, and two tokens here, because the `*`
+/// between them is blanked and a token is a run of alphanumerics. Keeping the
+/// offsets is worth that, and the tokenizer this feeds already splits on
+/// punctuation everywhere else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Extracted {
+    /// The body, byte for byte, with every byte that is not prose replaced by a
+    /// space. Newlines are kept as newlines, so a line and column read off this
+    /// still name the same place in the source.
+    pub text: String,
+    /// The paragraphs, in source order, as spans of [`Extracted::text`].
+    ///
+    /// Rhythm is a property of a paragraph, so this is what a sentence-shaped
+    /// rule measures over. Headings, table cells and list items are deliberately
+    /// not in it: a list is uniform by construction, and a rule that fired on
+    /// every bulleted list would be a rule nobody leaves switched on.
+    pub paragraphs: Vec<Range<usize>>,
+}
+
+/// Blank out everything in a body that is not prose. See [`Extracted`].
+pub fn extract(body: &str) -> Extracted {
+    let arena = Arena::new();
+    let root = comrak::parse_document(&arena, body, &options());
+
+    let mut line_starts = Vec::new();
+    let mut at = 0;
+    for line in body.split_inclusive('\n') {
+        line_starts.push(at);
+        at += line.len();
+    }
+
+    // A byte for every byte of the source, so nothing has to be mapped later.
+    let mut text: Vec<u8> = body
+        .bytes()
+        .map(|byte| if byte == b'\n' { b'\n' } else { b' ' })
+        .collect();
+    let mut paragraphs = Vec::new();
+
+    blank(root, body, &line_starts, false, &mut text, &mut paragraphs);
+
+    paragraphs.sort_by_key(|span| span.start);
+
+    Extracted {
+        // Every range copied in is a range of the source, and every byte left
+        // behind is ASCII, so the result cannot be anything but valid UTF-8.
+        text: String::from_utf8(text).expect("blanking preserves UTF-8"),
+        paragraphs,
+    }
+}
+
+/// Copy the prose of one subtree back over the blanked buffer.
+///
+/// `in_item` carries whether an ancestor is a list item, which is the one thing
+/// a paragraph's own node cannot say and which decides whether it counts as
+/// rhythm. Footnote definitions live at the end of comrak's tree rather than
+/// where they were written, which is why the caller sorts.
+fn blank<'a>(
+    node: &'a AstNode<'a>,
+    source: &str,
+    line_starts: &[usize],
+    in_item: bool,
+    text: &mut [u8],
+    paragraphs: &mut Vec<Range<usize>>,
+) {
+    let mut in_item = in_item;
+
+    {
+        let data = node.data.borrow();
+
+        match role(&data.value) {
+            Role::Literal => {
+                if let Some(span) = span_of(line_starts, source, data.sourcepos)
+                    && let Some(literal) = source.get(span.clone())
+                {
+                    text[span].copy_from_slice(literal.as_bytes());
+                }
+                return;
+            }
+            Role::Skip => return,
+            // A soft break is already a newline in the buffer, and a hard break
+            // is already whitespace. Neither needs anything written back.
+            Role::Break => return,
+            Role::Descend { .. } => match &data.value {
+                NodeValue::Paragraph if !in_item => {
+                    if let Some(span) = span_of(line_starts, source, data.sourcepos) {
+                        paragraphs.push(span);
+                    }
+                }
+                NodeValue::Item(_) | NodeValue::TaskItem(_) => in_item = true,
+                _ => {}
+            },
+        }
+    }
+
+    for child in node.children() {
+        blank(child, source, line_starts, in_item, text, paragraphs);
+    }
+}
+
+/// Turn comrak's line and column pair into a byte range.
+///
+/// The columns are 1-based **byte** offsets within their line, which is what
+/// makes this arithmetic rather than a character walk. `None` for anything that
+/// does not land on a character boundary inside the source, so a node with a
+/// sourcepos nobody filled in is skipped rather than panicking a request.
+fn span_of(line_starts: &[usize], source: &str, pos: Sourcepos) -> Option<Range<usize>> {
+    let start =
+        line_starts.get(pos.start.line.checked_sub(1)?)? + pos.start.column.checked_sub(1)?;
+    let end = line_starts.get(pos.end.line.checked_sub(1)?)? + pos.end.column;
+
+    (start <= end && source.get(start..end).is_some()).then_some(start..end)
 }
 
 /// Drop display text that merely repeats the target.
