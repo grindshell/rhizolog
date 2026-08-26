@@ -2860,7 +2860,9 @@ async fn an_offset_that_will_not_divide_a_body_is_refused_with_its_length() {
     app.seed("notes/one", json!({ "content": "café\n\nau lait\n" }))
         .await;
 
-    for at in [0, 4, 99] {
+    // Zero, inside the `é`, past the end, and the page's last newline, which is
+    // the one a bounds check on the offset alone lets straight through.
+    for at in [0, 4, 99, 14] {
         let res = app
             .post(
                 "/api/split",

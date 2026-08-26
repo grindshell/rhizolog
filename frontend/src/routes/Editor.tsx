@@ -435,8 +435,24 @@ export default function Editor() {
    */
   const dividable = () => editing() !== undefined && !busy() && !dirty() && !assembles()
 
+  /**
+   * Both halves have to have something in them, which is the server's rule and
+   * is checked **after** the cut rather than from the offset: the blank lines at
+   * the seam belong to neither side, so a cursor well inside a body can still
+   * leave one of them empty. The last newline of a page is where that bites,
+   * because it is where a caret lands when somebody clicks at the end of the
+   * text.
+   *
+   * Mirrored here rather than left to the request so that the button and the
+   * line above it agree: when there is nothing after the cursor the block
+   * already says to move it, and an enabled button beside that sentence is the
+   * block contradicting itself.
+   */
   const canSplit = () =>
-    dividable() && tailSlug().trim() !== '' && cursor() > 0 && cursor() < content().length
+    dividable() &&
+    namesAPage(tailSlug()) &&
+    content().slice(0, cursor()).trim() !== '' &&
+    opening(content(), cursor()) !== ''
 
   const split = async () => {
     const source = editing()
@@ -467,10 +483,12 @@ export default function Editor() {
     }
   }
 
+  const canMerge = () => dividable() && namesAPage(mergeInto())
+
   const merge = async () => {
     const source = editing()
     const into = mergeInto().trim()
-    if (!source || !into || !dividable()) return
+    if (!source || !canMerge()) return
     if (
       !window.confirm(
         `Merge ${source} into ${into}? Its words go to the end of that page and its file is removed.`,
@@ -1056,7 +1074,7 @@ export default function Editor() {
                         />
                         <button
                           class="btn btn-error btn-outline btn-sm self-start"
-                          disabled={!dividable() || mergeInto().trim() === ''}
+                          disabled={!canMerge()}
                           title={dirty() ? 'Save your changes first' : undefined}
                           onClick={() => void merge()}
                         >
@@ -1169,6 +1187,19 @@ export function parseDue(raw: string): string | null {
 export function directoryOf(slug: string): string {
   const cut = slug.lastIndexOf('/')
   return cut === -1 ? '' : slug.slice(0, cut + 1)
+}
+
+/**
+ * Whether a field holds a page rather than the directory it was prefilled with.
+ *
+ * Both slug fields here open on the directory this page sits in, which is a head
+ * start and is not a slug: `book/one/` names no page and the API refuses it.
+ * Without this the first click of an untouched form is an error box, which is a
+ * poor thing for a prefill to be worth.
+ */
+export function namesAPage(raw: string): boolean {
+  const slug = raw.trim()
+  return slug !== '' && !slug.endsWith('/')
 }
 
 /**

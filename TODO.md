@@ -514,6 +514,12 @@ What is not done:
   layout question rather than an API one.
 - **The list written back is as old as the read that found it**, exactly as
   above, and named rather than closed for the same reason.
+- **A repair that cannot write a parent answers `500` after the pages are
+  written.** The pages and the word log are right and one contents list is not,
+  which the manifest shows, because the spine is read from there anyway. A review
+  moved the log markers ahead of the repair so that this costs a list rather than
+  a page's whole history; what is left would need a partial-success shape, which
+  is a protocol for a failure that needs an unwritable file to reach.
 
 ## Rough edges
 

@@ -64,6 +64,17 @@ holding.
 An offset with nothing on one side of it is refused too. That is a rename or a
 blank page, and both have endpoints already.
 
+**That check has to happen after the cut, not before it**, and a review found
+this the hard way: the first version tested `0 < at < length` and shipped, which
+is a different question. The blank lines at the seam belong to neither half and
+are dropped, so an offset well inside a body can still leave one side with
+nothing in it. The case that matters is a page's **last newline**, which is
+exactly where a caret lands when somebody clicks at the end of the text: a
+`200`, a page with an empty body, and that page inserted into the spine. The
+offset one character earlier at the other end does the mirror image, emptying the
+page being cut. Both are refused now, and the refusal's own message says the rule
+it is enforcing rather than one next to it.
+
 ### What the second half inherits
 
 | Carried | Not carried |
@@ -142,6 +153,26 @@ None of it is observed in the word log. The body is not touched, so nothing was
 written and the total the log checks a page against does not move. It is still
 indexed, because `page_parts` is what the manifest and the orphan count are read
 from.
+
+**The repair happens after the markers are written**, and a review found out what
+the other order costs. The markers describe the two pages, which are on disk by
+then; the repair is about other files and can fail. Written afterwards, one
+unwritable parent takes both markers with it, and what is left is a log saying a
+page is a length it no longer is: **silently and for good**, because the index
+already holds the new size and mtime, so the next startup scan reads the file as
+unchanged and never compares it. That is precisely the discontinuity `total`
+exists to make visible. On a merge it was worse, since the `deleted` marker went
+too and the source's series was never closed, so the next page written at that
+slug would have read as an edit of the one that is gone. The watcher then filled
+the gap with the wrong answer, recording the newly created page as words written
+by hand today.
+
+What is left of that failure is smaller and is a real edge rather than a
+mistake: the pages and the log are right, some lists are repaired and one is not,
+and the request answers `500`. The unrepaired list is visible in the manifest,
+which is where the spine is read from anyway. Making it a partial success with a
+list of parents that could not be written is a protocol, and this is a wiki whose
+files are its own.
 
 ## What the word log needed, and would have got wrong
 

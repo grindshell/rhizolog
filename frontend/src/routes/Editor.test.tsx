@@ -28,8 +28,15 @@ vi.mock('../api/client', async (importOriginal) => {
   return { ...actual, ...api }
 })
 
-const { default: Editor, directoryOf, opening, parseDue, parseLines, parseTarget } =
-  await import('./Editor')
+const {
+  default: Editor,
+  directoryOf,
+  namesAPage,
+  opening,
+  parseDue,
+  parseLines,
+  parseTarget,
+} = await import('./Editor')
 
 function page(overrides: Partial<PageView> = {}): PageView {
   return {
@@ -426,7 +433,13 @@ describe('splitting and merging', () => {
    */
   it('sends the cursor as a byte offset rather than a string index', async () => {
     const { container, getByText } = await openChapter()
+    const destination = container.querySelector(
+      'input[aria-label="Slug for the second half"]',
+    ) as HTMLInputElement
 
+    // The directory is a head start and nothing more; the name is the caller's.
+    expect(destination.value).toBe('notes/rust/')
+    type(destination, 'notes/rust/later')
     placeCursor(fields(container).body, LATER)
     getByText('Split here').click()
 
@@ -437,9 +450,8 @@ describe('splitting and merging', () => {
     expect(request.from).toBe('notes/rust/async')
     expect(LATER).toBe(8)
     expect(request.at).toBe(9)
-    // The directory is a head start; the name is the caller's, and an empty
-    // title means the new page takes the heading it opens with.
-    expect(request.to).toBe('notes/rust/')
+    expect(request.to).toBe('notes/rust/later')
+    // An empty title means the new page takes the heading it opens with.
     expect(request.title).toBeNull()
   })
 
@@ -459,6 +471,12 @@ describe('splitting and merging', () => {
   it('lands in the editor for the page it made', async () => {
     const { container, getByText } = await openChapter()
 
+    type(
+      container.querySelector(
+        'input[aria-label="Slug for the second half"]',
+      ) as HTMLInputElement,
+      'notes/rust/later',
+    )
     placeCursor(fields(container).body, LATER)
     getByText('Split here').click()
 
@@ -484,16 +502,46 @@ describe('splitting and merging', () => {
     )
   })
 
-  /** Nothing on one side of the cut is not a split; it is a rename. */
+  /**
+   * Nothing on one side of the cut is not a split; it is a rename or a blank
+   * page. The third case is the one a bounds check misses: the page's last
+   * newline is inside the body by every measure, and it is exactly where a caret
+   * lands when somebody clicks at the end of the text.
+   */
   it('refuses a cursor with nothing on one side of it', async () => {
     const { container, getByText } = await openChapter()
 
-    for (const at of [0, CHAPTER.length]) {
+    for (const at of [0, CHAPTER.length, CHAPTER.length - 1]) {
       placeCursor(fields(container).body, at)
       await waitFor(() =>
         expect((getByText('Split here') as HTMLButtonElement).disabled).toBe(true),
       )
     }
+  })
+
+  /**
+   * Both fields open on the directory this page sits in, which names no page.
+   * An enabled button over one of those is a first click that can only be an
+   * error box.
+   */
+  it('refuses a destination that is still only the directory', async () => {
+    const { container, getByText } = await openChapter()
+    placeCursor(fields(container).body, LATER)
+
+    await waitFor(() =>
+      expect((getByText('Split here') as HTMLButtonElement).disabled).toBe(true),
+    )
+    expect((getByText('Merge and delete this page') as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+
+    type(
+      container.querySelector(
+        'input[aria-label="Slug for the second half"]',
+      ) as HTMLInputElement,
+      'notes/rust/later',
+    )
+    expect((getByText('Split here') as HTMLButtonElement).disabled).toBe(false)
   })
 
   /**
@@ -554,6 +602,13 @@ describe('splitting and merging', () => {
   it('reads the directory a page sits in, and nothing more', () => {
     expect(directoryOf('book/one/the-ferry')).toBe('book/one/')
     expect(directoryOf('index')).toBe('')
+  })
+
+  it('tells a page apart from the directory a field was prefilled with', () => {
+    expect(namesAPage('book/one/the-tide')).toBe(true)
+    expect(namesAPage('book/one/')).toBe(false)
+    expect(namesAPage('  ')).toBe(false)
+    expect(namesAPage('index')).toBe(true)
   })
 
   it('finds the first line with anything on it', () => {

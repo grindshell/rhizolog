@@ -219,13 +219,13 @@ pub async fn split_page(
     state.index.upsert(&tail_page).await?;
     state.index.upsert(&head_page).await?;
 
-    let entry = request.to.to_string();
-    let named = request.from.to_string();
-    let repaired = repair(&state, &viewer, &request.from, |list| {
-        spine::insert_after(list, &named, &entry)
-    })
-    .await?;
-
+    // Before the repair, and that order is the whole of what keeps the log
+    // honest. These two lines describe the two pages above, which are already on
+    // disk; the repair is about other files and can fail. Written afterwards,
+    // one unwritable parent would take both markers with it and leave the log
+    // saying a page is a length it no longer is, silently and for good: the
+    // index already holds the new size, so the next startup scan reads the file
+    // as unchanged and never looks. See `knowledge-base/split-and-merge.md`.
     words::split(
         &state.words,
         &state.index,
@@ -241,6 +241,13 @@ pub async fn split_page(
         Utc::now(),
     )
     .await;
+
+    let entry = request.to.to_string();
+    let named = request.from.to_string();
+    let repaired = repair(&state, &viewer, &request.from, |list| {
+        spine::insert_after(list, &named, &entry)
+    })
+    .await?;
 
     Ok(Json(SplitResult {
         head: PageView::new(&head_page, false),
@@ -317,12 +324,11 @@ pub async fn merge_pages(
     // takes its pin with it.
     state.index.unpin(&request.from).await?;
 
-    let named = request.from.to_string();
-    let repaired = repair(&state, &viewer, &request.from, |list| {
-        spine::without(list, &named)
-    })
-    .await?;
-
+    // Before the repair, for the reason a split's markers are: these describe the
+    // two pages already written, the repair is about other files and can fail,
+    // and a marker skipped here is a lie the next scan cannot find. The delete
+    // marker is the half that would hurt most, because nothing else closes the
+    // series at a slug that no longer holds a page.
     let recorded_by = by(&actor, &viewer);
     let at = Utc::now();
     words::merged(
@@ -338,6 +344,12 @@ pub async fn merge_pages(
     // And the ordinary delete marker, which is what closes the series at the
     // slug that is now empty.
     words::deleted(&state.words, &state.index, &request.from, &recorded_by, at).await;
+
+    let named = request.from.to_string();
+    let repaired = repair(&state, &viewer, &request.from, |list| {
+        spine::without(list, &named)
+    })
+    .await?;
 
     Ok(Json(MergeResult {
         page: PageView::new(&page, false),

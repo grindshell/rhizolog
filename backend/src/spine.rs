@@ -19,9 +19,7 @@
 /// Why an offset could not divide a body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffsetError {
-    /// At zero, or at or past the end. One half would be the whole page and the
-    /// other would be nothing, which is a rename or a blank page rather than a
-    /// split.
+    /// Past the end of the body.
     Outside,
     /// Inside a character.
     ///
@@ -29,14 +27,27 @@ pub enum OffsetError {
     /// with something outside ASCII in it, which is exactly the page where the
     /// mistake is hardest to see.
     NotABoundary,
+    /// One of the two halves would have nothing in it.
+    ///
+    /// Checked **after** the cut rather than by looking at the offset, which is
+    /// the only way to be right about it: the blank lines at the seam belong to
+    /// neither half, so an offset well inside a body can still leave one side
+    /// empty. The last newline of a page is the case that matters, because
+    /// clicking at the end of the last line of text is where a caret lands.
+    ///
+    /// A split that produced a blank page would put one in the spine, and one
+    /// that emptied the page it was cutting would be a rename with a step
+    /// missing. Both have endpoints of their own.
+    OneSided,
 }
 
 impl OffsetError {
     /// What to tell the caller, phrased as the rule that was broken.
     pub fn reason(self) -> &'static str {
         match self {
-            Self::Outside => "an offset has to fall inside the body, with text on both sides of it",
+            Self::Outside => "an offset has to fall inside the body, and this is past the end",
             Self::NotABoundary => "an offset has to fall between characters, not inside one",
+            Self::OneSided => "a split has to leave text on both sides, and this leaves one blank",
         }
     }
 }
@@ -54,8 +65,15 @@ impl OffsetError {
 /// line, and a head that ended mid-air would run into whatever is appended to it
 /// later. Only newlines come off the front, never indentation, so a tail that
 /// starts inside an indented block keeps its shape.
+///
+/// **Both halves are checked after the cut, not before it.** Dropping those blank
+/// lines is what makes an offset well inside a body still able to leave one side
+/// with nothing in it, so an offset is only known to be a place to split once the
+/// splitting is done. `at` at the last newline of a page is the case worth
+/// naming: it is where a caret lands when somebody clicks at the end of the text,
+/// and unchecked it produces a blank page and puts it in the spine.
 pub fn divide(body: &str, at: usize) -> Result<(String, String), OffsetError> {
-    if at == 0 || at >= body.len() {
+    if at > body.len() {
         return Err(OffsetError::Outside);
     }
     if !body.is_char_boundary(at) {
@@ -63,7 +81,13 @@ pub fn divide(body: &str, at: usize) -> Result<(String, String), OffsetError> {
     }
 
     let (head, tail) = body.split_at(at);
-    Ok((ending(head), ending(tail.trim_start_matches(['\n', '\r']))))
+    let (head, tail) = (ending(head), ending(tail.trim_start_matches(['\n', '\r'])));
+
+    if head.is_empty() || tail.is_empty() {
+        return Err(OffsetError::OneSided);
+    }
+
+    Ok((head, tail))
 }
 
 /// Put two bodies together, in that order.
@@ -206,15 +230,39 @@ mod tests {
 
     #[test]
     fn an_offset_with_nothing_on_one_side_of_it_is_refused() {
-        assert_eq!(divide(CHAPTER, 0), Err(OffsetError::Outside));
-        assert_eq!(divide(CHAPTER, CHAPTER.len()), Err(OffsetError::Outside));
+        assert_eq!(divide(CHAPTER, 0), Err(OffsetError::OneSided));
+        assert_eq!(divide(CHAPTER, CHAPTER.len()), Err(OffsetError::OneSided));
         assert_eq!(
             divide(CHAPTER, CHAPTER.len() + 1),
             Err(OffsetError::Outside)
         );
         // A page with nothing in it has no offset that would work, and says so
         // rather than producing two empty pages.
-        assert_eq!(divide("", 0), Err(OffsetError::Outside));
+        assert_eq!(divide("", 0), Err(OffsetError::OneSided));
+    }
+
+    /// The case a bounds check misses and a caret finds. Clicking at the end of
+    /// the last line of text lands on the final newline, which is inside the body
+    /// by every measure and still leaves the second half with nothing in it.
+    /// Unchecked, it writes a blank page and puts it in the spine.
+    #[test]
+    fn the_last_newline_of_a_page_is_not_a_place_to_split() {
+        assert_eq!(
+            divide(CHAPTER, CHAPTER.len() - 1),
+            Err(OffsetError::OneSided)
+        );
+        assert_eq!(divide("One two three.\n", 14), Err(OffsetError::OneSided));
+        // Trailing blank lines are the same case, however many of them there are.
+        assert_eq!(divide("One.\n\n\n\n", 5), Err(OffsetError::OneSided));
+    }
+
+    /// The other end of it, which empties the page being cut rather than the one
+    /// being made. The blank lines at the seam belong to neither half, so this is
+    /// an offset a bounds check calls perfectly good.
+    #[test]
+    fn an_offset_that_would_empty_the_page_being_split_is_refused() {
+        assert_eq!(divide("\n\n\nText here.\n", 2), Err(OffsetError::OneSided));
+        assert_eq!(divide("   \nText here.\n", 4), Err(OffsetError::OneSided));
     }
 
     /// A caller counting UTF-16 units and sending them as bytes lands here, on
