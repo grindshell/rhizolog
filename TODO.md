@@ -235,6 +235,43 @@ Do not add LLM summaries, embeddings, automatic membership, notifications, tasks
 or a native mobile app. Those are gated on observed use of what is now built,
 not missing pieces of it.
 
+## Long-form writing
+
+**Planned, nothing built.** The plan and the reasoning are in
+[Long-form writing](knowledge-base/long-form.md): compile a tree of pages into
+one addressable document, give a page and a manuscript a length and a target, and
+check prose against rules the author wrote down. It is aimed at drafting
+long-form work alone with an assistant, which is what makes compile a context
+loader before it is an export and what makes a net word count worth splitting by
+who wrote it.
+
+Five phases, in this order, and L3 may swap with L2:
+
+- **L0: words.** A `words` column filled from the AST link extraction already
+  walks, plus `target`, `due` and `contents` in frontmatter.
+- **L1: compile and the manifest.** An `ordinal` on `links`, substitution,
+  heading shift, gaps and cycles reported rather than hidden.
+- **L2: `prose/v1`.** Rules in `.rhizolog/prose.toml`, five rule kinds, every
+  finding quoting the text it fired on. No dismissal store, on purpose.
+- **L3: actor and the word series.** An `X-Rhizolog-Actor` header, and
+  `page_words` in the durable half of the index.
+- **L4: dashboard and documentation closure.**
+
+**The recursion rule is the one thing to settle before L1 starts.** Compiling
+recurses through pages carrying `contents: true`, substituting any link that is
+the whole content of a list item or a paragraph. That is two new conventions, and
+the three alternatives and why each was rejected are on the plan page under Open
+questions. Deciding it late means rewriting the assembly.
+
+Two smaller decisions are also open and cheaper: whether `target` on a leaf page
+earns the recursive definition, and whether compile needs a byte ceiling for a
+caller whose context window has one.
+
+`page_words` would be the first durable table that grows with use, which is worth
+knowing before it lands rather than after: `api_usage` is bounded by routes and
+`pins` by patience, and a version bump rebuilds neither. Pruning is deliberately
+not designed.
+
 ## Rough edges
 
 - **The no-em-dash rule is enforced going forward and was never applied

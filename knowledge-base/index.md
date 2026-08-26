@@ -22,6 +22,8 @@ Every page should be reachable from this index.
   time link is not a link
 - [Idea Inbox](idea-inbox.md): low-friction capture, explainable recurrence,
   lifecycle receipts, and promotion into wiki pages
+- [Long-form writing](long-form.md): assembling a manuscript, counting what is
+  in it, and holding the prose to rules you wrote down
 - [The desktop app](desktop-app.md) — packaging as a portable Tauri app, and
   keeping the server the only interface
 - [The product site](product-site.md) — rhizolog.com: what the landing page is
