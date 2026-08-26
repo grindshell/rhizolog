@@ -626,6 +626,26 @@ describe('reordering the spine', () => {
   })
 
   /**
+   * The gap between two rows is not a place a drop can land, and neither is
+   * anywhere off the end of the list. No row's handler runs in either, so the
+   * list itself is what puts the mark out.
+   */
+  it('puts the mark out when the pointer leaves the rows', async () => {
+    const { container } = await reordering()
+    const [one, , two] = rows(container)
+
+    two?.dispatchEvent(drag('dragstart'))
+    one?.dispatchEvent(drag('dragover'))
+    await waitFor(() => expect(one?.className).toContain('ring-primary'))
+
+    one?.dispatchEvent(drag('dragleave'))
+
+    await waitFor(() => expect(one?.className).not.toContain('ring-primary'))
+    // The drag is still on: leaving the rows is not letting go of one.
+    expect(two?.className).toContain('opacity-40')
+  })
+
+  /**
    * A list with a hole in it is one `spines` refuses to rebuild, so nothing in
    * it gets controls. It is still nowhere a drop can go, and the dimming has to
    * say so: one bright row among eight dimmed ones is the one row on screen

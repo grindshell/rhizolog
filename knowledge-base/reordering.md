@@ -139,6 +139,21 @@ it. A link drags itself by default and that drag is of the link, not of the row
 under it. The price of the whole arrangement is that a row here cannot have its
 text selected, which is what being a mode is for.
 
+**And one price that is named rather than paid, because it could not be
+measured.** The source of a drag is the nearest draggable ancestor of whatever
+the pointer went down on, and the two move buttons are inside the row. So a press
+on one that drifts past the browser's drag threshold should start a drag of the
+row instead of firing the click, which would be the secondary gesture degrading
+the primary one. A review raised it and could not reproduce it: an HTML5 drag
+needs real mouse input, synthetic events cannot begin one, and the argument is
+from the specification's algorithm rather than from anything observed. Fixing an
+unmeasured fault by hand is how a codebase grows machinery nobody can later
+explain, so it is written down here and in `TODO.md` instead. If it turns out to
+be real, the fix is to note on `mousedown` whether the press landed in the
+controls and refuse the `dragstart` that follows, which is a few lines and one
+test; moving `draggable` onto the grip and setting the drag image from the row is
+the other answer and is a larger change.
+
 ### A drop takes a position, and most rows have none to give
 
 Dropping onto a row means taking that row's place, which is `moved(list, from,

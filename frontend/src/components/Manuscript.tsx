@@ -376,16 +376,19 @@ function Assembly(props: {
               class="flex flex-col gap-1 text-sm"
               /*
                 Rows mark and unmark themselves as the pointer crosses them, so
-                the only place a mark can be left behind is off the end of the
-                list, where no row's handler runs at all. `relatedTarget` is the
-                element being entered, so this fires once on the way out and not
-                on every hop between two rows.
+                the only place a mark could be left behind is where no row's
+                handler runs: off the end of the list, and the few pixels of gap
+                between two rows, which is not a place a drop can land either.
+
+                Clearing on every `dragleave` covers both without asking which
+                element the pointer went to. The obvious version of that question
+                is `relatedTarget`, and it is one browsers answer differently:
+                some do not populate it on a drag event at all, and a guard
+                reading it would then either do nothing or do this. Whichever it
+                is, a pointer still over a row it can use gets the mark back from
+                that row's next `dragover`, which arrives within the frame.
               */
-              onDragLeave={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node)) {
-                  setLanding(undefined)
-                }
-              }}
+              onDragLeave={() => setLanding(undefined)}
             >
               <For each={parts()}>
                 {(section, position) => (
@@ -456,7 +459,14 @@ function Part(props: {
 
   return (
     <li
-      class="flex flex-col gap-0.5 px-1 transition-opacity"
+      /*
+        The padding is for the ring a landing row draws, and the negative margin
+        is so that paying for it costs the List view nothing: a row's text lines
+        up with the progress bar and the summary above and below it, as it did
+        before there was anything to draw. Padding alone indented every row in
+        every view by four pixels for a mark only one view has.
+      */
+      class="-mx-1 flex flex-col gap-0.5 px-1 transition-opacity"
       classList={{
         'cursor-grab select-none active:cursor-grabbing': liftable(),
         'opacity-40': props.reorder?.lifted,

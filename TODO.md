@@ -488,6 +488,14 @@ What is not done:
   equivalent. A pointer-events drag would be one and would need a threshold, its
   own autoscroll and a hit test this gets from the browser for nothing. The
   buttons are the answer there and were built to be.
+- **Whether a press on a move button can start a drag of its row.** The row
+  carries `draggable` and the buttons are inside it, and the source of a drag is
+  the nearest draggable ancestor of whatever the pointer went down on. So a press
+  that drifts past the drag threshold should start a drag rather than fire the
+  click, which would be the new gesture degrading the one the design calls
+  primary. A review raised it and could not reproduce it, because an HTML5 drag
+  needs real mouse input and synthetic events cannot begin one. Named rather than
+  fixed on an argument from the specification alone.
 - **Dropping between two rows rather than onto one.** An insertion line needs a
   geometry a flat, recursive manifest does not have: as often as not the gap
   between two rows is a gap between two different lists.
