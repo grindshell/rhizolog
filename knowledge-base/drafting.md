@@ -255,6 +255,9 @@ and no second traversal.
   not it shows them. The rule is already written down twice and was broken once:
   a `PUT` that leaves a field out clears it, and L4 found the editor silently
   unmaking manuscripts for four phases because nothing rendered the damage.
+- **The page header gets the stage and the synopsis**, which is not in this list
+  as written and was added anyway. See
+  [What D2 turned out to be](#the-page-header-shows-them-too-which-the-plan-did-not-ask-for).
 
 Synopsis renders as **text**, never through `innerHTML`.
 
@@ -500,8 +503,10 @@ request that is not malformed.
 ## What D2 turned out to be
 
 `Stages.tsx` holds the vocabulary and the summary, `Manuscript.tsx` gained rows,
-cards and a view toggle, and the editor gained three controls and now round-trips
-six fields. Three things differ from the plan.
+cards and a view toggle, the editor gained three controls and now round-trips six
+fields, and `/pages/*slug` gained a badge and a card of its own. Five things
+differ from the plan, and the last of them is an addition to it rather than a
+departure from it.
 
 ### The summary counts the rows, not the manifest
 
@@ -547,6 +552,34 @@ position it left behind. Those cards show the status and nothing else. The word
 count goes too, for the same reason: zero is not what a reader gets, it is what
 the manifest says about a position that emitted nothing.
 
+### The page header shows them too, which the plan did not ask for
+
+The list above leaves a chapter's own synopsis and stage visible in its parent's
+Manuscript panel and in the editor, and nowhere on the chapter's own page. D2 was
+built that way and it was wrong as a feature, which is the one thing here that is
+an addition rather than a departure. The page you have opened to work on is where
+"what is this chapter for" is most worth answering, and the panel that answers it
+belongs to the **parent**, which a reader arriving from a search or a wikilink has
+not opened.
+
+So `/pages/*slug` carries the stage as a badge beside the title, next to the
+visibility badge and silent on the same terms: a badge on every page is a badge
+nobody reads, and a stage nobody has set is not a fifth stage.
+
+**The synopsis is set apart from the prose rather than sitting above it.** A
+synopsis is addressed to the author from outside the story and a body is addressed
+to a reader inside it, so in the same weight directly above the first paragraph it
+would read as a standfirst somebody wrote for the page rather than a note about
+it. A rule down the side and smaller, quieter type is what keeps the two from
+running together.
+
+It shows in all three readings: rendered, source and `?assembled=1`. It describes
+the page, which is still the page when the body is raw markdown, and on a root it
+describes the work, which is what the assembled view is showing.
+
+**The Manuscript panel's trigger is unchanged**: `contents`, `target` or `due`. A
+page carrying only a stage has no spine to draw, and the panel costs a compile.
+
 ## What D3 turned out to be
 
 `example-wiki/book` is eight pages now, `index.md` states every number again, and
@@ -582,11 +615,3 @@ because the cut scene is not in the assembled document and there is nothing of i
 for a rule to fire on. Asked about directly it answers 2 warnings of its own, which
 is the page being a page.
 
-### What the panel does not show
-
-A leaf chapter's own synopsis and stage are visible in its parent's Manuscript
-panel and in the editor, and **not** in the header of its own page at
-`/pages/*slug`. The panel's trigger is unchanged: `contents`, `target` or `due`,
-because a page carrying only a stage has no spine to draw and the panel costs a
-compile. Putting a badge and a card in the page header is a small, obvious
-addition, and it is not in this plan, so it is not in the code.

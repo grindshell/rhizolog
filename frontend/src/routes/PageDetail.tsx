@@ -22,6 +22,7 @@ import { Async, ErrorNotice } from '../components/Async'
 import Duration, { formatDuration } from '../components/Duration'
 import Manuscript from '../components/Manuscript'
 import Markdown from '../components/Markdown'
+import { StageBadge } from '../components/Stages'
 import SlugPath from '../components/SlugPath'
 import { PageTimerButton } from '../components/TimerMenu'
 import VisibilityBadge from '../components/VisibilityBadge'
@@ -180,6 +181,17 @@ export default function PageDetail() {
                       owner={loaded().owner}
                       readers={loaded().readers}
                     />
+                    {/*
+                      Beside the visibility rather than in the metadata line
+                      below, because it is a fact about the page rather than
+                      about its file, and because a chapter you have opened to
+                      work on is the place the answer is most wanted. Silent on
+                      a page that says nothing, which is most of them: a stage
+                      nobody has set is not a fifth stage.
+                    */}
+                    <Show when={loaded().stage}>
+                      {(stage) => <StageBadge stage={stage()} />}
+                    </Show>
                   </h1>
                   <div class="flex items-center gap-2">
                     {/*
@@ -286,6 +298,35 @@ export default function PageDetail() {
                   <span class="font-mono">{loaded().slug}</span> · {loaded().size} bytes ·
                   updated {formatDate(loaded().updated)}
                 </div>
+
+                {/*
+                  The index card, above the prose and set apart from it.
+                  A synopsis is addressed to the author from outside the story
+                  and the body is addressed to a reader inside it, so the two
+                  must not run together: dropped straight above the first
+                  paragraph in the same weight, this would read as a standfirst
+                  somebody wrote for the page rather than a note about it.
+                  Hence the rule down the side and the smaller, quieter type.
+
+                  Shown in all three readings on purpose. It describes the page,
+                  which is still the page when the body is the raw source, and
+                  on a root it describes the work, which is what `?assembled=1`
+                  is showing.
+
+                  Text, never `innerHTML`. A synopsis is page content and page
+                  content is what agents write, which is the rule `Snippet.tsx`
+                  exists to keep; here it is kept by there being nothing to
+                  render, since the field is plain text by definition.
+                  `whitespace-pre-line` is what keeps a card written as two
+                  paragraphs looking like two.
+                */}
+                <Show when={loaded().synopsis}>
+                  {(synopsis) => (
+                    <p class="border-base-300 mt-1 border-l-2 py-0.5 pl-3 text-sm opacity-70 whitespace-pre-line">
+                      {synopsis()}
+                    </p>
+                  )}
+                </Show>
 
                 <Show
                   when={!showSource()}

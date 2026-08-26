@@ -417,6 +417,26 @@ and page content is what agents write, which is the rule `Snippet.tsx` exists to
 keep; here it is kept by there being nothing to render, since the field is plain
 text by definition.
 
+### The page header answers the same two questions about itself
+
+The panel belongs to the **parent**, and a reader arriving at a chapter from a
+search or a wikilink has not opened it. So `/pages/*slug` carries the stage as a
+badge beside the title, next to the visibility badge and silent on the same terms:
+a badge on every page is a badge nobody reads.
+
+The synopsis sits between the metadata line and the body, **set apart from the
+prose rather than above it**. A synopsis is addressed to the author from outside
+the story and a body is addressed to a reader inside it, so in the same weight
+directly above the first paragraph it would read as a standfirst somebody wrote
+for the page rather than a note about it. A rule down the side and quieter type is
+what keeps the two from running together. It shows in all three readings, rendered,
+source and assembled, because it describes the page and the page is still the page
+when the body is raw markdown.
+
+Neither changes the Manuscript panel's trigger, which stays `contents`, `target`
+or `due`. A page carrying only a stage has no spine to draw and the panel costs a
+compile.
+
 ### The card view is the corkboard without the coordinates
 
 A toggle beside "Read assembled" swaps the list for one card per section: title,
@@ -569,9 +589,14 @@ What is covered is the part where the bugs were, not the part that is easy:
   total rather than the page's own.
 - **That a section's target is measured against its `subtree`**, which is the one
   number a reader cannot check by looking at the row it is on, and **that a
-  synopsis containing markup renders as characters**. Beside them, that the stage
-  summary counts folded spellings as one stage, orders the known ones by
-  lifecycle, and disappears entirely on a manuscript nobody has staged.
+  synopsis containing markup renders as characters**, in the panel and in the page
+  header both. Beside them, that the stage summary counts folded spellings as one
+  stage, orders the known ones by lifecycle, and disappears entirely on a
+  manuscript nobody has staged.
+- **That the page header stays quiet on a page that says nothing.** A stage badge
+  and a synopsis card on every page in the wiki would be the failure
+  `VisibilityBadge` already argues against, and a card taken from the first
+  paragraph would be the claim this feature refuses to derive.
 - **That the words chart draws both halves rather than their difference**, with
   one tool, with several and with none. The last is every wiki on its first day
   and has to look quiet rather than broken.
