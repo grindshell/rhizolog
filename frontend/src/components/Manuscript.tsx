@@ -1,8 +1,17 @@
-import { For, Show, createMemo, createResource } from 'solid-js'
+import { For, Show, createMemo, createResource, createSignal } from 'solid-js'
 import { A } from '@solidjs/router'
 import { assembledHref, compilePages, pageHref } from '../api/client'
 import type { CompiledView, PageView, SectionView } from '../api/client'
 import { Async } from './Async'
+import StageSummary, { StageBadge } from './Stages'
+
+/** How the sections can be laid out. */
+type View = 'list' | 'cards'
+
+const VIEWS: { value: View; label: string; title: string }[] = [
+  { value: 'list', label: 'List', title: 'The spine, in order, one line each' },
+  { value: 'cards', label: 'Cards', title: 'One card per section, with its synopsis' },
+]
 
 /**
  * The spine of a manuscript, rendered as something you can click.
@@ -29,26 +38,54 @@ export default function Manuscript(props: { page: PageView }) {
     () => props.page.slug,
     (root) => compilePages({ root }),
   )
+  /**
+   * Which layout the sections get.
+   *
+   * The card view is the corkboard without the part of the corkboard that stores
+   * coordinates. Freeform arrangement is deliberately absent: order lives in
+   * frontmatter precisely so that nothing about a display can reorder a book, and
+   * an x and a y per card would be exactly that in a different coat.
+   */
+  const [view, setView] = createSignal<View>('list')
 
   return (
     <section class="card bg-base-100 shadow">
       <div class="card-body gap-3">
         <div class="flex flex-wrap items-baseline justify-between gap-2">
           <h2 class="card-title text-base">Manuscript</h2>
-          <A class="btn btn-ghost btn-sm" href={assembledHref(props.page.slug)}>
-            Read assembled
-          </A>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="join" role="group" aria-label="Section layout">
+              <For each={VIEWS}>
+                {(option) => (
+                  <button
+                    class="btn join-item btn-sm"
+                    classList={{ 'btn-active': view() === option.value }}
+                    aria-pressed={view() === option.value}
+                    title={option.title}
+                    onClick={() => setView(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                )}
+              </For>
+            </div>
+            <A class="btn btn-ghost btn-sm" href={assembledHref(props.page.slug)}>
+              Read assembled
+            </A>
+          </div>
         </div>
 
         <Async resource={compiled}>
-          {(document) => <Assembly page={props.page} compiled={document} />}
+          {(document) => (
+            <Assembly page={props.page} compiled={document} view={view()} />
+          )}
         </Async>
       </div>
     </section>
   )
 }
 
-function Assembly(props: { page: PageView; compiled: CompiledView }) {
+function Assembly(props: { page: PageView; compiled: CompiledView; view: View }) {
   /**
    * Everything but the root's own body, which compile emits first.
    *
@@ -69,32 +106,57 @@ function Assembly(props: { page: PageView; compiled: CompiledView }) {
     () => parts().filter((section) => section.status !== 'included').length,
   )
 
+  /**
+   * The sentence shown where there is nothing to list.
+   *
+   * An absent `contents:` and an empty one are different values and survive a
+   * round trip as different values, so they get different sentences. A book on
+   * the day it is started is the second.
+   */
+  const nothing = () => (
+    <span class="text-sm opacity-60">
+      <Show
+        when={props.page.contents}
+        fallback="Nothing is assembled here. Give this page a contents list to make it a manuscript."
+      >
+        This manuscript has no parts yet. Add slugs to its contents list.
+      </Show>
+    </span>
+  )
+
   return (
     <>
       <Progress compiled={props.compiled} due={props.page.due} />
 
-      <ul class="flex flex-col gap-1 text-sm">
-        <For
-          each={parts()}
+      {/*
+        Counted across the sections this panel is showing, which is the manifest
+        without the root's own body. A summary that counted something a reader
+        cannot see is a number they have no way to check.
+      */}
+      <StageSummary sections={parts()} />
+
+      <Show when={parts().length > 0} fallback={nothing()}>
+        <Show
+          when={props.view === 'cards'}
           fallback={
-            <li class="opacity-60">
-              {/*
-                An absent `contents:` and an empty one are different values and
-                survive a round trip as different values, so they get different
-                sentences. A book on the day it is started is the second.
-              */}
-              <Show
-                when={props.page.contents}
-                fallback="Nothing is assembled here. Give this page a contents list to make it a manuscript."
-              >
-                This manuscript has no parts yet. Add slugs to its contents list.
-              </Show>
-            </li>
+            <ul class="flex flex-col gap-1 text-sm">
+              <For each={parts()}>
+                {(section, position) => (
+                  <Part section={section} position={position()} />
+                )}
+              </For>
+            </ul>
           }
         >
-          {(section, position) => <Part section={section} position={position()} />}
-        </For>
-      </ul>
+          <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            <For each={parts()}>
+              {(section, position) => (
+                <Card section={section} position={position()} />
+              )}
+            </For>
+          </div>
+        </Show>
+      </Show>
 
       <Show when={parts().length > 0}>
         <div class="text-xs opacity-60">
@@ -122,18 +184,96 @@ function Part(props: { section: SectionView; position: number }) {
   const included = () => status() === 'included'
 
   return (
-    <li class="flex flex-wrap items-baseline justify-between gap-2">
-      <span class="flex min-w-0 items-baseline gap-2">
-        <span class="w-6 shrink-0 text-right font-mono text-xs opacity-40">
-          {props.position + 1}
+    <li class="flex flex-col gap-0.5">
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <span class="flex min-w-0 items-baseline gap-2">
+          <span class="w-6 shrink-0 text-right font-mono text-xs opacity-40">
+            {props.position + 1}
+          </span>
+          {/*
+            Indented by depth, which is the only thing that says a chapter sits
+            under a part rather than beside it. The list is flat because the
+            manifest is: positions are what compile promises, and a tree would
+            have to invent the nesting back out of them.
+          */}
+          <span style={{ 'padding-left': `${Math.max(0, props.section.depth - 1) * 0.75}rem` }}>
+            <Show
+              when={included()}
+              fallback={
+                <span class="font-mono text-xs break-all opacity-70">
+                  {props.section.slug}
+                </span>
+              }
+            >
+              <A class="link" href={pageHref(props.section.slug)}>
+                {props.section.title ?? props.section.slug}
+              </A>
+            </Show>
+          </span>
         </span>
-        {/*
-          Indented by depth, which is the only thing that says a chapter sits
-          under a part rather than beside it. The list is flat because the
-          manifest is: positions are what compile promises, and a tree would
-          have to invent the nesting back out of them.
-        */}
-        <span style={{ 'padding-left': `${Math.max(0, props.section.depth - 1) * 0.75}rem` }}>
+
+        <span class="flex shrink-0 items-baseline gap-2">
+          <Show when={props.section.stage}>
+            {(stage) => <StageBadge stage={stage()} />}
+          </Show>
+          <Show when={!included()}>
+            <span class="badge badge-sm" classList={badgeClass(status())}>
+              {status()}
+            </span>
+          </Show>
+          <Show when={props.section.words > 0}>
+            <span class="font-mono text-xs opacity-60">
+              {props.section.words.toLocaleString()}
+            </span>
+          </Show>
+        </span>
+      </div>
+
+      {/*
+        Both hang off the title rather than the number, so a chapter's synopsis
+        and its own progress line up under the chapter and not under the margin.
+      */}
+      <div style={{ 'padding-left': `${1.5 + Math.max(0, props.section.depth - 1) * 0.75}rem` }}>
+        <Show when={props.section.synopsis}>
+          {(synopsis) => (
+            <p class="line-clamp-1 text-xs opacity-60" title={synopsis()}>
+              {/*
+                A text node, never `innerHTML`. A synopsis is page content and
+                page content is what agents write, which is the rule
+                `Snippet.tsx` exists to keep. Here it is kept by there being
+                nothing to render: the field is plain text by definition.
+              */}
+              {synopsis()}
+            </p>
+          )}
+        </Show>
+        <SectionTarget section={props.section} />
+      </div>
+    </li>
+  )
+}
+
+/**
+ * One section, as a card.
+ *
+ * This is what a synopsis makes possible, and it is the corkboard without the
+ * coordinates. A card with no synopsis says so rather than showing an excerpt of
+ * the prose: an empty card is a chapter nobody has decided about yet, which is
+ * exactly the thing worth seeing.
+ */
+function Card(props: { section: SectionView; position: number }) {
+  const included = () => props.section.status === 'included'
+
+  return (
+    <article
+      class="border-base-300 flex flex-col gap-2 rounded border p-3"
+      classList={{ 'opacity-60': !included() }}
+    >
+      <div class="flex items-baseline justify-between gap-2">
+        <span class="flex min-w-0 items-baseline gap-2">
+          <span class="shrink-0 font-mono text-xs opacity-40">
+            {props.position + 1}
+          </span>
           <Show
             when={included()}
             fallback={
@@ -142,41 +282,94 @@ function Part(props: { section: SectionView; position: number }) {
               </span>
             }
           >
-            <A class="link" href={pageHref(props.section.slug)}>
+            <A class="link truncate text-sm font-medium" href={pageHref(props.section.slug)}>
               {props.section.title ?? props.section.slug}
             </A>
           </Show>
         </span>
-      </span>
+        <Show
+          when={props.section.stage}
+          fallback={
+            <Show when={!included()}>
+              <span class="badge badge-sm" classList={badgeClass(props.section.status)}>
+                {props.section.status}
+              </span>
+            </Show>
+          }
+        >
+          {(stage) => <StageBadge stage={stage()} />}
+        </Show>
+      </div>
 
-      <span class="flex shrink-0 items-baseline gap-2">
-        <Show when={!included()}>
-          <span class="badge badge-sm" classList={badgeClass(status())}>
-            {status()}
-          </span>
-        </Show>
-        <Show when={props.section.words > 0}>
-          <span class="font-mono text-xs opacity-60">
-            {props.section.words.toLocaleString()}
-          </span>
-        </Show>
-      </span>
-    </li>
+      {/*
+        A text node, never `innerHTML`: a synopsis is page content and page
+        content is what agents write. `whitespace-pre-line` is what keeps a card
+        written as two paragraphs looking like two.
+
+        The placeholder is only for a section that is actually in the document.
+        A gap has no page to have a synopsis, and a cut chapter reports nothing
+        about itself at all, so "No synopsis yet" there would be a sentence about
+        a page rather than about the position it left behind.
+      */}
+      <p
+        class="line-clamp-4 min-h-16 text-xs whitespace-pre-line"
+        classList={{ 'opacity-40 italic': !props.section.synopsis }}
+      >
+        {props.section.synopsis ?? (included() ? 'No synopsis yet.' : '')}
+      </p>
+
+      <Show when={included()}>
+        <div class="font-mono text-xs opacity-60">
+          {props.section.words.toLocaleString()}{' '}
+          {props.section.words === 1 ? 'word' : 'words'}
+        </div>
+      </Show>
+      <SectionTarget section={props.section} />
+    </article>
   )
 }
 
 /**
- * The three not-included statuses that are worth different colours.
+ * A section's own progress, wherever it names a target of its own.
+ *
+ * Measured against `subtree` rather than `words`, which is the whole reason the
+ * manifest carries two numbers. A section's `words` is its own body, so on a part
+ * page it is the epigraph and nothing else, and drawing a target against that
+ * would show every part in the book at two per cent forever.
+ */
+function SectionTarget(props: { section: SectionView }) {
+  const target = () => props.section.target ?? 0
+
+  return (
+    <Show when={target() > 0}>
+      <div class="flex items-center gap-2">
+        <progress
+          class="progress progress-primary h-1 w-full"
+          value={props.section.subtree}
+          max={target()}
+        />
+        <span class="shrink-0 font-mono text-xs opacity-50">
+          {props.section.subtree.toLocaleString()}/{target().toLocaleString()}
+        </span>
+      </div>
+    </Show>
+  )
+}
+
+/**
+ * The not-included statuses that are worth different colours.
  *
  * `duplicate` is deliberately not a warning. The commonest case is not a cycle
  * at all: an appendix listed under two parts is a diamond, and the second
  * position reporting itself is the manifest working rather than complaining.
+ * `excluded` is not one either: a page kept in the spine and out of the book is
+ * a decision somebody made, not a fault.
  */
 function badgeClass(status: string): Record<string, boolean> {
   return {
     'badge-warning': status === 'wanted',
     'badge-error': status === 'invalid' || status === 'unreadable',
-    'badge-ghost': status === 'duplicate',
+    'badge-ghost': status === 'duplicate' || status === 'excluded',
   }
 }
 

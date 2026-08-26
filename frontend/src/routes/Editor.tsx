@@ -17,6 +17,7 @@ import { sessionState } from '../api/session'
 import { ErrorNotice } from '../components/Async'
 import Findings, { byteToIndex } from '../components/Findings'
 import Markdown from '../components/Markdown'
+import { KNOWN_STAGES } from '../components/Stages'
 
 /**
  * The visibility ladder, in the order it narrows.
@@ -132,13 +133,13 @@ export default function Editor() {
    */
   const [owner, setOwner] = createSignal<string | undefined>()
   /**
-   * The three manuscript fields, and they are here whether or not the page is
-   * one.
+   * The manuscript fields, and they are here whether or not the page is one.
    *
    * Saving is a `PUT`, so a field left out is a field cleared, and an editor
    * that dropped these would unmake a book on the first save of any page in it.
    * That is the same failure that once handed pages to the wrong owner, which is
-   * why `owner` above is carried the same way.
+   * why `owner` above is carried the same way, and it is why every one of these
+   * is round-tripped whether or not the block that edits them is ever opened.
    *
    * `contents` needs two pieces of state rather than one, because absent and
    * empty are different values and the API keeps them apart: **absent** is an
@@ -150,6 +151,10 @@ export default function Editor() {
   const [due, setDue] = createSignal('')
   const [assembles, setAssembles] = createSignal(false)
   const [contents, setContents] = createSignal('')
+  const [synopsis, setSynopsis] = createSignal('')
+  const [stage, setStage] = createSignal('')
+  /** Whether the page belongs in what compiles it. Absent means yes. */
+  const [compile, setCompile] = createSignal(true)
   /** What the server called the page when it was loaded, for the placeholder. */
   const [inheritedTitle, setInheritedTitle] = createSignal('')
   const [dirty, setDirty] = createSignal(false)
@@ -180,6 +185,13 @@ export default function Editor() {
     setDue(page.due ? page.due.slice(0, 10) : '')
     setAssembles(page.contents !== undefined && page.contents !== null)
     setContents((page.contents ?? []).join('\n'))
+    // Nothing derives a synopsis, so an absent one is an empty field rather
+    // than a placeholder taken from the body. The title above is the field that
+    // works the other way, and the difference is argued in
+    // `knowledge-base/drafting.md`.
+    setSynopsis(page.synopsis ?? '')
+    setStage(page.stage ?? '')
+    setCompile(page.compile)
     setDirty(false)
     setFailure(undefined)
   })
@@ -296,6 +308,14 @@ export default function Editor() {
         target: parseTarget(target()),
         due: parseDue(due()),
         contents: assembles() ? parseLines(contents()) : null,
+        // A synopsis is prose, so only the surrounding whitespace goes: a blank
+        // line inside one is what makes it two paragraphs. An empty field is a
+        // page with nothing said about it, which is `null` rather than `""`.
+        synopsis: synopsis().trim() === '' ? null : synopsis(),
+        stage: stage().trim() === '' ? null : stage().trim(),
+        // `true` is what an absent field means, so sending it back writes
+        // nothing into the file. Only `false` ever appears in frontmatter.
+        compile: compile(),
       }
 
       // `existing` rather than `target`, which now names a word count.
@@ -390,8 +410,29 @@ export default function Editor() {
 
   const canSave = () => !busy() && (editing() !== undefined || slug().trim() !== '')
 
-  /** Whether this page carries any of the three, and so is worth opening. */
-  const isManuscript = () => assembles() || target().trim() !== '' || due() !== ''
+  /** Whether this page carries any of them, and so is worth opening. */
+  const isManuscript = () =>
+    assembles() ||
+    target().trim() !== '' ||
+    due() !== '' ||
+    stage().trim() !== '' ||
+    synopsis().trim() !== '' ||
+    !compile()
+
+  /**
+   * What the collapsed block says about itself.
+   *
+   * The most structural thing first: a page that assembles others is a book
+   * before it is anything else, and a stage is what somebody scanning a list of
+   * chapters is actually looking for.
+   */
+  const manuscriptBadge = () => {
+    if (assembles()) return `${parseLines(contents()).length} parts`
+    if (stage().trim() !== '') return stage().trim()
+    if (!compile()) return 'not compiled'
+    if (target().trim() !== '' || due() !== '') return 'target'
+    return 'synopsis'
+  }
 
   return (
     <div class="flex flex-col gap-4">
@@ -601,11 +642,85 @@ export default function Editor() {
                 Manuscript
                 <Show when={isManuscript()}>
                   <span class="badge badge-ghost badge-sm ml-2">
-                    {assembles() ? `${parseLines(contents()).length} parts` : 'target'}
+                    {manuscriptBadge()}
                   </span>
                 </Show>
               </summary>
               <div class="collapse-content flex flex-col gap-3">
+                <label class="form-control">
+                  <div class="label">
+                    <span class="label-text">Synopsis</span>
+                    <span class="label-text-alt opacity-60">plain text</span>
+                  </div>
+                  <textarea
+                    class="textarea textarea-bordered h-20 w-full resize-y text-sm"
+                    value={synopsis()}
+                    placeholder="He misses the crossing and decides not to mind."
+                    onInput={(event) => {
+                      setSynopsis(event.currentTarget.value)
+                      setDirty(true)
+                    }}
+                  />
+                  <div class="label">
+                    <span class="label-text-alt opacity-60">
+                      What this page is for, in your words. Nothing fills it in
+                      from the body: a first paragraph is addressed to a reader
+                      inside the story, and this is addressed to you from outside
+                      it.
+                    </span>
+                  </div>
+                </label>
+
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <label class="form-control">
+                    <div class="label">
+                      <span class="label-text">Stage</span>
+                      <span class="label-text-alt opacity-60">any word you like</span>
+                    </div>
+                    {/*
+                      A list rather than a select. The four below are the ones
+                      this dashboard knows how to colour, and they are offered
+                      rather than enforced: a writer whose process has
+                      `with-beta-readers` in it should not have to argue with a
+                      schema.
+                    */}
+                    <input
+                      class="input input-bordered w-full"
+                      list="rhizolog-stages"
+                      value={stage()}
+                      placeholder="drafted"
+                      onInput={(event) => {
+                        setStage(event.currentTarget.value)
+                        setDirty(true)
+                      }}
+                    />
+                    <datalist id="rhizolog-stages">
+                      <For each={KNOWN_STAGES}>
+                        {(known) => <option value={known} />}
+                      </For>
+                    </datalist>
+                  </label>
+
+                  <label class="label cursor-pointer items-end justify-start gap-3 pb-3">
+                    <input
+                      type="checkbox"
+                      class="checkbox checkbox-sm"
+                      checked={compile()}
+                      onChange={(event) => {
+                        setCompile(event.currentTarget.checked)
+                        setDirty(true)
+                      }}
+                    />
+                    <span class="label-text">
+                      Include this page when compiling
+                      <span class="block text-xs opacity-60">
+                        Unchecked keeps it in the contents list, in position, and
+                        out of the document. Everything listed under it goes too.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+
                 <div class="grid gap-3 sm:grid-cols-2">
                   <label class="form-control">
                     <div class="label">

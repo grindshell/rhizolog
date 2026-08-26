@@ -275,6 +275,113 @@ describe('the manuscript fields survive a save', () => {
   })
 })
 
+describe('the drafting fields survive a save', () => {
+  async function saveLoaded(container: HTMLElement, getByText: (text: string) => HTMLElement) {
+    await waitFor(() => expect(fields(container).slug.value).toBe('book/one/the-ferry'))
+    getByText('Save').click()
+    await waitFor(() => expect(api.replacePage).toHaveBeenCalled())
+    return api.replacePage.mock.calls[0]?.[1] as {
+      synopsis: string | null
+      stage: string | null
+      target: number | null
+      compile: boolean
+    }
+  }
+
+  /**
+   * The rule written down twice and broken once. A `PUT` replaces every field,
+   * so an editor that shows a chapter and saves it must hand all four back
+   * whether or not anybody touched them.
+   */
+  it('sends all four back untouched', async () => {
+    api.getPage.mockResolvedValue(
+      page({
+        slug: 'book/one/the-ferry',
+        synopsis: 'He misses the crossing.\n\nAnd decides not to mind.',
+        stage: 'with-beta-readers',
+        target: 3000,
+        compile: false,
+      }),
+    )
+    const { container, getByText } = openEditor('/edit/book/one/the-ferry')
+
+    const body = await saveLoaded(container, getByText)
+
+    expect(body.synopsis).toBe('He misses the crossing.\n\nAnd decides not to mind.')
+    expect(body.stage).toBe('with-beta-readers')
+    expect(body.target).toBe(3000)
+    expect(body.compile).toBe(false)
+  })
+
+  /**
+   * An ordinary page saved from the editor must not grow any of them. `true` is
+   * what an absent `compile:` means, so sending it back writes nothing.
+   */
+  it('sends nothing for a page that says none of them', async () => {
+    api.getPage.mockResolvedValue(page({ slug: 'book/one/the-ferry' }))
+    const { container, getByText } = openEditor('/edit/book/one/the-ferry')
+
+    const body = await saveLoaded(container, getByText)
+
+    expect(body.synopsis).toBeNull()
+    expect(body.stage).toBeNull()
+    expect(body.compile).toBe(true)
+  })
+
+  /** A stage of spaces is a field nobody filled in, not a stage called "  ". */
+  it('sends null for a stage that is only whitespace', async () => {
+    api.getPage.mockResolvedValue(
+      page({ slug: 'book/one/the-ferry', stage: '   ', synopsis: '  ' }),
+    )
+    const { container, getByText } = openEditor('/edit/book/one/the-ferry')
+
+    const body = await saveLoaded(container, getByText)
+
+    expect(body.stage).toBeNull()
+    expect(body.synopsis).toBeNull()
+  })
+})
+
+describe('the manuscript block', () => {
+  const block = (container: HTMLElement) =>
+    container.querySelector('details') as HTMLDetailsElement
+
+  /**
+   * Most pages are not manuscripts, so the block is collapsed by default. A page
+   * that carries any one of the fields is one, and a stage on its own is the
+   * case a check for `contents`, `target` and `due` would have missed.
+   */
+  it('opens for a page carrying only a stage', async () => {
+    api.getPage.mockResolvedValue(page({ slug: 'book/one/the-ferry', stage: 'drafted' }))
+    const { container } = openEditor('/edit/book/one/the-ferry')
+
+    await waitFor(() => expect(block(container).open).toBe(true))
+    expect(block(container).textContent).toContain('drafted')
+  })
+
+  it('opens for a page carrying only a synopsis, and one kept out of the book', async () => {
+    api.getPage.mockResolvedValue(
+      page({ slug: 'book/one/the-ferry', synopsis: 'He misses the crossing.' }),
+    )
+    const { container } = openEditor('/edit/book/one/the-ferry')
+    await waitFor(() => expect(block(container).open).toBe(true))
+    cleanup()
+
+    api.getPage.mockResolvedValue(page({ slug: 'book/one/cut', compile: false }))
+    const cut = openEditor('/edit/book/one/cut')
+    await waitFor(() => expect(block(cut.container).open).toBe(true))
+    expect(block(cut.container).textContent).toContain('not compiled')
+  })
+
+  it('stays shut for an ordinary page', async () => {
+    api.getPage.mockResolvedValue(page({ slug: 'notes/rust/async' }))
+    const { container } = openEditor('/edit/notes/rust/async')
+
+    await waitFor(() => expect(fields(container).slug.value).toBe('notes/rust/async'))
+    expect(block(container).open).toBe(false)
+  })
+})
+
 describe('parsing the manuscript fields', () => {
   it('reads a target, and refuses one that is not a whole count', () => {
     expect(parseTarget(' 90000 ')).toBe(90000)

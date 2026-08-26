@@ -170,3 +170,202 @@ describe('the manuscript panel', () => {
     expect(due.textContent).toContain('1')
   })
 })
+
+describe('what a section says about itself', () => {
+  const staged = (over: Partial<CompiledView> = {}) =>
+    compiled({
+      sections: [
+        section({ slug: 'book', title: 'The Long Way Round', depth: 0, words: 40 }),
+        section({
+          slug: 'book/one/opening',
+          title: 'The Opening',
+          stage: 'drafted',
+          synopsis: 'They leave, and nobody says why.',
+        }),
+        section({
+          slug: 'book/one/the-ferry',
+          title: 'The Ferry',
+          stage: 'with-beta-readers',
+        }),
+      ],
+      ...over,
+    })
+
+  it('shows the stage as a badge and the synopsis as one line', async () => {
+    api.compilePages.mockResolvedValue(staged())
+
+    const { container, findByText } = panel()
+
+    await findByText('The Opening')
+    // Scoped to the rows, because the summary above them says these words too.
+    const rows = container.querySelector('ul') as HTMLElement
+    expect(rows.textContent).toContain('drafted')
+    // An unknown stage is shown as itself rather than corrected to one of the
+    // four the dashboard knows.
+    expect(rows.textContent).toContain('with-beta-readers')
+
+    const card = await findByText('They leave, and nobody says why.')
+    expect(card.className).toContain('line-clamp-1')
+  })
+
+  /**
+   * A synopsis is page content and page content is what agents write, which is
+   * the rule `Snippet.tsx` exists to keep. Here it is kept by there being
+   * nothing to render: the field is plain text and goes in as a text node.
+   */
+  it('renders a synopsis containing markup as characters', async () => {
+    const hostile = '<img src=x onerror="alert(1)"> **not bold**'
+    api.compilePages.mockResolvedValue(
+      compiled({
+        sections: [
+          section({ slug: 'book', title: 'The Long Way Round', depth: 0 }),
+          section({ synopsis: hostile }),
+        ],
+      }),
+    )
+
+    const { findByText, container } = panel()
+
+    expect(await findByText(hostile)).toBeTruthy()
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.innerHTML).toContain('&lt;img')
+  })
+
+  /**
+   * The reason the manifest carries two counts. A part's `words` is its own body,
+   * so drawing a target against it would show every part in the book at two per
+   * cent forever.
+   */
+  it('measures a section target against its subtree', async () => {
+    api.compilePages.mockResolvedValue(
+      compiled({
+        sections: [
+          section({ slug: 'book', title: 'The Long Way Round', depth: 0 }),
+          section({ slug: 'book/one', title: 'Part One', words: 6, subtree: 2500, target: 5000 }),
+        ],
+      }),
+    )
+
+    const { container, findByText } = panel()
+
+    await findByText('Part One')
+    const bar = container.querySelector('li progress') as HTMLProgressElement
+    expect(bar.value).toBe(2500)
+    expect(bar.max).toBe(5000)
+    expect(await findByText('2,500/5,000')).toBeTruthy()
+  })
+
+  it('draws no section bar where a section names no target', async () => {
+    api.compilePages.mockResolvedValue(staged())
+
+    const { container, findByText } = panel()
+
+    await findByText('The Opening')
+    expect(container.querySelector('li progress')).toBeNull()
+  })
+})
+
+describe('the stage summary', () => {
+  it('counts the stages across the manifest, in lifecycle order', async () => {
+    api.compilePages.mockResolvedValue(
+      compiled({
+        sections: [
+          section({ slug: 'book', title: 'Book', depth: 0 }),
+          section({ slug: 'a', title: 'A', stage: 'revised' }),
+          section({ slug: 'b', title: 'B', stage: 'drafted' }),
+          // Two spellings of one stage, which fold together and are shown in
+          // the canonical one rather than whichever arrived first.
+          section({ slug: 'c', title: 'C', stage: 'Drafted' }),
+          section({ slug: 'd', title: 'D', stage: 'todo' }),
+          section({ slug: 'e', title: 'E' }),
+        ],
+      }),
+    )
+
+    const { findByText, getByRole } = panel()
+
+    await findByText('A')
+    expect(getByRole('list', { name: 'Stages' }).textContent).toBe(
+      '1to do2drafted1revised',
+    )
+  })
+
+  /**
+   * A row of zeroes would be four claims about a book nobody has staged, and an
+   * unstaged chapter is not a bucket: it is one nobody has said anything about.
+   */
+  it('shows nothing at all where no section has a stage', async () => {
+    const { container, findByText } = panel()
+
+    await findByText('The Opening')
+    expect(container.textContent).not.toContain('to do')
+    expect(container.textContent).not.toContain('drafted')
+  })
+})
+
+describe('the card view', () => {
+  const cards = (container: HTMLElement) => container.querySelectorAll('article')
+
+  it('swaps the list for one card per section', async () => {
+    api.compilePages.mockResolvedValue(
+      compiled({
+        sections: [
+          section({ slug: 'book', title: 'The Long Way Round', depth: 0 }),
+          section({
+            slug: 'book/one/opening',
+            title: 'The Opening',
+            synopsis: 'They leave, and nobody says why.',
+            stage: 'drafted',
+          }),
+          section({ slug: 'book/one/the-ferry', title: 'The Ferry' }),
+        ],
+      }),
+    )
+
+    const { container, findByText, getByText } = panel()
+
+    await findByText('The Opening')
+    expect(cards(container).length).toBe(0)
+
+    getByText('Cards').click()
+
+    await waitFor(() => expect(cards(container).length).toBe(2))
+    expect(container.querySelectorAll('li').length).toBe(0)
+    expect(cards(container)[0]?.textContent).toContain('They leave, and nobody says why.')
+    // An empty card is a chapter nobody has decided about yet, which is exactly
+    // the thing worth seeing. It says so rather than showing the prose.
+    expect(cards(container)[1]?.textContent).toContain('No synopsis yet.')
+  })
+
+  /**
+   * A gap has no page to have a synopsis and a cut chapter reports nothing about
+   * itself, so the placeholder would be a sentence about a page rather than
+   * about the position it left behind.
+   */
+  it('says nothing about a section that is not in the document', async () => {
+    api.compilePages.mockResolvedValue(
+      compiled({
+        sections: [
+          section({ slug: 'book', title: 'The Long Way Round', depth: 0 }),
+          section({ slug: 'book/cut', title: undefined, status: 'excluded', words: 0 }),
+          section({ slug: 'book/nowhere', title: undefined, status: 'wanted', words: 0 }),
+        ],
+      }),
+    )
+
+    const { container, findByText, getByText } = panel()
+
+    await findByText('book/cut')
+    getByText('Cards').click()
+    await waitFor(() => expect(cards(container).length).toBe(2))
+
+    for (const card of cards(container)) {
+      expect(card.textContent).not.toContain('No synopsis yet.')
+      expect(card.textContent).not.toContain('words')
+    }
+    // The status is what a position without a section has to say for itself,
+    // and it is still said.
+    expect(cards(container)[0]?.textContent).toContain('excluded')
+    expect(cards(container)[1]?.textContent).toContain('wanted')
+  })
+})
