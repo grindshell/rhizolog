@@ -43,6 +43,8 @@ function page(overrides: Partial<PageView> = {}): PageView {
     // The visibility control only appears on a wiki that has accounts, and
     // these tests run against one that does not.
     visibility: 'internal',
+    // What an absent `compile:` means, which is what every page here is.
+    compile: true,
     ...overrides,
   }
 }

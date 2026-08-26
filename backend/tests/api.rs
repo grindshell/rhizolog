@@ -1355,6 +1355,316 @@ async fn a_contents_entry_that_is_not_a_slug_leaves_the_page_alone() {
     );
 }
 
+// -------------------------------------------------------------- drafting
+
+/// The vocabulary is not fixed. A writer whose process has `with-beta-readers`
+/// in it should not have to argue with a schema, so an unknown stage round-trips
+/// as typed, appears in a listing, and can be filtered and sorted on.
+#[tokio::test]
+async fn a_stage_nobody_has_heard_of_survives_and_appears_in_a_listing() {
+    let app = App::new().await;
+    app.seed(
+        "book/one/the-ferry",
+        json!({ "content": "Prose.\n", "stage": "with-beta-readers" }),
+    )
+    .await;
+    app.seed(
+        "book/one/opening",
+        json!({ "content": "Prose.\n", "stage": "Drafted" }),
+    )
+    .await;
+    app.seed("book/two", json!({ "content": "Prose.\n" })).await;
+
+    let read = app.get("/api/pages/book/one/the-ferry").await;
+    assert_eq!(read.body["stage"], "with-beta-readers");
+
+    let listing = app.get("/api/pages?prefix=book").await;
+    let stages: Vec<Option<&str>> = listing.body["pages"]
+        .as_array()
+        .expect("pages")
+        .iter()
+        .map(|page| page["stage"].as_str())
+        .collect();
+    assert_eq!(
+        stages,
+        [Some("Drafted"), Some("with-beta-readers"), None],
+        "a stage did not reach the listing as written"
+    );
+
+    // Filtering folds case, because two spellings of one stage are one stage.
+    let drafted = app.get("/api/pages?stage=drafted").await;
+    assert_eq!(drafted.body["total"], 1);
+    assert_eq!(drafted.body["pages"][0]["slug"], "book/one/opening");
+    assert_eq!(app.get("/api/pages?stage=DRAFTED").await.body["total"], 1);
+
+    // A stage nobody uses is a question with an empty answer, not a mistake.
+    let unused = app.get("/api/pages?stage=final").await;
+    assert_eq!(unused.status, StatusCode::OK);
+    assert_eq!(unused.body["total"], 0);
+
+    // Sorted, with the pages that say nothing first.
+    let sorted = app.get("/api/pages?prefix=book&sort=stage").await;
+    let slugs: Vec<&str> = sorted.body["pages"]
+        .as_array()
+        .expect("pages")
+        .iter()
+        .map(|page| page["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        slugs,
+        ["book/two", "book/one/opening", "book/one/the-ferry"]
+    );
+}
+
+/// The API is unforgiving where a hand-written file is not: a stage that is not
+/// a string never reaches the file, so nothing has to be lenient about it later.
+#[tokio::test]
+async fn a_stage_that_is_not_a_string_is_refused() {
+    let app = App::new().await;
+
+    let refused = app
+        .post(
+            "/api/pages",
+            json!({ "slug": "book", "content": "B.\n", "stage": 3 }),
+        )
+        .await;
+
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+}
+
+/// A synopsis is prose somebody wrote about their own chapter. Every byte of it
+/// is theirs, including the blank line that makes it two paragraphs and the
+/// trailing space that a naive YAML emitter would eat.
+#[tokio::test]
+async fn a_synopsis_comes_back_byte_for_byte() {
+    let app = App::new().await;
+    let card = "He misses the crossing: and decides not to mind.\n\n\
+                First time the narrator chooses to be late. ";
+
+    app.seed(
+        "book/one/the-ferry",
+        json!({ "content": "Prose.\n", "synopsis": card }),
+    )
+    .await;
+
+    let read = app.get("/api/pages/book/one/the-ferry").await;
+    assert_eq!(read.body["synopsis"], card);
+
+    // And off disk, which is where it actually has to survive.
+    let written = std::fs::read_to_string(
+        app.directory
+            .path()
+            .join("book")
+            .join("one")
+            .join("the-ferry.md"),
+    )
+    .expect("the page is on disk");
+    let reread = app.get("/api/pages/book/one/the-ferry").await;
+    assert_eq!(reread.body["synopsis"], card, "{written}");
+
+    assert_eq!(
+        app.get("/api/pages?prefix=book").await.body["pages"][0]["synopsis"],
+        json!(card),
+        "the listing disagreed with the page"
+    );
+}
+
+/// Nothing fills a synopsis in. A page whose body opens with a perfectly good
+/// sentence still has no synopsis, because a synopsis is a claim about what the
+/// chapter does and nobody has made one.
+#[tokio::test]
+async fn a_synopsis_is_never_derived_from_the_body() {
+    let app = App::new().await;
+    app.seed(
+        "book/one/the-ferry",
+        json!({ "content": "# The Ferry\n\nHe misses the crossing. It is the first time.\n" }),
+    )
+    .await;
+
+    let read = app.get("/api/pages/book/one/the-ferry").await;
+    assert_eq!(
+        read.body["title"], "The Ferry",
+        "the title still falls back"
+    );
+    assert!(
+        read.body.get("synopsis").is_none(),
+        "a synopsis was invented: {:?}",
+        read.body["synopsis"]
+    );
+}
+
+/// Default true, and `true` writes nothing: the ordinary page's file must not
+/// grow a line saying it is ordinary.
+#[tokio::test]
+async fn compile_false_round_trips_and_an_absent_one_is_not_written() {
+    let app = App::new().await;
+    app.seed("book/one/opening", json!({ "content": "Prose.\n" }))
+        .await;
+    app.seed(
+        "book/one/cut-scene",
+        json!({ "content": "Prose.\n", "compile": false }),
+    )
+    .await;
+
+    let ordinary = app.get("/api/pages/book/one/opening").await;
+    assert_eq!(ordinary.body["compile"], json!(true));
+
+    let cut = app.get("/api/pages/book/one/cut-scene").await;
+    assert_eq!(cut.body["compile"], json!(false));
+
+    let file = |name: &str| {
+        std::fs::read_to_string(
+            app.directory
+                .path()
+                .join("book")
+                .join("one")
+                .join(format!("{name}.md")),
+        )
+        .expect("the page is on disk")
+    };
+
+    assert!(
+        !file("opening").contains("compile"),
+        "an ordinary page grew a compile line:\n{}",
+        file("opening")
+    );
+    assert!(
+        file("cut-scene").contains("compile: false"),
+        "{}",
+        file("cut-scene")
+    );
+
+    // Sending `true` back is the same as not saying it, so a page put back in
+    // the book loses the line rather than gaining `compile: true`.
+    app.patch("/api/pages/book/one/cut-scene", json!({ "compile": true }))
+        .await;
+    assert!(
+        !file("cut-scene").contains("compile"),
+        "{}",
+        file("cut-scene")
+    );
+}
+
+/// The rule that has been written down twice and broken once. A `PUT` replaces
+/// every field, so an editor that does not send all four back unmakes them, and
+/// nothing can infer any of them from anything else.
+#[tokio::test]
+async fn a_put_that_omits_the_drafting_fields_clears_all_four() {
+    let app = App::new().await;
+    let full = json!({
+        "content": "Prose.\n",
+        "synopsis": "He misses the crossing.",
+        "stage": "drafted",
+        "target": 3000,
+        "compile": false,
+    });
+    app.seed("book/one/the-ferry", full.clone()).await;
+
+    let kept = app.put("/api/pages/book/one/the-ferry", full).await;
+    assert_eq!(kept.body["synopsis"], "He misses the crossing.");
+    assert_eq!(kept.body["stage"], "drafted");
+    assert_eq!(kept.body["target"], 3000);
+    assert_eq!(kept.body["compile"], json!(false));
+
+    let dropped = app
+        .put(
+            "/api/pages/book/one/the-ferry",
+            json!({ "content": "Prose.\n" }),
+        )
+        .await;
+    assert!(dropped.body.get("synopsis").is_none());
+    assert!(dropped.body.get("stage").is_none());
+    assert!(dropped.body.get("target").is_none());
+    assert_eq!(
+        dropped.body["compile"],
+        json!(true),
+        "an omitted compile flag is the default rather than a cleared field"
+    );
+}
+
+/// `PATCH` leaves what it does not mention alone, and `null` is how each of the
+/// four is cleared without touching the others.
+#[tokio::test]
+async fn patch_tells_an_omitted_drafting_field_from_a_null_one() {
+    let app = App::new().await;
+    app.seed(
+        "book/one/the-ferry",
+        json!({
+            "content": "Prose.\n",
+            "synopsis": "He misses the crossing.",
+            "stage": "drafted",
+            "compile": false,
+        }),
+    )
+    .await;
+
+    let untouched = app
+        .patch(
+            "/api/pages/book/one/the-ferry",
+            json!({ "title": "The Ferry" }),
+        )
+        .await;
+    assert_eq!(untouched.body["synopsis"], "He misses the crossing.");
+    assert_eq!(untouched.body["stage"], "drafted");
+    assert_eq!(untouched.body["compile"], json!(false));
+
+    let restaged = app
+        .patch(
+            "/api/pages/book/one/the-ferry",
+            json!({ "stage": "revised" }),
+        )
+        .await;
+    assert_eq!(restaged.body["stage"], "revised");
+    assert_eq!(
+        restaged.body["synopsis"], "He misses the crossing.",
+        "changing the stage moved the synopsis"
+    );
+
+    let cleared = app
+        .patch(
+            "/api/pages/book/one/the-ferry",
+            json!({ "synopsis": null, "stage": null, "compile": null }),
+        )
+        .await;
+    assert!(cleared.body.get("synopsis").is_none());
+    assert!(cleared.body.get("stage").is_none());
+    assert_eq!(cleared.body["compile"], json!(true));
+}
+
+/// The columns are derived, so the incremental path and the rebuild have to
+/// produce the same rows. If they did not, what a listing said would depend on
+/// when the page was last written rather than on what it says.
+#[tokio::test]
+async fn a_rebuild_produces_the_same_synopses_and_stages() {
+    let app = App::new().await;
+    app.seed(
+        "book/one/opening",
+        json!({ "content": "Prose.\n", "synopsis": "They leave.", "stage": "Revised" }),
+    )
+    .await;
+    app.seed(
+        "book/one/the-ferry",
+        json!({ "content": "Prose.\n", "stage": "with-beta-readers" }),
+    )
+    .await;
+    app.seed("book/two", json!({ "content": "Prose.\n" })).await;
+
+    let before = app.get("/api/pages?prefix=book&sort=stage").await;
+    assert_eq!(
+        app.post("/api/reindex", json!({})).await.status,
+        StatusCode::OK
+    );
+    let after = app.get("/api/pages?prefix=book&sort=stage").await;
+
+    assert_eq!(before.body["pages"], after.body["pages"]);
+    assert_eq!(after.body["pages"][2]["synopsis"], json!(null));
+    assert_eq!(
+        app.get("/api/pages?stage=REVISED").await.body["total"],
+        1,
+        "the filter stopped working after a rebuild"
+    );
+}
+
 /// A due date is a full timestamp over the API and normalises like `created`.
 #[tokio::test]
 async fn a_target_and_a_due_date_round_trip() {

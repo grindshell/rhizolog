@@ -42,11 +42,11 @@ use crate::users::Username;
 use crate::words::{self, By};
 
 /// Fields a listing can be narrowed to with `?fields=`.
-pub const SUMMARY_FIELDS: [&str; 7] = [
-    "slug", "title", "tags", "created", "updated", "size", "words",
+pub const SUMMARY_FIELDS: [&str; 9] = [
+    "slug", "title", "synopsis", "stage", "tags", "created", "updated", "size", "words",
 ];
 
-const SORT_KEYS: [&str; 5] = ["slug", "title", "created", "updated", "words"];
+const SORT_KEYS: [&str; 6] = ["slug", "title", "created", "updated", "words", "stage"];
 const ORDER_KEYS: [&str; 2] = ["asc", "desc"];
 
 const DEFAULT_LIMIT: usize = 50;
@@ -93,6 +93,26 @@ pub struct PageView {
     /// body's first heading, or failing that the slug.
     #[schema(example = example_title)]
     pub title: String,
+    /// What the page is for, in the author's words, if it says.
+    ///
+    /// **Plain text, and never derived.** No fallback fills this in from the
+    /// body: a title is a name, which every page has whether or not it says so,
+    /// and a synopsis is a claim about what the page does, which no page has
+    /// until somebody makes it. A card filled from the first paragraph would be
+    /// confidently wrong and would change meaning every time the opening line
+    /// was revised. Render it as characters; it is not markdown and must never
+    /// arrive as HTML.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "He misses the crossing and decides not to mind.")]
+    pub synopsis: Option<String>,
+    /// What stage of drafting the page is at, as the author wrote it.
+    ///
+    /// `todo`, `drafted`, `revised` and `final` are the four the dashboard
+    /// colours. **The vocabulary is not fixed**: anything else is a stage this
+    /// wiki has not heard of rather than a mistake, and it comes back as typed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "drafted")]
+    pub stage: Option<String>,
     /// Whether `title` was derived rather than stored — from the body's first
     /// heading, or failing that the slug.
     ///
@@ -182,6 +202,16 @@ pub struct PageView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = json!(["book/one/opening", "book/one/the-ferry"]))]
     pub contents: Option<Vec<String>>,
+
+    /// Whether this page is part of a document compiled from whatever assembles
+    /// it. `true` unless the page says otherwise, so an ordinary page is `true`.
+    ///
+    /// A `false` page keeps its position in every `contents:` list that names
+    /// it, keeps its edge in the graph, and is not an orphan. It is excluded
+    /// from the book, not from the wiki, and everything listed beneath it is
+    /// excluded with it.
+    #[schema(example = true)]
+    pub compile: bool,
 }
 
 impl PageView {
@@ -189,6 +219,8 @@ impl PageView {
         Self {
             slug: page.slug.clone(),
             title: page.title(),
+            synopsis: page.synopsis().map(str::to_owned),
+            stage: page.stage().map(str::to_owned),
             title_derived: !page.has_stored_title(),
             tags: page.tags().to_vec(),
             visibility: page.visibility(),
@@ -201,6 +233,7 @@ impl PageView {
             target: page.frontmatter.target,
             due: page.due(),
             contents: page.frontmatter.contents.clone(),
+            compile: page.compiled(),
             content: page.body.clone(),
             html: render.then(|| markdown::render(Some(&page.slug), &page.body)),
         }
@@ -215,6 +248,16 @@ pub struct PageSummary {
     /// body's first heading, or failing that the slug.
     #[schema(example = example_title)]
     pub title: String,
+    /// What the page is for, in the author's words, if it says. Plain text, and
+    /// never derived from the body; see `PageView`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "He misses the crossing and decides not to mind.")]
+    pub synopsis: Option<String>,
+    /// What stage of drafting the page is at, as written. The vocabulary is not
+    /// fixed; see `PageView`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "drafted")]
+    pub stage: Option<String>,
     /// The page's tags, in the order the frontmatter lists them.
     #[schema(example = json!(["rust", "async"]))]
     pub tags: Vec<String>,
@@ -235,6 +278,8 @@ impl From<PageRecord> for PageSummary {
         Self {
             slug: record.slug,
             title: record.title,
+            synopsis: record.synopsis,
+            stage: record.stage,
             tags: record.tags,
             created: record.created,
             updated: record.updated,
@@ -288,6 +333,15 @@ pub struct CreatePage {
     #[serde(default)]
     #[schema(example = example_title)]
     pub title: Option<String>,
+    /// What this page is for, in your words. Plain text, and nothing derives it.
+    #[serde(default)]
+    #[schema(example = "He misses the crossing and decides not to mind.")]
+    pub synopsis: Option<String>,
+    /// What stage of drafting this page is at. Any word you like: `todo`,
+    /// `drafted`, `revised` and `final` are the ones the dashboard colours.
+    #[serde(default)]
+    #[schema(example = "drafted")]
+    pub stage: Option<String>,
     /// Free-form; tags are whatever you have used elsewhere. `GET /api/tags`
     /// lists the ones already in play.
     #[serde(default)]
@@ -327,6 +381,14 @@ pub struct CreatePage {
     #[serde(default)]
     #[schema(example = json!(["book/one/opening", "book/one/the-ferry"]))]
     pub contents: Option<Vec<String>>,
+    /// Whether this page belongs in a document compiled from what assembles it.
+    ///
+    /// Defaults to `true`, and `true` writes nothing into the file: only
+    /// `compile: false` ever appears in frontmatter, so an ordinary page does
+    /// not grow a line saying it is ordinary.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub compile: Option<bool>,
 }
 
 /// A whole page. Every field is replaced, including the ones left out.
@@ -337,6 +399,18 @@ pub struct ReplacePage {
     #[serde(default)]
     #[schema(example = example_title)]
     pub title: Option<String>,
+    /// Omitting this clears the synopsis.
+    ///
+    /// **An editor has to send this back whether or not it shows a control for
+    /// it**, along with `stage`, `target` and `compile`. See `contents` below
+    /// for what a `PUT` that forgets one costs.
+    #[serde(default)]
+    #[schema(example = "He misses the crossing and decides not to mind.")]
+    pub synopsis: Option<String>,
+    /// Omitting this clears the stage.
+    #[serde(default)]
+    #[schema(example = "drafted")]
+    pub stage: Option<String>,
     /// Omitting this clears the page's tags. Use `PATCH` to leave them alone.
     #[serde(default)]
     #[schema(example = json!(["rust", "async"]))]
@@ -376,6 +450,11 @@ pub struct ReplacePage {
     #[serde(default)]
     #[schema(example = json!(["book/one/opening", "book/one/the-ferry"]))]
     pub contents: Option<Vec<String>>,
+    /// Omitting this puts the page back in the compiled document, since `true`
+    /// is what an absent field means.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub compile: Option<bool>,
 }
 
 /// A partial update. Omitted fields are left alone.
@@ -386,6 +465,14 @@ pub struct PatchPage {
     #[serde(default, deserialize_with = "present_or_absent")]
     #[schema(value_type = Option<String>, example = example_title)]
     pub title: Option<Option<String>>,
+    /// Omit to leave the synopsis alone; send `null` to clear it.
+    #[serde(default, deserialize_with = "present_or_absent")]
+    #[schema(value_type = Option<String>, example = "He misses the crossing and decides not to mind.")]
+    pub synopsis: Option<Option<String>>,
+    /// Omit to leave the stage alone; send `null` to clear it.
+    #[serde(default, deserialize_with = "present_or_absent")]
+    #[schema(value_type = Option<String>, example = "drafted")]
+    pub stage: Option<Option<String>>,
     /// Replaces the whole tag list when present.
     #[serde(default)]
     #[schema(example = json!(["rust", "async"]))]
@@ -423,6 +510,16 @@ pub struct PatchPage {
     #[serde(default, deserialize_with = "present_or_absent")]
     #[schema(value_type = Option<Vec<String>>, example = json!(["book/one/opening"]))]
     pub contents: Option<Option<Vec<String>>>,
+    /// Omit to leave it alone; send `null` or `true` to put the page back in
+    /// the compiled document.
+    ///
+    /// The two are one request rather than three, because `true` is what an
+    /// absent field means: there is nothing for a null to mean that `true` does
+    /// not already. It is still spelled this way so that `PATCH` reads the same
+    /// for every field it can clear.
+    #[serde(default, deserialize_with = "present_or_absent")]
+    #[schema(value_type = Option<bool>, example = false)]
+    pub compile: Option<Option<bool>>,
 }
 
 /// Distinguishes "field absent" from "field set to null".
@@ -498,7 +595,15 @@ pub struct ListQuery {
     /// `async` does not match `notes/rust/async`.
     #[param(example = "rust")]
     pub segment: Option<String>,
-    /// One of `slug`, `title`, `created`, `updated`. Defaults to `slug`.
+    /// Return only pages at this drafting stage.
+    ///
+    /// The stage is a word the author chose, so this matches it exactly apart
+    /// from case. A stage nobody uses returns no pages rather than an error:
+    /// asking for one is a question with an empty answer, not a mistake.
+    #[param(example = "drafted")]
+    pub stage: Option<String>,
+    /// One of `slug`, `title`, `created`, `updated`, `words`, `stage`. Defaults
+    /// to `slug`. Pages with no stage sort first.
     #[param(example = "updated")]
     pub sort: Option<String>,
     /// `asc` or `desc`. Defaults to `asc`.
@@ -615,6 +720,22 @@ fn stored_due(due: Option<DateTime<Utc>>) -> Option<String> {
     due.map(|day| day.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
+/// What to write into the file for a compile flag that arrived over the API.
+///
+/// `true` is stored as **absent**, which is [`stored_visibility`]'s rule for
+/// `internal` and is there for the same reason: an ordinary page's frontmatter
+/// should not grow a line saying it is ordinary. So the field only ever appears
+/// as `compile: false`, and a page round-tripped through the API comes back
+/// looking like the hand-written one it probably was.
+///
+/// A file that spells out `compile: true` keeps it, because nothing rewrote it.
+fn stored_compile(compile: Option<bool>) -> Option<bool> {
+    match compile {
+        Some(false) => Some(false),
+        _ => None,
+    }
+}
+
 // ----------------------------------------------------------------- handlers
 
 /// List pages, without their bodies.
@@ -644,6 +765,7 @@ pub async fn list(
                 tag: query.tag,
                 prefix: query.prefix,
                 segment: query.segment,
+                stage: query.stage,
                 sort: parse_sort(query.sort.as_deref())?,
                 order: parse_order(query.order.as_deref())?,
                 limit,
@@ -694,6 +816,7 @@ pub async fn create(
     let visibility = request.visibility.unwrap_or_default();
     let frontmatter = Frontmatter {
         title: request.title,
+        synopsis: request.synopsis,
         tags: request.tags,
         created: Some(Utc::now()),
         visibility: stored_visibility(visibility),
@@ -704,6 +827,8 @@ pub async fn create(
         readers: names(request.readers),
         target: request.target,
         due: stored_due(request.due),
+        stage: request.stage,
+        compile: stored_compile(request.compile),
         contents: request.contents,
     };
 
@@ -795,6 +920,7 @@ pub async fn replace(
     let visibility = request.visibility.unwrap_or_default();
     let frontmatter = Frontmatter {
         title: request.title,
+        synopsis: request.synopsis,
         tags: request.tags,
         created: Some(created_at.unwrap_or_else(Utc::now)),
         visibility: stored_visibility(visibility),
@@ -803,11 +929,14 @@ pub async fn replace(
         // stands in, which is what `POST` does too.
         owner: resolve_owner(request.owner, visibility, &viewer)?,
         readers: names(request.readers),
-        // These three get no such rescue, and that is deliberate. An owner can be
-        // inferred from who is asking; a contents list cannot be inferred from
-        // anything, so a `PUT` that leaves it out means what it says.
+        // These get no such rescue, and that is deliberate. An owner can be
+        // inferred from who is asking; a contents list, a synopsis or a stage
+        // cannot be inferred from anything, so a `PUT` that leaves one out means
+        // what it says.
         target: request.target,
         due: stored_due(request.due),
+        stage: request.stage,
+        compile: stored_compile(request.compile),
         contents: request.contents,
     };
 
@@ -856,6 +985,12 @@ pub async fn patch(
     if let Some(title) = request.title {
         frontmatter.title = title;
     }
+    if let Some(synopsis) = request.synopsis {
+        frontmatter.synopsis = synopsis;
+    }
+    if let Some(stage) = request.stage {
+        frontmatter.stage = stage;
+    }
     if let Some(tags) = request.tags {
         frontmatter.tags = tags;
     }
@@ -880,6 +1015,12 @@ pub async fn patch(
     }
     if let Some(contents) = request.contents {
         frontmatter.contents = contents;
+    }
+    // `Some(None)` and `Some(Some(true))` are the same request, because `true`
+    // is what an absent field already means. Both leave the file without the
+    // line, which is what `stored_compile` is for.
+    if let Some(compile) = request.compile {
+        frontmatter.compile = stored_compile(compile);
     }
 
     // Whatever the two fields were before and are being set to, the result has
@@ -1141,6 +1282,7 @@ fn parse_sort(raw: Option<&str>) -> AppResult<SortBy> {
         Some("created") => Ok(SortBy::Created),
         Some("updated") => Ok(SortBy::Updated),
         Some("words") => Ok(SortBy::Words),
+        Some("stage") => Ok(SortBy::Stage),
         Some(other) => Err(AppError::InvalidParameter {
             parameter: "sort",
             value: other.to_owned(),

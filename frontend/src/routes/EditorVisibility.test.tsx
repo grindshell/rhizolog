@@ -33,6 +33,7 @@ function page(overrides: Partial<PageView> = {}): PageView {
     words: 3,
     content: 'Futures are lazy.\n',
     visibility: 'internal',
+    compile: true,
     ...overrides,
   }
 }

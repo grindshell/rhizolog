@@ -1327,6 +1327,15 @@ export interface components {
         };
         CreatePage: {
             /**
+             * @description Whether this page belongs in a document compiled from what assembles it.
+             *
+             *     Defaults to `true`, and `true` writes nothing into the file: only
+             *     `compile: false` ever appears in frontmatter, so an ordinary page does
+             *     not grow a line saying it is ordinary.
+             * @example false
+             */
+            compile?: boolean | null;
+            /**
              * @description Markdown body, without frontmatter.
              * @example # Async in Rust
              *
@@ -1363,6 +1372,17 @@ export interface components {
             readers?: components["schemas"]["Username"][];
             /** @description Where the page will live. `409` if something is already there. */
             slug: components["schemas"]["Slug"];
+            /**
+             * @description What stage of drafting this page is at. Any word you like: `todo`,
+             *     `drafted`, `revised` and `final` are the ones the dashboard colours.
+             * @example drafted
+             */
+            stage?: string | null;
+            /**
+             * @description What this page is for, in your words. Plain text, and nothing derives it.
+             * @example He misses the crossing and decides not to mind.
+             */
+            synopsis?: string | null;
             /**
              * @description Free-form; tags are whatever you have used elsewhere. `GET /api/tags`
              *     lists the ones already in play.
@@ -2197,6 +2217,18 @@ export interface components {
             size: number;
             slug: components["schemas"]["Slug"];
             /**
+             * @description What stage of drafting the page is at, as written. The vocabulary is not
+             *     fixed; see `PageView`.
+             * @example drafted
+             */
+            stage?: string | null;
+            /**
+             * @description What the page is for, in the author's words, if it says. Plain text, and
+             *     never derived from the body; see `PageView`.
+             * @example He misses the crossing and decides not to mind.
+             */
+            synopsis?: string | null;
+            /**
              * @description The page's tags, in the order the frontmatter lists them.
              * @example [
              *       "rust",
@@ -2270,6 +2302,17 @@ export interface components {
         /** @description A page and its content. */
         PageView: {
             /**
+             * @description Whether this page is part of a document compiled from whatever assembles
+             *     it. `true` unless the page says otherwise, so an ordinary page is `true`.
+             *
+             *     A `false` page keeps its position in every `contents:` list that names
+             *     it, keeps its edge in the graph, and is not an orphan. It is excluded
+             *     from the book, not from the wiki, and everything listed beneath it is
+             *     excluded with it.
+             * @example true
+             */
+            compile: boolean;
+            /**
              * @description The page body as markdown, without its frontmatter. Title and tags are
              *     returned as fields above rather than left in the text, so an editor
              *     never has to reserialise YAML to change one of them.
@@ -2340,6 +2383,28 @@ export interface components {
              */
             size: number;
             slug: components["schemas"]["Slug"];
+            /**
+             * @description What stage of drafting the page is at, as the author wrote it.
+             *
+             *     `todo`, `drafted`, `revised` and `final` are the four the dashboard
+             *     colours. **The vocabulary is not fixed**: anything else is a stage this
+             *     wiki has not heard of rather than a mistake, and it comes back as typed.
+             * @example drafted
+             */
+            stage?: string | null;
+            /**
+             * @description What the page is for, in the author's words, if it says.
+             *
+             *     **Plain text, and never derived.** No fallback fills this in from the
+             *     body: a title is a name, which every page has whether or not it says so,
+             *     and a synopsis is a claim about what the page does, which no page has
+             *     until somebody makes it. A card filled from the first paragraph would be
+             *     confidently wrong and would change meaning every time the opening line
+             *     was revised. Render it as characters; it is not markdown and must never
+             *     arrive as HTML.
+             * @example He misses the crossing and decides not to mind.
+             */
+            synopsis?: string | null;
             /**
              * @description The page's tags, in the order the frontmatter lists them.
              * @example [
@@ -2429,6 +2494,17 @@ export interface components {
         /** @description A partial update. Omitted fields are left alone. */
         PatchPage: {
             /**
+             * @description Omit to leave it alone; send `null` or `true` to put the page back in
+             *     the compiled document.
+             *
+             *     The two are one request rather than three, because `true` is what an
+             *     absent field means: there is nothing for a null to mean that `true` does
+             *     not already. It is still spelled this way so that `PATCH` reads the same
+             *     for every field it can clear.
+             * @example false
+             */
+            compile?: boolean | null;
+            /**
              * @description Replaces the whole body when present.
              * @example # Async in Rust
              *
@@ -2457,6 +2533,16 @@ export interface components {
             owner?: string | null;
             /** @description Replaces the whole reader list when present. */
             readers?: components["schemas"]["Username"][] | null;
+            /**
+             * @description Omit to leave the stage alone; send `null` to clear it.
+             * @example drafted
+             */
+            stage?: string | null;
+            /**
+             * @description Omit to leave the synopsis alone; send `null` to clear it.
+             * @example He misses the crossing and decides not to mind.
+             */
+            synopsis?: string | null;
             /**
              * @description Replaces the whole tag list when present.
              * @example [
@@ -2760,6 +2846,12 @@ export interface components {
         /** @description A whole page. Every field is replaced, including the ones left out. */
         ReplacePage: {
             /**
+             * @description Omitting this puts the page back in the compiled document, since `true`
+             *     is what an absent field means.
+             * @example false
+             */
+            compile?: boolean | null;
+            /**
              * @description Markdown body, without frontmatter. Omitting this empties the page.
              * @example # Async in Rust
              *
@@ -2794,6 +2886,20 @@ export interface components {
              *     ]
              */
             readers?: components["schemas"]["Username"][];
+            /**
+             * @description Omitting this clears the stage.
+             * @example drafted
+             */
+            stage?: string | null;
+            /**
+             * @description Omitting this clears the synopsis.
+             *
+             *     **An editor has to send this back whether or not it shows a control for
+             *     it**, along with `stage`, `target` and `compile`. See `contents` below
+             *     for what a `PUT` that forgets one costs.
+             * @example He misses the crossing and decides not to mind.
+             */
+            synopsis?: string | null;
             /**
              * @description Omitting this clears the page's tags. Use `PATCH` to leave them alone.
              * @example [
@@ -4932,7 +5038,17 @@ export interface operations {
                  */
                 segment?: string;
                 /**
-                 * @description One of `slug`, `title`, `created`, `updated`. Defaults to `slug`.
+                 * @description Return only pages at this drafting stage.
+                 *
+                 *     The stage is a word the author chose, so this matches it exactly apart
+                 *     from case. A stage nobody uses returns no pages rather than an error:
+                 *     asking for one is a question with an empty answer, not a mistake.
+                 * @example drafted
+                 */
+                stage?: string;
+                /**
+                 * @description One of `slug`, `title`, `created`, `updated`, `words`, `stage`. Defaults
+                 *     to `slug`. Pages with no stage sort first.
                  * @example updated
                  */
                 sort?: string;

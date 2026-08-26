@@ -125,6 +125,22 @@ pub struct Frontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
+    /// What this chapter is for, in the author's words.
+    ///
+    /// **Never derived, and no fallback fills it in.** `title` has a fallback
+    /// chain because a title is a *name*, and every page has one whether or not
+    /// it says so. A synopsis is a *claim about what the page does*, and no page
+    /// has one until somebody makes it. Filling it from the first paragraph
+    /// would produce a card that is confidently wrong and that silently changes
+    /// meaning every time the opening line is revised. A page with no synopsis
+    /// has no synopsis, and an empty card is a chapter nobody has decided about
+    /// yet, which is worth seeing. See `knowledge-base/drafting.md`.
+    ///
+    /// Plain text rather than markdown: it is shown at a glance, in a grid, at
+    /// small sizes, and the one thing it must never do is arrive as HTML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synopsis: Option<String>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 
@@ -192,6 +208,42 @@ pub struct Frontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub due: Option<String>,
 
+    /// What stage of drafting this page is at, as written.
+    ///
+    /// Called `stage` rather than `status`, which is the obvious name and the
+    /// one Scrivener uses, because `status` already means what compile did with
+    /// a contents entry: `included`, `wanted`, `invalid`, `duplicate`,
+    /// `unreadable` or `excluded`. The manifest is precisely where a draft stage
+    /// is most useful, so the two names would meet in the one response that
+    /// needs both. `times.ended` is not `end` for the same kind of reason.
+    ///
+    /// **The vocabulary is not fixed.** `todo`, `drafted`, `revised` and `final`
+    /// are the four the dashboard knows and colours; anything else is shown as
+    /// itself. A writer whose process has `with-beta-readers` in it should not
+    /// have to argue with a schema.
+    ///
+    /// So this is one of the lenient fields rather than one of the strict ones:
+    /// it is [`Frontmatter::due`]'s kind, not [`Frontmatter::target`]'s. It
+    /// names no known stage, it is shown as typed, and it does not take the page
+    /// down with it. Compared case-insensitively for grouping and filtering,
+    /// stored as the author wrote it. See [`Page::stage`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+
+    /// Whether this page is part of the compiled document. Absent means yes.
+    ///
+    /// Only ever written as `compile: false`, so an ordinary page's frontmatter
+    /// never grows a line saying it is ordinary, which is the same rule
+    /// `visibility` gets for `internal`.
+    ///
+    /// A cut scene, an outline for a part, a page of notes that belongs between
+    /// chapters three and four: dropping the entry from `contents:` does say
+    /// "not in the book", and it also throws away **where it went**, which is
+    /// the one thing the contents list knows and a wikilink does not. See
+    /// [`Page::compiled`] and `knowledge-base/drafting.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compile: Option<bool>,
+
     /// The pages this one assembles, in order.
     ///
     /// `None` is a leaf page and `Some([])` is a contents page with nothing in
@@ -210,6 +262,7 @@ pub struct Frontmatter {
 impl Frontmatter {
     pub fn is_empty(&self) -> bool {
         self.title.is_none()
+            && self.synopsis.is_none()
             && self.tags.is_empty()
             && self.created.is_none()
             && self.visibility.is_none()
@@ -217,6 +270,8 @@ impl Frontmatter {
             && self.readers.is_empty()
             && self.target.is_none()
             && self.due.is_none()
+            && self.stage.is_none()
+            && self.compile.is_none()
             && self.contents.is_none()
     }
 }
@@ -383,6 +438,42 @@ impl Page {
         self.frontmatter.contents.as_deref()
     }
 
+    /// What this page is for, in the author's words, exactly as written.
+    ///
+    /// Whitespace and line breaks inside it are the author's, so nothing is
+    /// trimmed off a synopsis that has any content. A field holding only
+    /// whitespace is a field nobody filled in, and reads as absent.
+    ///
+    /// There is no fallback. See [`Frontmatter::synopsis`] for why the symmetry
+    /// with [`Page::title`] is a false one.
+    pub fn synopsis(&self) -> Option<&str> {
+        self.frontmatter
+            .synopsis
+            .as_deref()
+            .filter(|synopsis| !synopsis.trim().is_empty())
+    }
+
+    /// What stage of drafting this page is at, as the author wrote it.
+    ///
+    /// Not matched against a vocabulary and not normalised: an unrecognised
+    /// stage is a stage this wiki has not heard of rather than a mistake. Use
+    /// [`stage_key`] for the comparison that groups and filters them.
+    pub fn stage(&self) -> Option<&str> {
+        self.frontmatter
+            .stage
+            .as_deref()
+            .filter(|stage| !stage.trim().is_empty())
+    }
+
+    /// Whether this page contributes to a compiled document. Absent means yes.
+    ///
+    /// A page that answers `false` still has its position in whatever
+    /// `contents:` list names it, still has a `page_parts` row, and is still
+    /// drawn in the graph. It is excluded from the book, not from the wiki.
+    pub fn compiled(&self) -> bool {
+        self.frontmatter.compile.unwrap_or(true)
+    }
+
     /// The accounts named in `readers`, ignoring any that are not valid names.
     ///
     /// Only meaningful when [`Page::visibility`] is [`Visibility::Restricted`];
@@ -395,6 +486,20 @@ impl Page {
             .filter_map(|raw| Username::parse(raw).ok())
             .collect()
     }
+}
+
+/// How two stages are compared when they are being grouped, filtered or
+/// coloured.
+///
+/// Trimmed and folded to lowercase, so `Drafted`, `drafted` and ` drafted ` are
+/// one stage, while the file keeps whichever of them was typed. That is the same
+/// split `prose/v1`'s `consistent` rule already uses on tokens: the comparison is
+/// insensitive and the record is faithful.
+///
+/// ASCII folding, which is what SQLite's `lower()` does, so the index and this
+/// function cannot disagree about a stage somebody wrote in Turkish.
+pub fn stage_key(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase()
 }
 
 /// The first ATX level-one heading, skipping fenced code blocks so that a `#`
@@ -963,6 +1068,116 @@ mod tests {
         );
     }
 
+    /// A synopsis is prose somebody wrote about their own chapter, so every
+    /// shape YAML can hold one in has to come back as it went in. The blank line
+    /// is the interesting one: it is what separates a two-paragraph card from a
+    /// one-paragraph card, and a parser that folded it would be editing.
+    #[test]
+    fn a_synopsis_survives_every_shape_yaml_can_write_one_in() {
+        // Folded with a kept newline, which is what the plan's own example uses.
+        let folded = page(
+            "---\nsynopsis: >-\n  He misses the crossing\n  and decides not to mind.\n---\n\nBody.\n",
+        );
+        assert_eq!(
+            folded.synopsis(),
+            Some("He misses the crossing and decides not to mind.")
+        );
+
+        // Literal, with a blank line in it. Both paragraphs, and the gap.
+        let literal = page("---\nsynopsis: |-\n  First.\n\n  Second.\n---\n\nBody.\n");
+        assert_eq!(literal.synopsis(), Some("First.\n\nSecond."));
+
+        // The hazards: a colon, which makes a plain scalar illegal; and a
+        // trailing space, which quoting is the only way to keep.
+        for hazard in [
+            "A colon: and what follows it",
+            "Trailing space ",
+            " Leading space",
+            "#hash",
+            "- dash",
+            "*",
+            "no",
+            "123",
+            "Two\n\nparagraphs",
+        ] {
+            let mut original = page("Body.\n");
+            original.frontmatter.synopsis = Some(hazard.to_owned());
+
+            let written = original.to_markdown();
+            let read = page(&written);
+
+            assert_eq!(
+                read.frontmatter.synopsis.as_deref(),
+                Some(hazard),
+                "{hazard:?} did not survive a round trip:\n{written}"
+            );
+        }
+    }
+
+    /// The decision this whole field rests on: nothing fills it in. A title has
+    /// a fallback chain because every page has a name; no page has a claim about
+    /// what it does until somebody makes one.
+    #[test]
+    fn a_synopsis_is_never_derived_from_the_body() {
+        let prose = page("# The Ferry\n\nHe misses the crossing. It is the first time.\n");
+
+        assert_eq!(prose.title(), "The Ferry", "the title still falls back");
+        assert_eq!(prose.synopsis(), None, "a synopsis was invented");
+
+        // Whitespace is not a synopsis either, and the field stays in the file
+        // so the emptiness is visible rather than silently dropped.
+        let blank = page("---\nsynopsis: \"   \"\n---\n\n# The Ferry\n\nProse.\n");
+        assert_eq!(blank.synopsis(), None);
+        assert!(blank.to_markdown().contains("synopsis"));
+    }
+
+    /// `stage` is `due`'s kind, not `target`'s: a stage nobody has heard of is a
+    /// stage this wiki has not heard of, and it must not cost the page.
+    #[test]
+    fn an_unknown_stage_is_kept_as_written_and_keeps_the_page() {
+        for raw in ["todo", "drafted", "with-beta-readers", "Revised", "42"] {
+            let parsed = page(&format!(
+                "---\ntitle: The Ferry\ntags: [book]\nstage: \"{raw}\"\n---\n\nBody.\n"
+            ));
+
+            assert_eq!(parsed.stage(), Some(raw), "{raw:?} was not kept as written");
+            assert_eq!(parsed.title(), "The Ferry", "{raw:?} took the page with it");
+            assert_eq!(parsed.tags(), ["book"]);
+        }
+
+        // Grouping folds case and surrounding space; the file does not.
+        let shouted = page("---\nstage: \" Drafted \"\n---\n\nBody.\n");
+        assert_eq!(shouted.stage(), Some(" Drafted "));
+        assert_eq!(stage_key(shouted.stage().unwrap()), "drafted");
+
+        assert_eq!(page("---\nstage: \"\"\n---\n\nB.\n").stage(), None);
+    }
+
+    /// Default true, written only as `compile: false`, so the ordinary page
+    /// never carries the field at all.
+    #[test]
+    fn compile_defaults_to_true_and_only_appears_when_it_is_false() {
+        let ordinary = page("---\ntitle: Ordinary\n---\n\nBody.\n");
+        assert!(ordinary.compiled());
+        assert!(
+            !ordinary.to_markdown().contains("compile"),
+            "an ordinary page grew a compile line"
+        );
+
+        let cut = page("---\ntitle: A cut scene\ncompile: false\n---\n\nBody.\n");
+        assert!(!cut.compiled());
+        let written = cut.to_markdown();
+        assert!(written.contains("compile: false"), "{written}");
+        assert_eq!(page(&written).frontmatter, cut.frontmatter);
+
+        // Written out in full it is still true, and it round-trips as written
+        // rather than being normalised away by the parser. What never writes it
+        // is the API; see `stored_compile`.
+        let explicit = page("---\ncompile: true\n---\n\nBody.\n");
+        assert!(explicit.compiled());
+        assert!(explicit.to_markdown().contains("compile: true"));
+    }
+
     #[test]
     fn the_new_fields_do_not_make_an_empty_frontmatter_look_written() {
         assert!(Frontmatter::default().is_empty());
@@ -983,6 +1198,29 @@ mod tests {
         assert!(
             !Frontmatter {
                 contents: Some(Vec::new()),
+                ..Default::default()
+            }
+            .is_empty()
+        );
+        assert!(
+            !Frontmatter {
+                synopsis: Some("A card.".into()),
+                ..Default::default()
+            }
+            .is_empty()
+        );
+        assert!(
+            !Frontmatter {
+                stage: Some("drafted".into()),
+                ..Default::default()
+            }
+            .is_empty()
+        );
+        // A page whose only frontmatter is `compile: false` is a page that says
+        // something, so it keeps its fence.
+        assert!(
+            !Frontmatter {
+                compile: Some(false),
                 ..Default::default()
             }
             .is_empty()

@@ -60,7 +60,16 @@
 /// slug would then be advertised as a page worth writing. That is the bump
 /// where not rebuilding puts `../etc/passwd` on the dashboard, so it is closer
 /// to version 7 than to a stale row.
-pub const SCHEMA_VERSION: i64 = 13;
+///
+/// Version 14 adds `pages.synopsis` and `pages.stage`. Both are nullable and an
+/// index written before this has neither, so they come back empty rather than
+/// wrong and one scan fills them in. That puts it with version 10 rather than
+/// version 7: stale, not leaking. `compile` gets no column, deliberately, for
+/// the reason `idea_terms` was left out of version 8: nothing queries it, since
+/// the compile walk reads each page from the store and already has its
+/// frontmatter, and a column nothing reads is worse than no column. See
+/// `knowledge-base/drafting.md`.
+pub const SCHEMA_VERSION: i64 = 14;
 
 pub const KEY_SCHEMA_VERSION: &str = "schema_version";
 pub const KEY_LAST_SYNC: &str = "last_sync";
@@ -152,9 +161,27 @@ pub const CREATE_DERIVED: &str = "
 -- prefix, and the alternative is reading ten thousand files off disk to add
 -- them up. It counts prose rather than bytes, so it is not derivable from
 -- `size` -- a page that is mostly a code fence is large and nearly wordless.
+--
+-- `synopsis` and `stage` are columns for the same reason `words` is one: the
+-- listing returns them and filters on them, and reading forty files off disk to
+-- draw one table is the thing this index exists to avoid. Both are nullable,
+-- because a page with no synopsis has no synopsis and a page with no stage has
+-- no stage -- neither has a default worth inventing, which is the opposite of
+-- `visibility`, where the unmarked case means something definite.
+--
+-- `stage` is stored exactly as the author wrote it and compared with `lower()`,
+-- which is why it carries no index: an ordinary one would not be consulted by a
+-- case-folded comparison, and an expression index over four distinct values
+-- buys nothing over scanning a column every listing already reads.
+--
+-- There is no `compile` column. Nothing queries it: the compile walk fetches
+-- each page from the store and already has its frontmatter. See
+-- `knowledge-base/drafting.md`.
 create table pages (
     slug       text    primary key,
     title      text    not null,
+    synopsis   text,
+    stage      text,
     created    integer not null,
     updated    integer not null,
     size       integer not null,
@@ -526,11 +553,20 @@ create index idea_terms_by_term on idea_terms(term);
 ";
 
 /// Dropped in dependency order so the foreign keys never block.
+///
+/// **Every table in [`CREATE_DERIVED`] has to appear here.** One that does not
+/// survives the drop and then collides with its own `create table` on the next
+/// bump, which does not degrade: the index will not open at all. `page_parts`
+/// and `page_words` were in that state from the versions that added them until
+/// version 14 found it. `every_derived_table_is_dropped_as_well_as_created` in
+/// [`crate::index`] compares the two lists so the next one cannot get in.
 pub const DROP_DERIVED: &str = "
 drop table if exists links;
 drop table if exists page_tags;
 drop table if exists page_segments;
 drop table if exists page_readers;
+drop table if exists page_parts;
+drop table if exists page_words;
 drop table if exists pages_fts;
 drop table if exists pages;
 drop table if exists time_pages;

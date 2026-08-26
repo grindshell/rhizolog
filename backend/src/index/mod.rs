@@ -92,6 +92,10 @@ pub struct SearchResults {
 pub struct PageRecord {
     pub slug: Slug,
     pub title: String,
+    /// What the page says it is for, if it says. Never derived from the body.
+    pub synopsis: Option<String>,
+    /// What stage of drafting the page is at, as the author wrote it.
+    pub stage: Option<String>,
     pub tags: Vec<String>,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
@@ -121,6 +125,7 @@ pub enum SortBy {
     Created,
     Updated,
     Words,
+    Stage,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -135,7 +140,12 @@ impl SortBy {
     ///
     /// A column name cannot be a bound parameter, so it is interpolated into
     /// the SQL. Going through this enum is what keeps that safe: the only
-    /// strings that can reach the query are the four below.
+    /// strings that can reach the query are the six below.
+    ///
+    /// `stage` sorts folded, because two spellings of one stage belong next to
+    /// each other. Pages with no stage sort first, which is SQLite's ordering
+    /// for nulls and is the right end for a column that answers "how far along
+    /// is this": nothing said is where a chapter starts.
     fn column(self) -> &'static str {
         match self {
             Self::Slug => "slug",
@@ -143,6 +153,7 @@ impl SortBy {
             Self::Created => "created",
             Self::Updated => "updated",
             Self::Words => "words",
+            Self::Stage => "lower(stage)",
         }
     }
 }
@@ -171,6 +182,13 @@ pub struct ListOptions {
     /// The flat reading of the same slug, and the one that behaves like a tag:
     /// `rust` matches `notes/rust/async` and `code/rust/traits` alike.
     pub segment: Option<String>,
+    /// Restrict to pages at this drafting stage, compared case-insensitively.
+    ///
+    /// A filter on a string the author chose, so it matches exactly apart from
+    /// case, and a stage nobody uses returns nothing rather than an error:
+    /// asking for a stage this wiki does not have is a question with an empty
+    /// answer, not a mistake.
+    pub stage: Option<String>,
     pub sort: SortBy,
     pub order: SortOrder,
     pub limit: usize,
@@ -183,6 +201,7 @@ impl Default for ListOptions {
             tag: None,
             prefix: None,
             segment: None,
+            stage: None,
             sort: SortBy::default(),
             order: SortOrder::default(),
             limit: 50,
@@ -265,6 +284,12 @@ impl Index {
     pub async fn upsert(&self, page: &Page) -> Result<WordChange, IndexError> {
         let slug = page.slug.to_string();
         let title = page.title();
+        // Both as the file has them. A synopsis is never derived, so an absent
+        // one stays absent here rather than picking up a fallback the way
+        // `title` does; a stage is stored exactly as written and folded only
+        // when something compares two of them.
+        let synopsis = page.synopsis().map(str::to_owned);
+        let stage = page.stage().map(str::to_owned);
         let tags = page.tags().to_vec();
         let directories: Vec<String> = page.slug.directories().map(str::to_owned).collect();
         let body = page.body.clone();
@@ -298,10 +323,14 @@ impl Index {
             // rowid, while this updates in place and keeps it. A page's rowid
             // is therefore stable for as long as the page exists.
             transaction.execute(
-                "insert into pages (slug, title, created, updated, size, words, visibility, owner)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "insert into pages
+                     (slug, title, synopsis, stage, created, updated, size, words,
+                      visibility, owner)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  on conflict(slug) do update set
                      title      = excluded.title,
+                     synopsis   = excluded.synopsis,
+                     stage      = excluded.stage,
                      created    = excluded.created,
                      updated    = excluded.updated,
                      size       = excluded.size,
@@ -309,7 +338,8 @@ impl Index {
                      visibility = excluded.visibility,
                      owner      = excluded.owner",
                 params![
-                    &slug, &title, created, updated, size, words, visibility, &owner
+                    &slug, &title, &synopsis, &stage, created, updated, size, words, visibility,
+                    &owner
                 ],
             )?;
 
@@ -673,6 +703,7 @@ impl Index {
             tag,
             prefix,
             segment,
+            stage,
             sort,
             order,
             limit,
@@ -714,11 +745,16 @@ impl Index {
                      where page_segments.slug = pages.slug
                        and page_segments.segment = :segment
                  ))
+                 and (:stage is null or lower(pages.stage) = lower(:stage))
                  and {VISIBLE}"
             );
 
-            let filter_params: [(&'static str, &dyn ToSql); 3] =
-                [(":tag", &tag), (":prefix", &prefix), (":segment", &segment)];
+            let filter_params: [(&'static str, &dyn ToSql); 4] = [
+                (":tag", &tag),
+                (":prefix", &prefix),
+                (":segment", &segment),
+                (":stage", &stage),
+            ];
 
             // The count and the sum come back together, from the same filtered
             // set, because they are the same question asked twice. Summing the
@@ -735,7 +771,7 @@ impl Index {
             )?;
 
             let sql = format!(
-                "select slug, title, created, updated, size, words
+                "select slug, title, synopsis, stage, created, updated, size, words
                  from pages
                  {filters}
                  order by {} {}, slug asc
@@ -753,6 +789,7 @@ impl Index {
                         (":tag", &tag),
                         (":prefix", &prefix),
                         (":segment", &segment),
+                        (":stage", &stage),
                         (":limit", &limit),
                         (":offset", &offset),
                     ],
@@ -763,33 +800,37 @@ impl Index {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
                     ))
                 },
             )?;
 
             let mut pending = Vec::new();
             for row in rows {
-                let (slug, title, created, updated, size, words) = row?;
+                let (slug, title, synopsis, stage, created, updated, size, words) = row?;
                 let Ok(slug) = Slug::parse(&slug) else {
                     continue;
                 };
-                pending.push((slug, title, created, updated, size, words));
+                pending.push((slug, title, synopsis, stage, created, updated, size, words));
             }
 
             let mut tags_of =
                 connection.prepare("select tag from page_tags where slug = ?1 order by tag")?;
             let mut pages = Vec::with_capacity(pending.len());
-            for (slug, title, created, updated, size, words) in pending {
+            for (slug, title, synopsis, stage, created, updated, size, words) in pending {
                 let tags = tags_of
                     .query_map(params![slug.as_str()], |row| row.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()?;
                 pages.push(PageRecord {
                     slug,
                     title,
+                    synopsis,
+                    stage,
                     tags,
                     created: from_nanos(created),
                     updated: from_nanos(updated),
@@ -824,6 +865,10 @@ impl Index {
             transaction.execute("delete from page_tags", [])?;
             transaction.execute("delete from page_readers", [])?;
             transaction.execute("delete from page_segments", [])?;
+            // Cascades off `pages` above, and named anyway for the reason the
+            // folded idea tables are: a foreign key quietly changing should not
+            // leave the spine of every manuscript behind.
+            transaction.execute("delete from page_parts", [])?;
             transaction.execute("delete from links", [])?;
             transaction.execute("delete from pages_fts", [])?;
             transaction.execute("delete from time_pages", [])?;
@@ -1627,6 +1672,87 @@ mod tests {
         assert_eq!(
             index.search("alpha", 10, 0, &EVERYONE).await.unwrap().total,
             0
+        );
+    }
+
+    /// Every derived table has to be in [`schema::DROP_DERIVED`], or the next
+    /// version bump fails on `create table` and the index will not open at all.
+    ///
+    /// This is not hypothetical. `page_parts` and `page_words` were added to
+    /// `CREATE_DERIVED` and not to `DROP_DERIVED`, and nothing noticed, because
+    /// a bump is only exercised against a database written by an older build
+    /// and every test here starts from an empty one. Comparing the two lists is
+    /// what would have caught it in the commit that introduced it.
+    #[test]
+    fn every_derived_table_is_dropped_as_well_as_created() {
+        fn tables(sql: &str, keyword: &str) -> Vec<String> {
+            sql.lines()
+                .filter_map(|line| line.trim().strip_prefix(keyword))
+                .map(|rest| {
+                    rest.trim()
+                        .trim_start_matches("if exists")
+                        .trim()
+                        .trim_end_matches(';')
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect()
+        }
+
+        let mut created = tables(schema::CREATE_DERIVED, "create table");
+        created.extend(tables(schema::CREATE_DERIVED, "create virtual table"));
+        let dropped = tables(schema::DROP_DERIVED, "drop table");
+
+        let missing: Vec<&String> = created
+            .iter()
+            .filter(|table| !dropped.contains(table))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "these derived tables are created and never dropped, \
+             so the next schema bump cannot rebuild: {missing:?}"
+        );
+    }
+
+    /// The property the version number exists for: an index written by an older
+    /// build opens, rebuilds, and is empty rather than refused.
+    #[tokio::test]
+    async fn an_index_from_an_older_schema_rebuilds_instead_of_failing() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("index.db");
+
+        {
+            let index = Index::open(Some(&path)).await.expect("first open");
+            index
+                .upsert(&page("notes/rhizome", "Rhizome", &[], "Branches off."))
+                .await
+                .unwrap();
+        }
+
+        // Stand in for a database written before this version. Only the number
+        // changes; the tables are whatever this build just created, which is
+        // the same shape the drop has to cope with.
+        {
+            let connection = rusqlite::Connection::open(&path).expect("reopen");
+            connection
+                .execute(
+                    "insert or replace into meta (key, value) values (?1, ?2)",
+                    params![KEY_SCHEMA_VERSION, (SCHEMA_VERSION - 1).to_string()],
+                )
+                .expect("stamp an older version");
+        }
+
+        let rebuilt = Index::open(Some(&path))
+            .await
+            .expect("an older index opens and rebuilds");
+
+        assert_eq!(
+            rebuilt.count(&EVERYONE).await.unwrap(),
+            0,
+            "the derived half survived a rebuild that should have dropped it"
         );
     }
 

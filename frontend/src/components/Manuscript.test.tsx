@@ -50,6 +50,7 @@ function page(over: Partial<PageView> = {}): PageView {
     words: 40,
     content: '# The Long Way Round\n',
     visibility: 'internal',
+    compile: true,
     contents: ['book/one/opening'],
     ...over,
   }
