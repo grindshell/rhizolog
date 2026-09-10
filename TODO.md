@@ -656,6 +656,18 @@ What is not done:
   publishes, and both start. Closing it properly needs an OS-level lock taken
   before the bind. What is there covers the case that actually happens:
   launching while a window is already open.
+- **A pull while the server is running can still count an edit twice.** The
+  watcher ignores `.rhizolog/words/`, and has to, since the server appends to it
+  on every save; so the log is only read back in by a scan. A `git pull` that
+  brings in a page and the log line describing its edit, while a server is
+  watching, weighs the page against the log as that server last read it, and
+  records the edit again. A pull large enough to arrive as a directory event goes
+  through the scan and is fine, and so is pulling with the server stopped, which
+  is what the fix for the startup case covers. Closing it means the watcher
+  telling the server's own appends from somebody else's, or re-reading a slug's
+  tail of the log before weighing an external edit. See
+  [Long-form writing](knowledge-base/long-form.md), "A stale index is not a
+  previous body".
 
 ## Verification gaps
 

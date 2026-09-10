@@ -225,7 +225,9 @@ async fn sync_pages(
                 let change = index.upsert(&page).await?;
                 // A page nobody touched produces nothing here, which is what
                 // makes a rebuild free: the file's count and the log's last
-                // total agree, so there is nothing to record.
+                // total agree, so there is nothing to record. The same goes for
+                // an index older than the log, whose body `weigh` does not
+                // mistake for the one the log last saw.
                 words::observe(words, index, &page.slug, &By::scan(), now, change).await;
                 counts.indexed += 1;
             }
@@ -832,6 +834,96 @@ mod tests {
         assert_eq!(log[1].kind, crate::words::Kind::Net);
         assert_eq!((log[1].added, log[1].removed), (2, 0));
         assert_eq!(log[1].total, 5);
+    }
+
+    /// A page at five words whose edit from three is already in the log, and an
+    /// index that still holds the three: two machines sharing a wiki through
+    /// git, seen from the one that did not make the edit.
+    async fn an_index_one_edit_behind() -> (TempDir, Store, TimeStore, IdeaStore, WordLog, Index) {
+        let (directory, store, times, ideas, words, index) = fixture().await;
+
+        write(&store, "a", "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+        let elsewhere = Index::open(None).await.expect("a second index");
+        sync(&store, &times, &ideas, &words, &elsewhere)
+            .await
+            .unwrap();
+
+        write(&store, "a", "One two three four five.\n").await;
+        sync(&store, &times, &ideas, &words, &elsewhere)
+            .await
+            .unwrap();
+        assert_eq!(
+            words.read().await.unwrap().0.len(),
+            2,
+            "a baseline, and the edit as the other machine saw it"
+        );
+
+        (directory, store, times, ideas, words, index)
+    }
+
+    /// An index older than the log is not a previous body. Diffing against it
+    /// records the edit a second time, which is what starting a server against
+    /// `example-wiki/` did with an index left over from an older checkout.
+    #[tokio::test]
+    async fn a_stale_index_does_not_record_what_the_log_already_holds() {
+        let (_directory, store, times, ideas, words, index) = an_index_one_edit_behind().await;
+
+        let report = sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        assert_eq!(
+            report.pages.indexed, 1,
+            "the page did change, as far as this index knew"
+        );
+        assert_eq!(
+            words.read().await.unwrap().0.len(),
+            2,
+            "and the edit is in the log once, not twice"
+        );
+        assert_eq!(index.last_word_total(&slug("a")).await.unwrap(), Some(5));
+    }
+
+    /// The same stale index, and a page that has moved on from the log as well.
+    /// What the log has not seen is recorded, as the net it is.
+    #[tokio::test]
+    async fn a_stale_index_records_what_the_log_has_not_seen_as_a_net() {
+        let (_directory, store, times, ideas, words, index) = an_index_one_edit_behind().await;
+
+        write(&store, "a", "One two three four five six seven.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        let (log, _) = words.read().await.unwrap();
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[2].kind, crate::words::Kind::Net);
+        assert_eq!((log[2].added, log[2].removed), (2, 0));
+        assert_eq!(log[2].total, 7);
+    }
+
+    /// A line the log failed to take. The page and the index moved on and the
+    /// log did not, which is the same disagreement the other way round, and it
+    /// comes back at the next write as a net covering both edits rather than as
+    /// a churn that leaves the series short.
+    #[tokio::test]
+    async fn a_line_the_log_lost_comes_back_at_the_next_write_as_a_net() {
+        let (_directory, store, times, ideas, words, index) = fixture().await;
+
+        write(&store, "a", "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        // Indexed and never written down, which is what `words::record` leaves
+        // behind when appending to the log fails.
+        write(&store, "a", "One two three four five.\n").await;
+        let page = store.read(&slug("a")).await.expect("read");
+        index.upsert(&page).await.expect("index without recording");
+
+        write(&store, "a", "One two three four five six.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        let (log, _) = words.read().await.unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[1].kind, crate::words::Kind::Net);
+        assert_eq!((log[1].added, log[1].removed), (3, 0));
+        assert_eq!(log[1].total, 6);
     }
 
     /// A page gone from disk while nothing was watching closes its series, so

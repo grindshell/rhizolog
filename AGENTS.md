@@ -81,7 +81,10 @@ which is what the README tells people to do and is now a property rather than a
 hope. The word log already holds a line for every page and every one of those
 lines agrees with the page it describes, so the startup scan finds nothing to
 record. Before that log was committed, merely starting a server against the
-fixture appended a baseline for every page in it.
+fixture appended a baseline for every page in it. Until September 2026 a leftover
+`index.db` older than the log could still do it: it counted the edits between its
+copy of a page and the file as writing, which the log already held, and appended
+them again. It no longer can; see `knowledge-base/long-form.md`.
 
 Four things still change it. Starting a timer writes a time entry, **editing a
 page writes a word observation**, **the Manuscript panel's Reorder view rewrites

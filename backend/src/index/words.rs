@@ -116,22 +116,38 @@ pub(super) fn last_total(connection: &Connection, slug: &str) -> rusqlite::Resul
 
 /// Decide what a write was worth, from the three things that are known about it.
 ///
-/// The three cases are the whole of it, and the third is the interesting one:
+/// The four cases are the whole of it, and the last two are the interesting
+/// ones:
 ///
 /// - **Nothing recorded at this slug.** A first sighting, so a
 ///   [`Kind::Baseline`]. Without it, pointing the server at an existing wiki
 ///   would report the whole thing as written on a Tuesday.
-/// - **A previous body to compare against.** The ordinary case, and a real
+/// - **A previous body the log last saw.** The ordinary case, and a real
 ///   churn: see [`crate::words::diff::churn`].
 /// - **A previous total but no previous body.** The index was deleted and the
 ///   file changed before the next start. The body it used to have went with
 ///   `pages_fts`, so the difference between the two totals is all there is, and
 ///   it is recorded as [`Kind::Net`] so that nobody reads it as a churn.
+/// - **A previous body the log never saw.** The index is older than the log: a
+///   page and the log lines describing its edits arrived together, by a
+///   `git pull` or a copy from another machine, and the index still holds the
+///   body from before either. Diffing against it would record writing the log
+///   already holds, a second time. So it counts as no body at all, and takes
+///   the path above.
 ///
-/// That third case is also what makes deleting the database free. On a rebuild
-/// every page takes this path, and for every page nobody touched the two totals
-/// are equal, so nothing is recordable and the log gains nothing. `total` is the
-/// check, and this is what it checks.
+/// Whether the log saw a body is decided by its count, which comes free with
+/// the churn: `added - removed` is exactly the change in the page's count, so
+/// the body's own count is `total + removed - added`, and it has to be the log's
+/// last total for the churn to be news. Asking instead whether the total moved
+/// would be wrong the other way, because changing one word for another is
+/// writing and leaves the count where it was. What this costs is that an edit
+/// to a page whose index is stale is only a net, which is exactly what a
+/// deleted index already costs, and for the same reason.
+///
+/// The last two cases are also what makes deleting the database free, and a
+/// stale one harmless. For every page nobody touched the two totals are equal,
+/// so nothing is recordable and the log gains nothing. `total` is the check, and
+/// this is what it checks.
 pub(super) fn weigh(
     last: Option<u64>,
     before: Option<&str>,
@@ -140,7 +156,15 @@ pub(super) fn weigh(
 ) -> WordChange {
     let (kind, churn) = match (last, before) {
         (None, _) => (Kind::Baseline, Churn::default()),
-        (Some(_), Some(before)) => (Kind::Observed, crate::words::diff::churn(before, after)),
+        (Some(last), Some(before)) => {
+            let churn = crate::words::diff::churn(before, after);
+
+            if counted_before(churn, total) == Some(last) {
+                (Kind::Observed, churn)
+            } else {
+                (Kind::Net, crate::words::diff::net(last, total))
+            }
+        }
         (Some(last), None) => (Kind::Net, crate::words::diff::net(last, total)),
     };
 
@@ -150,6 +174,14 @@ pub(super) fn weigh(
         removed: churn.removed,
         total,
     }
+}
+
+/// The count a previous body had, recovered from the churn rather than counted
+/// a second time over what may be a very long chapter. `None` only if the churn
+/// and the total disagree about the page, which
+/// [`crate::words::diff::churn`] promises they never do.
+fn counted_before(churn: Churn, total: u64) -> Option<u64> {
+    total.checked_add(churn.removed)?.checked_sub(churn.added)
 }
 
 fn insert(connection: &Connection, observation: &Observation) -> Result<(), IndexError> {
@@ -402,6 +434,49 @@ mod tests {
 
         assert!(change.churn().is_nothing());
         assert!(!change.is_recordable());
+    }
+
+    /// Changing one word for another is writing, and leaves the count where it
+    /// was. The reason a stale index is recognised by the previous body's count
+    /// rather than by whether the total moved.
+    #[test]
+    fn an_edit_that_keeps_the_count_is_still_a_churn() {
+        let change = weigh(Some(3), Some("One two three.\n"), "One two four.\n", 3);
+
+        assert_eq!(change.kind, Kind::Observed);
+        assert_eq!((change.added, change.removed), (1, 1));
+    }
+
+    /// The index holds a body the log has moved past: a page and the line
+    /// describing its edit arrived together, and the index was built before
+    /// either. Diffing that body would record the edit a second time.
+    #[test]
+    fn a_body_the_log_never_saw_is_not_a_churn() {
+        let caught_up = weigh(
+            Some(5),
+            Some("One two three.\n"),
+            "One two three four five.\n",
+            5,
+        );
+
+        assert_eq!(caught_up.kind, Kind::Net);
+        assert!(
+            !caught_up.is_recordable(),
+            "the log already says five, and so does the page"
+        );
+
+        // And if the page has moved on from the log as well, that much is
+        // recorded, as the net it is.
+        let further = weigh(
+            Some(5),
+            Some("One two three.\n"),
+            "One two three four five six seven.\n",
+            7,
+        );
+
+        assert_eq!(further.kind, Kind::Net);
+        assert_eq!((further.added, further.removed), (2, 0));
+        assert_eq!(further.total, 7);
     }
 
     #[tokio::test]

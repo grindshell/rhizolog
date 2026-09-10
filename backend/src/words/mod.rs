@@ -121,13 +121,15 @@ pub enum Kind {
     Baseline,
     /// A diff against the body that was there before. The ordinary case.
     Observed,
-    /// The previous body was not available, so `added` and `removed` are a net
+    /// There was no previous body to trust, so `added` and `removed` are a net
     /// change split by its sign rather than a churn.
     ///
     /// The one place a net figure appears, and it is labelled as one. It happens
-    /// when the index was deleted and pages changed before the next start: the
-    /// log knows the last total, `pages_fts` no longer holds the last body, and
-    /// the difference between the two is all there is to record.
+    /// when the index was deleted and pages changed before the next start, when
+    /// the index holds a body the log has since moved past, and when the log
+    /// missed a line the index did not: the log knows the last total, the body
+    /// in `pages_fts` is not the one that total was counted from, and the
+    /// difference between the two totals is all there is to record.
     Net,
     /// The page arrived here from another slug. Carries both.
     ///
@@ -366,7 +368,7 @@ impl WordLog {
         // Not `sync_all`: this is one line of bookkeeping written on every save,
         // and paying for a flush to the platter each time would make saving a
         // page slower for a record whose worst case is one lost observation that
-        // the next startup scan reports as a `net`.
+        // the next write to the page reports as a `net`.
         file.flush().await?;
 
         Ok(())
@@ -437,15 +439,20 @@ impl WordLog {
 /// write the page twice. So it is logged loudly and swallowed.
 ///
 /// What that costs is one line, and it degrades rather than disappearing: the
-/// next startup scan compares the file against the last total the log has and
-/// reports the difference as a [`Kind::Net`]. The words are not lost, only the
-/// day and the tool that wrote them.
+/// next write to the page, from anywhere, finds the index's body disagreeing
+/// with the last total the log has and reports the difference as a
+/// [`Kind::Net`]. The words are not lost, only the day and the tool that wrote
+/// them, and the churn of whichever edit happens to come next.
+///
+/// Not the next startup scan, which is what this used to say. A scan skips a
+/// page whose file still matches the index, and after a write that got as far
+/// as the index it does.
 pub async fn record(log: &WordLog, index: &Index, observation: Observation) {
     if let Err(error) = log.append(&observation).await {
         tracing::error!(
             slug = %observation.slug,
             %error,
-            "could not write to the word log; the next scan will report the difference as a net"
+            "could not write to the word log; the next write to this page will report the difference as a net"
         );
         return;
     }

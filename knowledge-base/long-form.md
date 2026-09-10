@@ -1777,6 +1777,56 @@ The property that reading the fixture writes nothing survived, which it only doe
 because every one of the seven new pages has a log line whose total already
 matches it.
 
+## A stale index is not a previous body
+
+Starting a server against `example-wiki/` on 10 September 2026 wrote a line into
+its word log, which is the one thing this page and `AGENTS.md` both say reading
+the fixture does not do. The line was `index`, `observed`, `+766 -1`, total
+3,843, and the committed log's last line for `index` already said 3,843. The page
+had not changed since the log last described it. The index had: it was left over
+from an older checkout and still held a body of 3,078 words. The line was deleted.
+
+`weigh` took any previous body in `pages_fts` to be the one the log last saw, and
+diffed the file against it, so it reported edits the log already held as writing
+a second time. On the fixture that is a stray line. On a wiki kept in git and
+written on two machines it is every edit pulled from the other one, counted again
+on the next start, and the chart would have drawn it as that day's work.
+
+The fix is a check rather than anything new to store. `added - removed` is
+exactly the change in the page's count, so the previous body's count comes free
+with the churn as `total + removed - added`, and if that is not the log's last
+total then the log never saw that body. The write then takes the path a deleted
+index already takes: the difference between the log's total and the file's, as a
+`net`, which on the fixture is nothing at all.
+
+Two things it deliberately does not do:
+
+- **It does not ask whether the total moved.** That was the obvious check and it
+  is wrong the other way: changing one word for another is writing, and leaves
+  the count where it was.
+- **It does not recover the churn.** An edit made to a page whose index is stale
+  is only a net, because the body it was made against is not on this machine.
+  That is what a deleted index already costs, and for the same reason.
+
+It also made true something `words::record` had been claiming. When appending an
+observation fails, the page and the index move on and the log does not, and the
+comment said the next startup scan would report the difference as a net. It would
+not have: the scan skips a page whose file still matches the index, which after
+that write it does. Now the next write to the page finds the index's body
+disagreeing with the log and records the net, and the comment says that instead.
+
+Verified on the fixture itself as well as in tests. The fixture as it was at
+`57aecd3` was indexed into a fresh database; today's fixture was unpacked over
+it, as a pull would do; and the server was started again on the same database.
+All seventeen pages were reindexed, `index.md` against a body 1,515 words shorter
+than the one the log last described, and both log files came out byte for byte
+identical.
+
+What it does not cover is a pull while the server is running. The watcher does
+not read the word log, because the server appends to it on every save, so a page
+arriving with its log line is weighed against the log as that server last read
+it. That one is in [`TODO.md`](../TODO.md).
+
 ## Test strategy
 
 ### Pure unit tests
@@ -1826,6 +1876,9 @@ matches it.
 - An external edit is attributed to `file`, and a labelled write to its label.
 - **The word series survives deleting `index.db`**, not merely a schema-version
   rebuild. The earlier design passed the second and failed the first.
+- **And survives keeping a stale one.** An index older than the log records none
+  of what the log already holds, and only what it has not seen, as a `net`; an
+  index that took a write the log missed gets the same answer at the next write.
 - A move keeps one series across both slugs; a delete and a new page at the same
   slug are two.
 - On a wiki with accounts, an observation against an unreadable page reports its

@@ -106,11 +106,12 @@ fn core(word: &str) -> String {
         .to_owned()
 }
 
-/// A net change split by its sign, for when the previous body is gone.
+/// A net change split by its sign, for when there is no previous body to trust.
 ///
 /// The one place a net figure is allowed, and it is written into the log as
 /// [`super::Kind::Net`] so that nobody reads it as a churn. It happens when
-/// `index.db` was deleted and pages changed before the next start: the log knows
+/// `index.db` was deleted and pages changed before the next start, and when the
+/// index holds a body the log has since moved past: either way the log knows
 /// what the page's total was and the file says what it is now, and the
 /// difference is all there is.
 pub fn net(before: u64, after: u64) -> Churn {
