@@ -45,26 +45,34 @@ const agentPoints = [
 ];
 
 /*
- * PLACEHOLDER RESPONSES, hand-written to match what the API actually returns.
- * The build-time capture replaces both with the real bytes from a server run
- * against example-wiki, which is what makes the caption under them true.
+ * COPIED BY HAND from a server run against example-wiki on 10 September 2026,
+ * with nothing changed but the whitespace. The requests are the ones in the
+ * header rows below. A copy is only as current as the day it was taken, and the
+ * caption under them says so; the build-time capture replaces both with bytes
+ * fetched on every build, which is what will stop them going stale.
+ *
+ * The `\n`s in the snippet are the response's own: a snippet is an excerpt of
+ * the markdown source, heading and all.
  */
 const searchResponse = `{
-  "total": 1,
-  "results": [
+  "hits": [
     {
       "slug": "notes/rust/async",
       "title": "Async in Rust",
-      "tags": [ "rust", "async" ],
-      "snippet": "a lifetime error in the <b>poll loop</b>"
+      "tags": [ "async", "rust" ],
+      "snippet": "\\n# Async in Rust\\n\\n<mark>Futures</mark> are <mark>lazy</mark>. Nothing runs until something polls them...",
+      "score": 5.2525063579609546
     }
-  ]
+  ],
+  "total": 1,
+  "limit": 20,
+  "offset": 0
 }`;
 
 const errorResponse = `{
   "error": {
     "code": "page_not_found",
-    "message": "No page at 'notes/rust/asnyc'",
+    "message": "no page at notes/rust/asnyc",
     "details": { "slug": "notes/rust/asnyc" }
   }
 }`;
@@ -143,6 +151,14 @@ const pages = [
 
   <!-- What running it looks like -->
   <section class="px-5 pb-10 sm:px-16 sm:pb-16">
+    {/*
+      Copied from a run against example-wiki on 10 September 2026, with a fresh
+      index so the counts are the ones a new checkout prints. A selection of the
+      lines, each verbatim apart from the port: something else held 3000 that
+      day and the server fell back to a free one, and 3000 is what it takes when
+      nothing is in the way. The "opened" lines before these carry absolute
+      paths from the machine it ran on and are left out.
+    */}
     <div class="overflow-hidden rounded border border-line bg-[#131920]">
       <div class="flex items-center gap-[7px] border-b border-line px-4 py-[11px]">
         <span class="block h-[9px] w-[9px] rounded-full bg-[#2c3742]"></span>
@@ -153,10 +169,11 @@ const pages = [
       <pre class="overflow-x-auto px-6 py-[22px] font-mono text-meta leading-[1.85] text-[#b9c6d1]"><span class="text-mint-dim">&gt;</span> $env:RHIZOLOG_ROOT = <span class="text-mint">"../example-wiki"</span>
 <span class="text-mint-dim">&gt;</span> cargo run
 
-  rhizolog 0.1.0 <span class="text-mint">ready</span>
-  wiki     ../example-wiki  <span class="text-ink-faint">16 pages, 18 time entries, 2 wanted</span>
-  serving  <span class="text-mint">http://127.0.0.1:3000</span>
-  docs     http://127.0.0.1:3000/swagger-ui</pre>
+<span class="text-ink-fainter">2026-09-10T17:09:45.529148Z</span>  INFO rhizolog::server: pages synchronised scanned=17 indexed=17 unchanged=0 removed=0 failed=0
+<span class="text-ink-fainter">2026-09-10T17:09:45.529821Z</span>  INFO rhizolog::server: time log synchronised scanned=18 indexed=18 unchanged=0 removed=0 failed=0
+<span class="text-ink-fainter">2026-09-10T17:09:45.530752Z</span>  INFO rhizolog::server: this wiki has no accounts; every request is the single user accounts=0
+<span class="text-ink-fainter">2026-09-10T17:09:45.532440Z</span>  INFO rhizolog::server: listening on <span class="text-mint">http://127.0.0.1:3000</span>
+<span class="text-ink-fainter">2026-09-10T17:09:45.532566Z</span>  INFO rhizolog::server: API docs at http://127.0.0.1:3000/swagger-ui</pre>
     </div>
   </section>
 
@@ -246,7 +263,8 @@ const pages = [
       </div>
       <LinkGraph />
       <figcaption class="mt-3.5 text-center font-mono text-label text-ink-fainter">
-        Nine pages, one nobody has written, one nothing links to
+        Nine of example-wiki's seventeen pages and one nobody has written, placed by hand. The
+        server places each one by a hash of its slug instead.
       </figcaption>
     </figure>
   </section>
@@ -276,7 +294,7 @@ const pages = [
       <div class="overflow-hidden rounded border border-line bg-surface">
         <div class="flex border-b border-line font-mono text-xs">
           <div class="bg-mint px-4 py-[11px] text-ground">GET</div>
-          <div class="grow overflow-x-auto px-4 py-[11px] text-[#b9c6d1]">/api/search?q=poll+loop</div>
+          <div class="grow overflow-x-auto px-4 py-[11px] text-[#b9c6d1]">/api/search?q=futures+lazy</div>
           <div class="px-4 py-[11px] text-mint-dim">200</div>
         </div>
         <pre class="overflow-x-auto px-5 py-[18px] font-mono text-code leading-[1.75] text-ink-dim">{searchResponse}</pre>
@@ -294,8 +312,8 @@ const pages = [
       </div>
 
       <p class="font-mono text-label leading-relaxed text-ink-fainter">
-        Both responses are generated at build time from a real server running against example-wiki,
-        so this page cannot drift from the API.
+        Both responses were copied from a real server running against example-wiki. By hand, for
+        now, so they are only as current as the day they were taken.
       </p>
     </div>
   </section>
@@ -336,9 +354,9 @@ const pages = [
         </div>
       </div>
       <figcaption class="mt-[18px] font-mono text-label leading-relaxed text-ink-fainter">
-        18 entries, 5 groups, 25 h 05 m. The Wednesday session runs to 00:45 and lights Thursday
-        too. A session past midnight is split across both days rather than filed under the day it
-        started in.
+        A week drawn by hand. The committed log it stands in for is 18 entries in 5 groups, 25 h 05
+        m, and its Wednesday session runs to 00:45 and lights Thursday too. A session past midnight
+        is split across both days rather than filed under the day it started in.
       </figcaption>
     </figure>
   </section>

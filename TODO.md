@@ -69,49 +69,88 @@ between a directory of files and a site somebody can reach. The reasoning behind
 the design is in [The product site](knowledge-base/product-site.md); this is
 what is outstanding.
 
-- **The GitHub mirror does not exist yet.** Every link that leaves the site,
-  apart from the licence, resolves to `github.com/grindshell/rhizolog` through
-  `site/src/links.ts`: both calls to action in the hero, Docs and Source in the
-  nav, four of the five footer entries, and the second button on the 404. The
-  site is honest about having nothing to download; it stops being honest if its
-  primary call to action 404s. The mirror is decided on and named, and it is
-  where CI will build releases. It has simply not been pushed.
-- **`site/dist` has not been deployed, and the DNS record is unconfirmed.**
-  Deployment is `./deploy.sh ../../../rhizolog/dist rhizolog` from
-  `server-configs/static`, which unpacks a build into a timestamped release and
-  swaps a symlink. The Caddy block for rhizolog.com has been rewritten for a
-  statically generated tree; see the Deployment section of the knowledge base
-  page for the three ways the old one was wrong. DNS is the piece nothing in
-  this repository can check, and the failure is quiet: the certificate is issued
-  over DNS-01 through Cloudflare, so it is obtained whether or not an A record
-  points anywhere, and a working config and an unreachable site look identical
-  from the server.
+- **The GitHub mirror holds the previous Rhizolog, not this one.**
+  `github.com/grindshell/rhizolog` exists and is public, but its last push was
+  4 June 2026, its head commit (`dc671e6`) is not in this repository's history,
+  and its README describes the earlier app: git in the browser, "no server", "No
+  SQLite". Every link that leaves the site, apart from the licence, resolves
+  there through `site/src/links.ts`: both calls to action in the hero, Docs and
+  Source in the nav, four of the five footer entries, and the second button on
+  the 404. Docs is the worst of them, because it lands on a README that
+  contradicts the page the reader just left. Putting this repository there
+  means replacing unrelated history, by force-pushing over it or by starting a
+  fresh repository under the name, and that is a decision rather than a step.
+  The site should not go up until it is made. The mirror is also where CI will
+  build releases, so a download waits on the same decision.
+- **`site/dist` has not been deployed, and the domain is serving something in
+  between.** DNS is no longer the unknown: `rhizolog.com` and `www.rhizolog.com`
+  both resolve through Cloudflare and answer (checked 10 September 2026). What
+  answers is half of each version. The rewritten Caddy block is live, but
+  `/var/www/rhizolog` still holds the old single-page app, so `/` serves that
+  app, its client-side routes 404 on a reload now that the SPA fallback is gone,
+  and the 404 is an empty body because the old release has no `404.html`.
+  Deploying ends that. The command is
+  `./deploy.sh ../../../rhizolog/site/dist rhizolog` from
+  `server-configs/static`; it used to say `rhizolog/dist`, which is where the
+  old app built to. See the Deployment section of the knowledge base page for
+  the three ways the old Caddy block was wrong. `www` serves the same pages
+  rather than redirecting to the apex, which the canonical link covers for
+  search engines and nothing covers for anyone else.
+- **A missing file under `/_astro/` is cached for a year, and Cloudflare keeps
+  it.** The Caddy block's `header @immutable` line applies to error responses
+  as well as files, so a request for an asset that is not there answers `404`
+  with `Cache-Control: public, max-age=31536000, immutable`, and Cloudflare
+  stores it like any other response. This is not hypothetical. On 10 September
+  2026 a check of `/_astro/Base.DwAu8oM9.css`, this build's stylesheet, came
+  back `404` and then `cf-cache-status: HIT`. Content hashing gives unchanged CSS
+  the same name, so unless the stylesheet changes before the first deploy,
+  visitors served by that edge get the page without it until the cache is
+  purged. Purge Cloudflare's cache after deploying, which is worth doing every
+  time anyway, and override the header inside `handle_errors`:
+  `header Cache-Control "no-store"` should do it, and is untested, so check it
+  with `curl -I` against a missing `/_astro/` path after pushing the Caddyfile.
 - **No `og:image`, so every shared link renders as a text-only card.**
   `site/src/layouts/Base.astro` emits the title, description and canonical URL
   and declares `twitter:card: summary`, and there is no image for either to
   point at. One static PNG of the mark on the dark ground, and
   `summary_large_image` with it.
-- **No `robots.txt`.** `site/public/` holds the favicon and nothing else. It is
-  three lines, it is requested on every crawl whether or not it exists, and the
-  `Sitemap:` line in it is the reason to add a sitemap at the same time. A
-  sitemap alone is marginal at two pages and stops being marginal with the docs.
-- **Both figures on the landing page are hand-authored placeholders**, and their
-  components say so at the top. They are meant to be fixtures captured at build
-  time from a real server run against `example-wiki/`, for the same reason the
-  OpenAPI document is generated from the routes rather than written: a figure
-  that has quietly stopped being true is worse than no figure. The graph's node
-  positions come from a hash of the slug, so the picture has to be the one
-  `/api/graph` produces. The heat map's capture needs
-  `?at=2026-08-06T18:00:00Z&offset=0`, because the committed entries are pinned
-  to 30 July to 6 August 2026 and a request without it returns an empty week and
-  renders blank.
+- **No `robots.txt` of the site's own.** `site/public/` holds the favicon and
+  nothing else. The domain answers `/robots.txt` anyway, because Cloudflare
+  serves a managed one at the edge, and it disallows ClaudeBot, GPTBot,
+  Google-Extended, CCBot and several more. For a product whose pitch is an API
+  meant for agents, whether their crawlers may read the page selling it is worth
+  deciding on purpose rather than inheriting; it is a Cloudflare setting, not
+  anything in this repository. Check what Cloudflare does with an origin
+  `robots.txt` before adding one. The `Sitemap:` line in it is the reason to add
+  a sitemap at the same time. A sitemap alone is marginal at two pages and stops
+  being marginal with the docs.
+- **Both figures on the landing page are hand-authored placeholders**, their
+  components say so at the top, and since 10 September 2026 their captions say
+  so too. Before that, both captions described `example-wiki` as though the
+  drawings were of it, and the graph's had fallen behind the fixture: it still
+  said nine pages after the book took the wiki to seventeen. Three smaller
+  things on the page are copies rather than captures: the two API responses in
+  the agents section and the log under the hero were taken by hand from a server
+  run against `example-wiki` on that date. They were true the day they were
+  taken and nothing keeps them true, so the capture should take all five.
+
+  The figures are meant to be fixtures captured at build time from a real
+  server run against `example-wiki/`, for the same reason the OpenAPI document
+  is generated from the routes rather than written: a figure that has quietly
+  stopped being true is worse than no figure. The graph's node positions come
+  from a hash of the slug, so the picture has to be the one `/api/graph`
+  produces. The heat map's capture needs `?at=2026-08-06T18:00:00Z&offset=0`,
+  because the committed entries are pinned to 30 July to 6 August 2026 and a
+  request without it returns an empty week and renders blank.
 - **The landing page does not know Idea Inbox exists.** It sells files on disk,
   the API and the link graph, all of which predate it. Capture, explainable
   recurrence and promotion are the part of this product that nothing else does,
   and the page that argues for it says nothing about them. Needs its own section
   and probably its own figure, which is a writing job rather than a code one.
 - **`/docs` does not exist.** The nav's Docs entry points at the mirror's
-  README, which is genuinely the documentation until there is something here.
+  README, which would be the documentation until there is something here if the
+  mirror held this repository. Today it holds the previous app's; see the first
+  item in this section.
   This is half of why Astro was chosen: the docs are markdown, and content
   collections are a documented path rather than something to invent.
 - **`/demo` does not exist.** The page says "Browsable demo coming soon" under

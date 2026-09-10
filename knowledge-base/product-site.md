@@ -126,9 +126,15 @@ documented path rather than something to invent.
 
 The site is a directory of static files, deployed to the same box as
 grindshell.com and its siblings, behind Caddy, with the scripts in
-`server-configs/static`. `./deploy.sh ../../../rhizolog/dist rhizolog` unpacks
-a build into a timestamped release and swaps a symlink, so a release is atomic
-and a rollback is repointing it.
+`server-configs/static`. `./deploy.sh ../../../rhizolog/site/dist rhizolog`
+unpacks a build into a timestamped release and swaps a symlink, so a release is
+atomic and a rollback is repointing it.
+
+The path is `site/dist`. It used to say `rhizolog/dist`, which is where the
+single-page app built to, and the command was carried over from that app
+unchanged. `deploy.sh` refuses a directory that does not exist, so the old path
+would have failed rather than shipped the wrong tree, but only because nothing
+happened to be sitting at the root of the checkout under that name.
 
 The Caddy block for `rhizolog.com` predates this site: it was written for an
 earlier version of Rhizolog that served a single-page app, and it had to change
