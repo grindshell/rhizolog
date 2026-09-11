@@ -9,7 +9,7 @@ workflow refuses a tag whose section has no date, and uses what is under the
 heading as the release's notes. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the
 steps.
 
-## 0.1.0 - unreleased
+## 0.1.0 - 2026-09-11
 
 The first release. Everything in it is new, so this is what there is rather than
 what changed.

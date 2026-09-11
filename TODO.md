@@ -30,13 +30,12 @@ beta needs.
   every file in the repository and is worth doing in one deliberate pass. Each
   notice should carry the section 7 permission for the WebView2 loader too,
   which lives in the README's Licence section until then.
-- **Releases are built; three things about them are not done.** A release is a
+- **Releases are built; two things about them are not done.** A release is a
   tag of the one version in the root `Cargo.toml`, built, run and drafted by
   GitHub Actions on the mirror, and published by hand; see
   [Releases](knowledge-base/releases.md). Not done: signing, for the server's
-  `.exe` as much as the desktop app's; any check that a tag builds the same
-  bytes twice; and the README's Install section, which leads with building from
-  source until 0.1.0 is published and should then lead with the download.
+  `.exe` as much as the desktop app's; and any check that a tag builds the same
+  bytes twice.
 
 ## Before the desktop app goes to anyone else
 

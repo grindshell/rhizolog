@@ -43,10 +43,11 @@ What makes it different from the wikis you already know:
 
 ## Where it is today
 
-It works, and it is early. **There is no download yet**: you build it from
-source, which is a handful of commands and one long compile, below. It is
-developed and tested on Windows. The server should build anywhere Rust does, and
-nobody has tried it on macOS or Linux yet; the desktop app is Windows only.
+It works, and it is early. **The first release, 0.1.0, has builds for Windows
+and Linux** on the [releases page](https://github.com/grindshell/rhizolog/releases),
+with the desktop app in it as a preview. It is developed and used on Windows. The
+Linux server passes the same tests in CI and has not yet been used for anything
+long, nobody has tried macOS, and the desktop app is Windows only.
 
 Some things are missing on purpose: page history and diffs (a folder of notes is
 very likely a git repository already, and git does that better), rewriting links
@@ -58,6 +59,25 @@ done.
 
 ## Install
 
+### Download a build
+
+Each release has builds on the
+[releases page](https://github.com/grindshell/rhizolog/releases):
+
+| File | What it is |
+|---|---|
+| `rhizolog-<version>-x86_64-pc-windows-msvc.zip` | The server for Windows, with the dashboard in it |
+| `rhizolog-<version>-x86_64-unknown-linux-gnu.tar.gz` | The same for Linux, on glibc 2.35 or newer: Ubuntu 22.04, Debian 12 and later |
+| `rhizolog-desktop-<version>-x86_64-pc-windows-msvc.zip` | [The desktop app](#the-desktop-app), as a preview |
+
+Unpack one and run the program inside. Nothing is installed, and deleting the
+folder removes it. Each archive has a `README.txt` saying how to run it, and
+`SHA256SUMS.txt` beside them has their checksums. None of them is signed yet, so
+Windows may say it does not recognise the program.
+
+### Build it from source
+
+For anything newer than the last release, or a platform there is no build for.
 You need three things:
 
 - [Rust](https://rustup.rs/). On Windows, rustup offers to install the Visual
@@ -105,7 +125,9 @@ $env:RHIZOLOG_ROOT = "C:\Users\you\notes"
 rhizolog
 ```
 
-On macOS or Linux, `RHIZOLOG_ROOT=~/notes rhizolog`.
+On macOS or Linux, `RHIZOLOG_ROOT=~/notes rhizolog`. With a downloaded build,
+run it from the folder you unpacked instead: `.\rhizolog.exe` on Windows,
+`./rhizolog` on Linux.
 
 It prints the address it is listening on, normally `http://127.0.0.1:3000`, and
 the dashboard is there in any browser. If something else already has port 3000
@@ -120,8 +142,8 @@ directory you happened to start from, which is rarely where you meant.
 
 ### Try the example wiki first
 
-The checkout carries a small wiki arranged to show the features off. From the
-`rhizolog` directory:
+The source carries a small wiki arranged to show the features off, so this one
+needs a clone. From the `rhizolog` directory:
 
 ```powershell
 $env:RHIZOLOG_ROOT = "example-wiki"
@@ -150,15 +172,21 @@ stop being true. `git status example-wiki` shows what it wrote.
 ## The desktop app
 
 On Windows, the same server can live in a window of its own, for when you would
-rather not keep a terminal open. Build it from the same checkout, after
-`pnpm build`:
+rather not keep a terminal open. **It is a preview.** The icons are
+placeholders; it is not signed, so SmartScreen warns about it the first time
+("More info", then "Run anyway"); and it keeps its browser data in
+`%LOCALAPPDATA%\dev.rhizolog.app` rather than beside itself.
+
+Download it from the
+[releases page](https://github.com/grindshell/rhizolog/releases), or build it
+from the same checkout as the server, after `pnpm build`:
 
 ```powershell
 cargo build --release -p rhizolog-desktop
 ```
 
-That makes `target\release\rhizolog-desktop.exe`, and it is portable: copy it
-wherever you like, run it from there, and delete it to uninstall. It needs
+That makes `target\release\rhizolog-desktop.exe`. Either way it is portable: put
+it wherever you like, run it from there, and delete it to uninstall. It needs
 Microsoft's WebView2 runtime. Windows 11 has it, and most Windows 10 machines
 have it from Windows Update; if yours does not, the Evergreen runtime is a free
 download from Microsoft. The app does not yet check for it and say so.
