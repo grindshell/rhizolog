@@ -224,7 +224,14 @@ impl Store {
         self.read(to).await
     }
 
-    /// List every page in the wiki.
+    /// List every page in the wiki, in file-name order.
+    ///
+    /// The order is part of the contract. A directory lists its entries in
+    /// whatever order the filesystem keeps, which is alphabetical on NTFS and
+    /// hashed on ext4, and the startup scan writes a word-log baseline for each
+    /// new page in the order it meets them. Unsorted, the same wiki scanned on
+    /// Windows and on Linux wrote the same lines in a different order, which a
+    /// test only found when CI first ran it on Linux.
     ///
     /// Blocking: callers on an async task should wrap this in
     /// `spawn_blocking`. It exists for the indexer's startup scan.
@@ -233,6 +240,7 @@ impl Store {
 
         let walker = WalkDir::new(&self.root)
             .follow_links(false)
+            .sort_by_file_name()
             .into_iter()
             .filter_entry(|entry| {
                 // Skip `.rhizolog`, `.git`, and anything else hidden by
@@ -554,6 +562,29 @@ mod tests {
         found.sort();
 
         assert_eq!(found, ["index", "notes/rhizome", "notes/rust/async"]);
+    }
+
+    /// In file-name order, whatever order the filesystem keeps, so that a scan
+    /// does the same thing on every platform. NTFS happens to list names
+    /// alphabetically, so on Windows this passes either way; it is Linux, in
+    /// CI, that it is for.
+    #[tokio::test]
+    async fn walking_is_in_file_name_order() {
+        let (_directory, store) = store().await;
+        for raw in ["zebra", "notes/b", "apple", "notes/a", "mango"] {
+            store
+                .write(&slug(raw), Frontmatter::default(), "Body.\n")
+                .await
+                .expect("write");
+        }
+
+        let found: Vec<String> = store
+            .walk()
+            .into_iter()
+            .map(|entry| entry.slug.to_string())
+            .collect();
+
+        assert_eq!(found, ["apple", "mango", "notes/a", "notes/b", "zebra"]);
     }
 
     #[tokio::test]
