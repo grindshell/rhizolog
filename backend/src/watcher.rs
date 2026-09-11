@@ -55,7 +55,8 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use notify::RecursiveMode;
+use notify::event::{AccessKind, AccessMode};
+use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 use tokio::task::JoinHandle;
 
@@ -165,6 +166,7 @@ pub fn spawn(
             let paths = match result {
                 Ok(events) => events
                     .into_iter()
+                    .filter(|event| changes_something(&event.kind))
                     .flat_map(|event| event.paths.clone())
                     .collect::<Vec<PathBuf>>(),
                 Err(errors) => {
@@ -184,6 +186,25 @@ pub fn spawn(
 
         tracing::debug!("file watcher stopped");
     }))
+}
+
+/// Whether an event can mean something changed. Reading a file cannot.
+///
+/// inotify reports a file or directory being opened and closed, and notify
+/// passes those on as `Access` events. ReadDirectoryChangesW does not report
+/// them at all, which is why this only showed up the first time the tests ran
+/// on Linux. Taken as changes, the watcher's own reads were rescans: listing
+/// `.rhizolog/times` classified as the time log changing, so a page written
+/// just after startup was swept up by a rescan and logged as the scan's baseline
+/// rather than as somebody's writing, and every reindex that read a page would
+/// have reported another access to it. The one access that does mean a change
+/// is a file closed after being written.
+fn changes_something(kind: &EventKind) -> bool {
+    match kind {
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        _ => true,
+    }
 }
 
 /// What one changed path turns out to be.
@@ -734,6 +755,30 @@ mod tests {
 
     /// A directory event names only the directory, so its pages cannot be
     /// enumerated from the event alone.
+    /// Reading is not changing. inotify reports opens and closes, and only a
+    /// close after writing says anything happened to the file.
+    #[test]
+    fn an_access_is_not_a_change_unless_it_closed_a_write() {
+        use notify::event::{CreateKind, ModifyKind, RemoveKind};
+
+        for read in [
+            AccessKind::Open(AccessMode::Any),
+            AccessKind::Read,
+            AccessKind::Close(AccessMode::Read),
+            AccessKind::Any,
+        ] {
+            assert!(!changes_something(&EventKind::Access(read)), "{read:?}");
+        }
+
+        assert!(changes_something(&EventKind::Access(AccessKind::Close(
+            AccessMode::Write
+        ))));
+        assert!(changes_something(&EventKind::Create(CreateKind::File)));
+        assert!(changes_something(&EventKind::Modify(ModifyKind::Any)));
+        assert!(changes_something(&EventKind::Remove(RemoveKind::File)));
+        assert!(changes_something(&EventKind::Any));
+    }
+
     #[test]
     fn a_directory_change_forces_a_rescan() {
         assert_eq!(planned(&["notes"]), Some(Reindex::Everything));
