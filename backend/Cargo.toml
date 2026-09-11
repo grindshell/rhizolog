@@ -1,8 +1,12 @@
 [package]
 name = "rhizolog"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license.workspace = true
+# Rhizolog is released as binaries, never to crates.io. Saying so is also what
+# tells cargo-deny and cargo-about that this crate is the project rather than a
+# dependency of it. See knowledge-base/releases.md.
+publish = false
 
 [features]
 default = []

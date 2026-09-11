@@ -15,18 +15,14 @@ These apply to a release of any kind, including one that is only "clone it and
 project, which is why they were not written down until somebody asked what a
 beta needs.
 
-- **A binary release owes its dependencies' notices, and nothing collects
-  them.** The licences themselves are checked: on 11 September 2026 nothing in
-  either tree was anything the AGPL cannot be combined with, and the source can
-  be published as it is. See
-  [Dependency licences](knowledge-base/dependency-licences.md). What a compiled
-  copy owes is not done. MIT, BSD and Apache-2.0 all ask for their notices to
-  travel with binaries, the server also embeds Swagger UI (Apache-2.0) and the
-  dashboard, the desktop app links Microsoft's WebView2 loader under the SDK's
-  own terms, and no file gathers any of it. `cargo-about` generates the Rust
-  half, and the dashboard ships only five npm packages. Worth doing with the
-  release process below, and `cargo-deny` in CI after that, so that a new
-  dependency cannot change the answer without anybody noticing.
+- **The notices are a file beside the program, not something it shows.** Each
+  release archive carries a `THIRD-PARTY-NOTICES.txt` written for that program
+  (see [Releases](knowledge-base/releases.md)), which is what the licences ask
+  for, and CI checks the licences on every push. But a single executable gets
+  copied around on its own, and the file does not go with it. Serving the
+  notices from the program itself, at a route and from an About view in the
+  dashboard and the desktop app, would make every copy carry them, and the same
+  view is the natural home for the AGPL's own notice and a link to the source.
 - **No per-file licence notices.** `LICENSE` and the `license` fields in the
   manifests are what a tool reads; the AGPL's own appendix also asks for a
   short notice at the top of each source file, which is what a human reads when
@@ -34,21 +30,20 @@ beta needs.
   every file in the repository and is worth doing in one deliberate pass. Each
   notice should carry the section 7 permission for the WebView2 loader too,
   which lives in the README's Licence section until then.
-- **There is no release process, and no single definition of "the version".**
-  `backend/Cargo.toml`, `desktop/Cargo.toml` and `desktop/tauri.conf.json` all
-  say `0.1.0` and are bumped by hand in step; `frontend/package.json` says
-  `0.0.0` and nothing publishes it. The number travels in `server.json` and
-  `/api/health`, so it is the thing a bug report will quote. Tauri takes the
-  version from `Cargo.toml` when the field is omitted from `tauri.conf.json`,
-  which removes one of the three. There is also no changelog and no tag. The
-  README's Install section changes with the first download: it builds from
-  source today, through `cargo install`, because there is nothing else to point
-  at.
+- **Releases are built; three things about them are not done.** A release is a
+  tag of the one version in the root `Cargo.toml`, built, run and drafted by
+  GitHub Actions on the mirror, and published by hand; see
+  [Releases](knowledge-base/releases.md). Not done: signing, for the server's
+  `.exe` as much as the desktop app's; any check that a tag builds the same
+  bytes twice; and the README's Install section, which leads with building from
+  source until 0.1.0 is published and should then lead with the download.
 
 ## Before the desktop app goes to anyone else
 
 The app works. These are the things that make the difference between "runs on
-the machine that built it" and "is a download".
+the machine that built it" and "is a download". 0.1.0 ships it with all four
+still open, as a preview that says so in its `README.txt`, its release notes and
+the changelog; see [Releases](knowledge-base/releases.md).
 
 - **Real icons.** `desktop/icons/` are placeholders: a small branching glyph
   generated so `tauri-build` would produce an executable at all. They are not
@@ -180,7 +175,10 @@ what is outstanding.
   The section is written to take a real download without the page changing
   shape: two entries rather than one button that guesses at the platform, and
   the SmartScreen warning on an unsigned executable said out loud rather than
-  discovered. Its actual blockers are the two sections above this one.
+  discovered. It waits on 0.1.0 being published, and should then point at the
+  releases page rather than at files, so that the next release needs nothing
+  from the site. "Signed builds coming soon" under the hero changes with it,
+  since the builds are not signed.
 
 ## Accounts and visibility
 
@@ -679,10 +677,11 @@ What is not done:
 
 ## Verification gaps
 
-**There is no CI.** Everything below is run by hand today, which is the gap
-worth closing first, because two of these are configurations that break quietly.
-The remote is a self-hosted git rather than GitHub, so which runner this uses is
-itself an unmade decision.
+**CI runs on GitHub Actions**, on every push to the mirror: Windows and Linux,
+the dashboard compiled in, the server's dependency graph, the committed API
+document and the licences, and every release runs the servers it packaged. See
+[Releases](knowledge-base/releases.md). What is below is what none of that
+covers.
 
 - **Large wikis, measured once by hand.** Synthetic wikis of 1,000 to 20,000
   pages against the release server, timed from process start to
@@ -704,10 +703,6 @@ itself an unmade decision.
   was background indexing of the 36,000 files the test had just created.
   Repeating each size three times and taking the minimum gave a clean linear
   result. A single timing on this machine is not evidence.
-- **`cargo test --features embed-assets`.** Six tests only compile under that
-  feature: the ones covering the dashboard served out of the binary. A plain
-  `cargo test` skips them silently, and a feature nothing exercises is a feature
-  that breaks without telling anyone. It needs `pnpm build` to have run.
 - **The settings form, clicked.** `desktop/src/settings_window.rs` unit-tests
   everything on the Rust side of the webview: what the form parses to, what the
   page renders, that `RHIZOLOG_ADDR` disables it, that a request from any other
@@ -715,15 +710,9 @@ itself an unmade decision.
   post on a custom scheme to the handler, the half where being wrong is a
   button that does nothing. `respond` logs at info on both the GET and the post,
   so the app log says which half happened.
-- **`cargo build -p rhizolog` somewhere with no GUI toolkit.** The crate graph
-  is what guarantees the headless server needs no display libraries; a path
-  dependency added in the wrong direction would revoke that, and only a build on
-  a bare container would notice.
-- **`swagger_ui_serves_its_own_assets` against a release artifact.**
-  `rust-embed` reads from disk in debug builds and the path it reads from is the
-  absolute one baked in at compile time, so the test passing under `cargo test`
-  says nothing about what a shipped binary serves. This has already gone wrong
-  once, for the related reason recorded in `CLAUDE.md`.
+- **The Linux server, by hand.** CI builds it and passes its tests, and the
+  release runs the packaged binary against a one-page wiki. Nobody has used it
+  for anything longer.
 
 ## Decided against, for now
 

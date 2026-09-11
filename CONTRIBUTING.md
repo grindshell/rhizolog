@@ -53,6 +53,8 @@ inside it.
 | `site/` | The static product site at rhizolog.com: Astro, Tailwind |
 | `example-wiki/` | A small wiki, a week of time, a word log and a rules file, to run against |
 | `knowledge-base/` | Why the thing is built the way it is |
+| `packaging/` | The scripts a release runs: the version check, the notices, the archives and the smoke test |
+| `.github/workflows/` | CI on every push, and the release build, both run on the GitHub mirror |
 
 `backend/` and `desktop/` are one cargo workspace, so there is a single
 `Cargo.lock` and a single `target/`, both at the root.
@@ -199,9 +201,53 @@ Windows PowerShell 5.1 have each cost a real bug or a wrong diagnosis here:
 
 ## Before you commit
 
-There is no CI yet, so this is by hand: `cargo fmt`, `cargo clippy` and
-`cargo test -p rhizolog` clean; `pnpm test` and `pnpm typecheck` in `frontend/`
-if you touched it, and `pnpm typecheck` in `site/` if you touched that. Scope the
-subject by the area it changes (`backend:`, `ui:`, `site:`, `kb:`, `repo:`), and
-write no em dashes anywhere: `AGENTS.md` says why, and which three things are
-exempt.
+`cargo fmt`, `cargo clippy` and `cargo test -p rhizolog` clean; `pnpm test` and
+`pnpm typecheck` in `frontend/` if you touched it, and `pnpm typecheck` in
+`site/` if you touched that. CI runs all of it and more on every push to the
+GitHub mirror, but running it here first is quicker than waiting to find out.
+Scope the subject by the area it changes (`backend:`, `ui:`, `site:`, `kb:`,
+`repo:`), and write no em dashes anywhere: `AGENTS.md` says why, and which three
+things are exempt.
+
+## Cutting a release
+
+Releases are built by GitHub Actions on the
+[mirror](https://github.com/grindshell/rhizolog), and published by hand.
+[Releases](knowledge-base/releases.md) says why it works this way.
+
+1. **Set the version** in `[workspace.package]` in the root `Cargo.toml`, the
+   only place it is written. Then `cargo check`, so `Cargo.lock` follows, and
+   regenerate the API document and types, which carry the version: `cargo run
+   --example dump-openapi` from `backend/`, then `pnpm gen:api` from
+   `frontend/`. CI fails if you forget.
+2. **Date the changelog.** `CHANGELOG.md` needs a section headed
+   `## <version> - <yyyy-mm-dd>`. What is under the heading becomes the release
+   notes, and the release workflow refuses a tag without it.
+3. **Commit, push `master` to both remotes**, and wait for CI to pass on GitHub.
+4. **Tag it and push the tag to both**:
+
+   ```
+   git tag v<version>
+   git push origin v<version>
+   git push github v<version>
+   ```
+
+5. **Publish the draft.** The Release workflow builds, packages and runs
+   everything, then leaves a draft on the releases page. Download an archive or
+   two, run them, and press Publish.
+
+To try the process without spending a version, run the Release workflow by hand
+from the Actions tab. It builds and checks everything and attaches the archives
+to the run.
+
+The same archives can be made locally once the programs are built in release,
+which needs [`cargo-about`](https://github.com/EmbarkStudios/cargo-about)
+(`cargo install cargo-about --locked --features cli`):
+
+```
+pwsh packaging/package.ps1 -Binary server
+pwsh packaging/package.ps1 -Binary desktop
+pwsh packaging/smoke.ps1
+```
+
+They land in `dist/` at the root, which is gitignored.

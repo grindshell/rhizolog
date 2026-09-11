@@ -5,5 +5,12 @@ resolver = "3"
 # Stated once. Two crates that disagreed about the licence would be a licence
 # nobody could rely on, and the answer is the same for both. `LICENSE` at the
 # root is the text.
+#
+# The version likewise. Both crates inherit it, `desktop/tauri.conf.json` leaves
+# it out so Tauri reads it from here, and it is the number `/api/health`,
+# `server.json` and the OpenAPI document report. A release is a tag of `v` and
+# this number, and the release workflow refuses a tag that disagrees with it.
+# See knowledge-base/releases.md.
 [workspace.package]
+version = "0.1.0"
 license = "AGPL-3.0-or-later"

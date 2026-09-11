@@ -43,6 +43,10 @@ workspace** whose members are `backend/` and `desktop/`.
 | `site/` | The static product site at rhizolog.com. Astro, built separately and deployed on its own; the backend neither serves it nor knows about it |
 | `example-wiki/` | A small committed wiki, *time log*, *word log* and *rules file* to run against; its `index.md` states what the dashboard should report about all four |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
+| `packaging/` | The PowerShell scripts a release runs: version check, notices, archives, smoke test |
+| `.github/workflows/` | CI on every push and the release build, both run on the GitHub mirror |
+| `deny.toml` | `cargo-deny`'s licence allowlist, the same list as `packaging/about.toml` |
+| `CHANGELOG.md` | What each release changed; a version's dated section is its release notes |
 | `README.md` | Installing and using it, for people who are not working on it; until the site has `/docs`, it is also the manual |
 | `CONTRIBUTING.md` | Building, testing and changing it, for people who are |
 | `TODO.md` | Known and not done, with why. Keep it current rather than growing a second one |
@@ -194,6 +198,13 @@ build somewhere else, in CI or a fresh checkout, needs
   frontend `dist/` output are gitignored at the root.
 - **One `Cargo.lock`, at the root.** It is the workspace's. A `Cargo.lock`
   inside `backend/` or `desktop/` is a leftover and should be deleted.
+- **One version, in `[workspace.package]` in the root `Cargo.toml`.** Both
+  crates inherit it and `desktop/tauri.conf.json` deliberately has none. A
+  release is the tag `v<version>`, built by `.github/workflows/release.yml` on
+  the GitHub mirror and published by hand; `CONTRIBUTING.md` has the steps and
+  `knowledge-base/releases.md` the reasons. Changing the version means
+  regenerating `frontend/openapi.json`, which carries it, and CI fails on a
+  stale one.
 
 ## House style
 

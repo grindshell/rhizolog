@@ -41,3 +41,5 @@ Every page should be reachable from this index.
 - [Dependency licences](dependency-licences.md): what everything Rhizolog is
   built from is licensed under, why none of it conflicts with the AGPL, and what
   a binary release still owes
+- [Releases](releases.md): one version, a tag, a workflow that builds and
+  smoke-tests every archive, and a draft that a person publishes

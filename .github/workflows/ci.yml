@@ -1,0 +1,149 @@
+# Every push to master and every pull request, on the GitHub mirror.
+#
+# Development happens on a self-hosted Forgejo; CI runs here because GitHub's
+# hosted runners supply the clean Windows machine a self-hosted setup would
+# have to be. It runs what CONTRIBUTING.md asks of a commit, and four things
+# nobody was running by hand: the server on Linux, the server's dependency
+# graph, the committed API document, and the licences. See
+# knowledge-base/releases.md.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# bash on every runner, Windows included, because it stops at the first
+# command that fails. GitHub's pwsh wrapper only looks at the last one.
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  ASTRO_TELEMETRY_DISABLED: "1"
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      # The runner's git turns LF into CRLF on checkout. Every file here is LF,
+      # and CI should test the bytes a checkout has.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Dashboard
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Server tests, as it ships
+        run: cargo test -p rhizolog --locked
+      - name: Server tests, with the dashboard compiled in
+        run: cargo test -p rhizolog --features embed-assets --locked
+      - name: Desktop tests
+        run: cargo test -p rhizolog-desktop --locked
+
+      - name: The committed API document and types are current
+        run: |
+          (cd backend && cargo run --locked --example dump-openapi)
+          (cd frontend && pnpm gen:api)
+          git diff --exit-code -- frontend/openapi.json frontend/src/api/schema.d.ts
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Dashboard
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Server tests, as it ships
+        run: cargo test -p rhizolog --locked
+      - name: Server tests, with the dashboard compiled in
+        run: cargo test -p rhizolog --features embed-assets --locked
+
+      # The crate graph is what keeps the headless server free of display
+      # libraries: a dependency added in the wrong direction would pull Tauri's
+      # toolkit in. Checked on the graph rather than by building on a machine
+      # without one, because a runner has whatever it happens to have.
+      - name: The server's dependencies reach no GUI toolkit
+        run: |
+          if cargo tree -p rhizolog --features embed-assets -e normal,build --locked --prefix none \
+              | grep -Ei '^(gtk|gdk|webkit2gtk|javascriptcore|soup|tauri|wry|tao)[-_ ]'; then
+            echo "the server's dependency graph reaches a GUI toolkit" >&2
+            exit 1
+          fi
+
+  site:
+    name: Site
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # Build first: `astro check` reads the types the build generates.
+      - run: pnpm build
+      - run: pnpm typecheck
+
+  licences:
+    name: Licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      # deny.toml is the allowlist, and knowledge-base/dependency-licences.md
+      # is where adding to it gets written down.
+      - run: cargo deny --locked check licenses

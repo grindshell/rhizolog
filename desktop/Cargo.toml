@@ -1,8 +1,11 @@
 [package]
 name = "rhizolog-desktop"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license.workspace = true
+# Released as a binary, never to crates.io; see the same line in
+# backend/Cargo.toml.
+publish = false
 
 # NOT `Rhizolog`, however much nicer that would look on a portable download.
 # Windows filenames are case-insensitive, so `Rhizolog.exe` and the server's

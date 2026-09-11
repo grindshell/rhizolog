@@ -1,0 +1,137 @@
+# Builds a release, on the GitHub mirror.
+#
+# Pushing a tag `v<version>` checks the tag against Cargo.toml and
+# CHANGELOG.md, builds and packages every archive on its own platform, starts
+# each server from its archive to check it runs, and creates a DRAFT release
+# with the archives, their checksums and the changelog's section as the notes.
+# It never publishes: a person looks at the draft and presses the button,
+# because publishing is the one outward act and cannot be taken back.
+#
+# Run it by hand for a dry run. It builds and checks everything the same way
+# and attaches the archives to the run instead of to a release.
+#
+# The steps are in CONTRIBUTING.md and the reasoning in
+# knowledge-base/releases.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: echo "version=$(pwsh -NoProfile -File packaging/version.ps1 -Tag "$TAG")" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            desktop: true
+          # The oldest hosted Ubuntu, because a binary runs on the glibc it
+          # was linked against or newer, and 22.04's 2.35 reaches further back
+          # than 24.04's 2.39.
+          - name: Linux x64
+            os: ubuntu-22.04
+            desktop: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+
+      # No cache anywhere in this job, unlike CI: what ships is compiled from
+      # nothing on a clean machine.
+      - name: Dashboard
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build the server
+        run: cargo build --release --locked -p rhizolog --features embed-assets
+      - name: Build the desktop app
+        if: matrix.desktop
+        run: cargo build --release --locked -p rhizolog-desktop
+
+      - name: Package the server
+        run: pwsh -NoProfile -File packaging/package.ps1 -Binary server
+      - name: Package the desktop app
+        if: matrix.desktop
+        run: pwsh -NoProfile -File packaging/package.ps1 -Binary desktop
+
+      - name: Run what was packaged
+        run: pwsh -NoProfile -File packaging/smoke.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archives-${{ matrix.os }}
+          path: dist/*.*
+          if-no-files-found: error
+
+  publish:
+    name: Draft the release
+    if: github.ref_type == 'tag'
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archives-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt .
+          cat SHA256SUMS.txt
+      - name: Notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: pwsh -NoProfile -File packaging/version.ps1 -Tag "$TAG" -NotesOut notes.md
+      - name: Draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" dist/* --draft --verify-tag \
+            --title "Rhizolog $VERSION" --notes-file notes.md "${prerelease[@]}"

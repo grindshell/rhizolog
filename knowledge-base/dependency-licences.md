@@ -110,13 +110,14 @@ time if at all, and nothing of it reaches the output.
 Publishing the source asks nothing of the dependencies, because the repository
 holds none of their code. A compiled copy does hold it, and MIT, the BSD licences
 and Apache-2.0 all ask for their copyright notice and licence text to travel with
-copies in binary form; Apache-2.0 asks for any NOTICE file as well. The server
-contains a few hundred crates, Swagger UI and the dashboard's five packages, and
-the desktop app more than that. Nothing gathers their notices today.
+copies in binary form; Apache-2.0 asks for any NOTICE file as well. A Windows
+build of the server lists about 160 crates in its notices, besides Swagger UI
+and the dashboard's five packages, and the desktop app about twice as many.
 
 `cargo-about` generates the Rust half from the same metadata used here, and the
-npm half is small enough for `pnpm licenses list`. It belongs to the release
-process, which does not exist yet either; both are in [`TODO.md`](../TODO.md).
+npm half is small enough for `pnpm licenses list`. Both are now done by the
+release process, which writes a notices file for each program and puts it in the
+archive beside it; see [Releases](releases.md).
 
 ### The desktop app links a binary that has no source
 
@@ -124,9 +125,14 @@ On the MSVC target `webview2-com-sys` declares the loader's functions with
 `link(name = "WebView2LoaderStatic", kind = "static")`, so
 `WebView2LoaderStatic.lib` is linked into `rhizolog-desktop.exe`; the crate
 carries it prebuilt for x64, x86 and arm64. It comes from Microsoft's WebView2
-SDK. The crate itself is MIT and carries no licence file for those binaries, so
-the SDK's own terms were not read here; they are in the `Microsoft.Web.WebView2`
-NuGet package.
+SDK. The crate itself is MIT and carries no licence file for those binaries.
+The SDK's own terms are in the `Microsoft.Web.WebView2` NuGet package, read for
+SDK 1.0.3650.58 when the release process was built: a BSD-style licence from
+Microsoft, which permits redistribution in binary form provided the copyright
+notice and disclaimer go with it, and forbids using Microsoft's name to promote
+anything derived. Nothing there conflicts with the AGPL, and the package's
+`NOTICE.txt`, which lists third-party components of the SDK, goes into the
+desktop app's notices beside it.
 
 The AGPL makes whoever conveys object code offer the corresponding source for
 all of it, except System Libraries, which section 1 defines narrowly. Whether a
