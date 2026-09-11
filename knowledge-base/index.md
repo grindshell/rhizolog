@@ -38,3 +38,6 @@ Every page should be reachable from this index.
 - [The product site](product-site.md) — rhizolog.com: what the landing page is
   for before there is anything to download, and why the demo reuses the
   dashboard's own components
+- [Dependency licences](dependency-licences.md): what everything Rhizolog is
+  built from is licensed under, why none of it conflicts with the AGPL, and what
+  a binary release still owes

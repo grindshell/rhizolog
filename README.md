@@ -41,56 +41,236 @@ What makes it different from the wikis you already know:
   not "minus one hundred". And it holds prose to rules you wrote down in one
   file, quoting the text every finding fired on.
 
-## Quick start
+## Where it is today
 
-You need [Rust](https://rustup.rs/) (edition 2024) and, for the dashboard,
-[pnpm](https://pnpm.io/).
+It works, and it is early. **There is no download yet**: you build it from
+source, which is a handful of commands and one long compile, below. It is
+developed and tested on Windows. The server should build anywhere Rust does, and
+nobody has tried it on macOS or Linux yet; the desktop app is Windows only.
 
-Build the dashboard once, then run the server against the example wiki:
+Some things are missing on purpose: page history and diffs (a folder of notes is
+very likely a git repository already, and git does that better), rewriting links
+when a page moves, file attachments, and transclusion. Others are missing
+because nobody has built them yet, and those matter if you serve a wiki to other
+people: there is no TLS of its own, no rate limiting on sign-in, and no audit
+log. [`TODO.md`](TODO.md) is the whole list, each entry with the reason it is not
+done.
+
+## Install
+
+You need three things:
+
+- [Rust](https://rustup.rs/). On Windows, rustup offers to install the Visual
+  Studio C++ build tools as well. Say yes: they are also what compiles the
+  SQLite that Rhizolog carries inside it.
+- [Node.js](https://nodejs.org/) and [pnpm](https://pnpm.io/), to build the
+  dashboard. Neither is needed to run Rhizolog once it is built.
+- [git](https://git-scm.com/), to fetch the source.
+
+Then:
 
 ```powershell
-cd frontend; pnpm install; pnpm build
-cd ../backend; $env:RHIZOLOG_ROOT = "../example-wiki"; cargo run
+git clone https://github.com/grindshell/rhizolog
+cd rhizolog/frontend
+pnpm install
+pnpm build
+cd ..
+cargo install --path backend --features embed-assets --locked
 ```
 
-On macOS or Linux the last line is `RHIZOLOG_ROOT=../example-wiki cargo run`.
+The same commands work in a macOS or Linux shell. The last one takes a few
+minutes the first time.
 
-Then open:
+What that leaves behind is one program, `rhizolog`, in Cargo's `bin` directory,
+which rustup put on your `PATH`; open a new terminal if the command is not found.
+The dashboard is compiled into it, so it runs from anywhere with nothing beside
+it. Nothing else is installed: no service, no background process, nothing that
+starts with your computer. `cargo uninstall rhizolog` removes it again and
+leaves your notes alone.
 
-| | |
-|---|---|
-| http://127.0.0.1:3000 | the dashboard |
-| http://127.0.0.1:3000/swagger-ui | the API, browsable |
-| http://127.0.0.1:3000/api-docs/openapi.json | the OpenAPI document |
+To update, from the `rhizolog` directory:
 
-The first compile takes a while: SQLite is built from source, and Swagger UI is
-unpacked at build time.
+```powershell
+git pull
+cd frontend; pnpm install; pnpm build; cd ..
+cargo install --path backend --features embed-assets --locked
+```
 
-`example-wiki/` is seventeen pages arranged to show the features off: nested
-slugs, wikilinks, a page that is linked but not written, two orphans, and the same
-directory name in two places, which is what makes the two path filters differ.
-Eight of them are a short book, so that a contents page, an assembled document
-and a manifest with a gap, a repeat, a cut scene and a bad entry in it are things
-you can click on rather than read about. Every one of those eight says what it is
-for and what stage of drafting it is at, which is what the Manuscript panel's
-cards and its stage summary are drawn from. It also carries a week of tracked time
-(eighteen
-entries, two overlapping timers, a session that runs past midnight, hours logged
-against the page nobody has written), a week of writing in the word log, and a
-rules file with one of each kind of prose rule in it. Read
-[its index](example-wiki/index.md) first; it explains what the dashboard will say
-about it and why, including why Today is empty.
+## Run it on your notes
+
+Point it at a folder of markdown files and start it:
+
+```powershell
+$env:RHIZOLOG_ROOT = "C:\Users\you\notes"
+rhizolog
+```
+
+On macOS or Linux, `RHIZOLOG_ROOT=~/notes rhizolog`.
+
+It prints the address it is listening on, normally `http://127.0.0.1:3000`, and
+the dashboard is there in any browser. If something else already has port 3000
+it takes any free port instead, so read the line rather than assuming. `Ctrl+C`
+stops it.
+
+Nothing needs importing. Every `.md` file under the folder is a page, and its
+path is its name: `notes/rust/async.md` is `notes/rust/async`. The folder can be
+empty, or not exist yet, in which case it is created. **Always set
+`RHIZOLOG_ROOT`**: without it the wiki is a folder called `wiki` in whichever
+directory you happened to start from, which is rarely where you meant.
+
+### Try the example wiki first
+
+The checkout carries a small wiki arranged to show the features off. From the
+`rhizolog` directory:
+
+```powershell
+$env:RHIZOLOG_ROOT = "example-wiki"
+rhizolog
+```
+
+It is seventeen pages: nested slugs, wikilinks, a page that is linked but not
+written, two orphans, and the same directory name in two places, which is what
+makes the two path filters differ. Eight of them are a short book, so that a
+contents page, an assembled document and a manifest with a gap, a repeat, a cut
+scene and a bad entry in it are things you can click on rather than read about.
+Every one of those eight says what it is for and what stage of drafting it is
+at, which is what the Manuscript panel's cards and its stage summary are drawn
+from. It also carries a week of tracked time (eighteen entries, two overlapping
+timers, a session that runs past midnight, hours logged against the page nobody
+has written), a week of writing in the word log, and a rules file with one of
+each kind of prose rule in it. Read [its index](example-wiki/index.md) first; it
+explains what the dashboard will say about it and why, including why Today is
+empty.
 
 Reading it changes nothing on disk: the word log already agrees with every page,
 so the startup scan finds nothing to record. Start a timer or edit a page while
 `RHIZOLOG_ROOT` points there and it does write, and the numbers that index states
-stop being true.
+stop being true. `git status example-wiki` shows what it wrote.
 
-To use your own notes instead, point `RHIZOLOG_ROOT` at any directory of
-markdown files. Nothing needs importing.
+## The desktop app
 
-The dashboard is optional. Skip `pnpm build` and the API works exactly the same;
-the server just says there is no frontend to serve.
+On Windows, the same server can live in a window of its own, for when you would
+rather not keep a terminal open. Build it from the same checkout, after
+`pnpm build`:
+
+```powershell
+cargo build --release -p rhizolog-desktop
+```
+
+That makes `target\release\rhizolog-desktop.exe`, and it is portable: copy it
+wherever you like, run it from there, and delete it to uninstall. It needs
+Microsoft's WebView2 runtime. Windows 11 has it, and most Windows 10 machines
+have it from Windows Update; if yours does not, the Evergreen runtime is a free
+download from Microsoft. The app does not yet check for it and say so.
+
+**It asks which wiki to open**, the first time and any time the one it remembers
+has gone. There is no default, deliberately: the API creates directories it is
+pointed at, so a guess would mean an empty wiki materialising somewhere you would
+never look for it. **File → Open Wiki…** changes it, which restarts the app.
+
+The answer is remembered in `rhizolog.settings.json` **beside the executable**,
+so a copied folder takes its wiki with it. If that directory cannot be written
+to, it falls back to the usual per-user config directory. `RHIZOLOG_ROOT`
+overrides all of that and is not remembered; it is how to point the app at a
+scratch wiki for an afternoon.
+
+**File → Settings…** picks the port. Leave the box empty for the usual
+behaviour: 3000 when it is free, any free port when it is not. A port you type
+is a requirement rather than a preference: if something else has it, Rhizolog
+says so and offers to forget the setting rather than start somewhere you were
+not expecting. Only the port, deliberately. The app is for a wiki on this
+machine, so it binds loopback and does not offer to change the host; putting a
+wiki on the network is a decision for a shell and a firewall, not a settings
+field.
+
+The same window names the **log folder** and opens it. A window has no console
+to print to, so that file is the app's only account of itself and the first
+thing worth attaching to a bug report.
+
+**One window per wiki.** Opening the app again on a wiki it is already serving
+tells you where that window is and offers to open a different wiki instead. Two
+windows on two *different* wikis is fine.
+
+It is not a second program with its own powers. It starts a real Rhizolog on
+loopback and points a webview at it, so the window talks to the same HTTP API
+anything else would, and an agent can work against the app while you have it
+open without knowing it is an app.
+
+## What it does to your folder
+
+**Your markdown files stay yours.** Rhizolog reads every `.md` file under the
+folder and leaves everything else alone, and it changes a page only when you ask
+it to, through the dashboard or the API. Saving a page rewrites its frontmatter
+in a tidy standard form, so hand-written YAML comes back reformatted after its
+first save through Rhizolog; the text under it is saved exactly as you wrote it.
+Keeping the folder in git is the easiest way to see what any tool did to it, this
+one included.
+
+Everything else it keeps is in one directory, `.rhizolog/`, at the top of the
+folder:
+
+| | What it is | What to do with it |
+|---|---|---|
+| `index.db` | The search index and link graph, built from your pages | Nothing. Delete it whenever you like; it rebuilds on the next start |
+| `words/` | The word log: what was written, when, and by which tool | Back it up. There is no other copy |
+| `times/` | The time log | Back it up. There is no other copy |
+| `ideas/` | Idea Inbox's captures, threads and decisions | Back it up. There is no other copy |
+| `prose.toml` | Your prose rules, if you write any | It is yours; absent is the ordinary case |
+| `users/` | Accounts, if you create any, each with a password hash | Back it up, and never commit it |
+| `server.json` | Where the running server is listening | Nothing. It goes when the server stops |
+
+The first start on a folder writes a line for every page to the word log: the
+baseline later edits are counted from. So a folder that was already a git
+repository shows `.rhizolog/` as new. If yours is one, commit `words/`,
+`times/`, `ideas/` and `prose.toml` with your notes, and ignore the rest:
+
+```gitignore
+.rhizolog/index.db
+.rhizolog/index.db-*
+.rhizolog/server.json
+.rhizolog/users/
+```
+
+Check that nothing else in your ignore rules catches the word log. Its files end
+in `.log`, which a lot of global gitignores throw away; `!.rhizolog/words/*.log`
+brings them back, and `git status --untracked-files=all` says whether it worked.
+
+## Keeping it private
+
+**A wiki with no accounts is open.** Nobody signs in and nothing is refused,
+which is right for a wiki on your own machine, and is how Rhizolog starts. That
+is safe because it listens on `127.0.0.1`, which only this computer can reach.
+
+Two things change that, and both are deliberate:
+
+- **Setting `RHIZOLOG_ADDR` to anything but loopback puts it on the network.**
+  Without an account, anybody who can reach the port can then read and write
+  every page, because the API writes files. The server warns about it at
+  startup; believe the warning.
+- **Creating an account turns authentication on.** From then on every request
+  has to say who it is, and a page can be public, internal, restricted or
+  private. That is how you serve a wiki to other people; see
+  [Accounts](#accounts).
+
+Nothing it does leaves your machine by itself: no telemetry, no update check, no
+model, no request to anybody's server. Idea Inbox's suggestions are arithmetic
+over your own captures, done where they are.
+
+## Reporting a bug
+
+On [GitHub](https://github.com/grindshell/rhizolog/issues). Worth including:
+
+- the version, which `/api/health` and `.rhizolog/server.json` both report;
+- whether it was the server or the desktop app, and on which operating system;
+- what the server printed, or for the desktop app its log folder, which
+  **File → Settings…** names and opens;
+- what you did, what you expected, and what happened instead.
+
+---
+
+The rest of this file is the manual: how pages, links, time, ideas and
+manuscripts work, and every setting. Until the site has documentation of its
+own, this is it.
 
 ## Pages
 
@@ -417,20 +597,14 @@ All optional, all environment variables.
 |---|---|---|
 | `RHIZOLOG_ROOT` | `./wiki` | The wiki directory. Created if missing. |
 | `RHIZOLOG_DB` | `<root>/.rhizolog/index.db` | The derived index. Safe to delete. |
-| none | `<root>/.rhizolog/times/` | The time log. **Not** derived; back it up. |
-| none | `<root>/.rhizolog/ideas/` | Captures, threads and decisions. **Not** derived; back it up. |
-| none | `<root>/.rhizolog/words/` | The word log: what was written, when, and by which tool. **Not** derived; back it up. |
-| none | `<root>/.rhizolog/prose.toml` | Your prose rules. Authored configuration, and absent is the ordinary case. |
-| none | `<root>/.rhizolog/users/` | Accounts. **Not** derived, and secret; back it up, don't commit it. |
-| none | `<root>/.rhizolog/server.json` | Where the running server is. Gone when it stops. |
 | `RHIZOLOG_ADDR` | `127.0.0.1:3000`, or any free port | Where to listen. |
-| `RHIZOLOG_ASSETS` | `../frontend/dist` | The built dashboard. Missing is fine. |
+| `RHIZOLOG_ASSETS` | `../frontend/dist` | A built dashboard to serve instead of the one compiled in. That default only exists in a checkout; without it, the installed program serves its own copy. |
 | `RHIZOLOG_LOG` | `rhizolog=info,tower_http=info` | `tracing` filter. |
 | `RHIZOLOG_SECURE_COOKIES` | off | Mark the session cookie `Secure`. Set it behind a TLS proxy. |
 | `RHIZOLOG_ANONYMOUS_READ` | off | Serve `public` pages to callers who have not signed in. |
 
-Defaults are relative to the working directory, which is assumed to be
-`backend/`.
+A relative path is relative to the directory the server was started from. What
+lives under `.rhizolog/` is in [What it does to your folder](#what-it-does-to-your-folder).
 
 Think before changing `RHIZOLOG_ADDR`. **A wiki with no accounts is open**, and
 the API writes files, so binding anything but loopback means anybody who can
@@ -465,7 +639,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:3000/api/pages -Headers @{ Authorization
 
 Accounts are files under `.rhizolog/users/`, one per account, holding an Argon2
 hash of the password. Back that directory up, because there is no other copy,
-and keep it out of git, which the repository's `.gitignore` already does.
+and keep it out of git.
 
 Serving over a network in earnest wants TLS in front and
 `RHIZOLOG_SECURE_COOKIES=1` with it; without that, passwords cross the network
@@ -511,7 +685,7 @@ the pins or the time log.
 The editor offers all of this as a dropdown, and the page view marks anything
 that is not `internal`.
 
-### Finding a running server
+## Finding a running server
 
 By default the server takes port 3000 if it can and **any free port if it
 cannot**, so a second copy still starts, and so does one on a machine where
@@ -543,171 +717,8 @@ get reused, so confirm with `GET /api/health` and check the `wiki_root` it
 reports is the wiki you meant. That is one request and it cannot be fooled by a
 stale file.
 
-## Development
-
-This is one git repository. Scaffolding tools like to create nested ones. If a
-generator leaves a `.git` inside `backend/` or `frontend/`, delete it, or the
-root repository will treat that directory as opaque and stop tracking what is
-inside it.
-
-| Path | |
-|---|---|
-| `backend/` | The Rust library and the headless server (crate `rhizolog`) |
-| `desktop/` | The Tauri app (crate and binary `rhizolog-desktop`) |
-| `frontend/` | The dashboard: Vite, SolidJS, Tailwind, daisyUI |
-| `site/` | The static product site at rhizolog.com: Astro, Tailwind |
-| `example-wiki/` | A small wiki, and a week of time, to run against |
-| `knowledge-base/` | Why the thing is built the way it is |
-
-`backend/` and `desktop/` are one cargo workspace, so there is a single
-`Cargo.lock` and a single `target/`, both at the root.
-
-Backend, from `backend/`:
-
-```
-cargo run        # start the server
-cargo test       # 690 tests
-cargo fmt
-cargo clippy
-```
-
-One optional feature: `--features embed-assets` compiles `frontend/dist` into
-the executable, so it can be run anywhere without a `dist/` beside it. It needs
-`pnpm build` to have happened first, and it adds six more tests:
-
-```
-cargo build --features embed-assets
-cargo test --features embed-assets    # 696 tests
-```
-
-A directory that exists still wins, so this changes nothing when you are working
-in a checkout.
-
-Cargo unifies features across a workspace, and the desktop crate enables that
-one, so `cargo test --workspace` builds with it too and needs `pnpm build`
-first. `cargo test -p rhizolog` is the server as it actually ships.
-
-Desktop app, from `desktop/`:
-
-```
-cargo run                 # a window onto a server it starts itself
-cargo build --release     # target/release/rhizolog-desktop.exe
-```
-
-It turns `embed-assets` on, so `pnpm build` has to have run before it will
-build at all. The icons in `desktop/icons/` are placeholders.
-
-### The desktop app is the server, in a window
-
-It starts a real Rhizolog on loopback in its own process and points a webview at
-it, so the dashboard in the window is talking to the same HTTP API anything else
-would, and `.rhizolog/server.json` says where, exactly as it does for the
-headless server. An agent can work against the app while you have it open,
-without knowing it is an app.
-
-That is the whole reason it is built this way: nothing the app can do is
-something a browser pointed at a remote Rhizolog cannot.
-
-**It asks which wiki to open**, the first time and any time the one it
-remembers has gone. There is no default, deliberately: the API creates
-directories it is pointed at, so a guess would mean an empty wiki materialising
-somewhere you would never look for it. **File → Open Wiki…** changes it, which
-restarts the app.
-
-The answer is remembered in `rhizolog.settings.json` **beside the executable**,
-so a copied folder takes its wiki with it. If that directory cannot be written
-to, it falls back to the usual per-user config directory.
-
-`RHIZOLOG_ROOT` overrides all of that and is not remembered. It is how to point
-the app at a scratch wiki for an afternoon. The environment always wins; a
-remembered choice never overrides something you typed.
-
-**File → Settings…** picks the port. Leave the box empty for the usual
-behaviour: 3000 when it is free, any free port when it is not. A port you type
-is a requirement rather than a preference, the same as `RHIZOLOG_ADDR`: if
-something else has it, Rhizolog says so and offers to forget the setting rather
-than start somewhere you were not expecting. Saving restarts the app on the new
-port; it reopens the same wiki. `RHIZOLOG_ADDR` overrides it, and the window
-says so instead of leaving a box that does nothing.
-
-Only the port, deliberately. The app is for a wiki on this machine, so it binds
-loopback and does not offer to change the host. A box that accepts `0.0.0.0`
-would put a wiki on the network by typing, which is a decision for a shell and a
-firewall rather than a settings field. Serving one to other people is what
-`RHIZOLOG_ADDR` and an account are for.
-
-The same window names the **log folder** and opens it. A window has no console
-to print to, so that file is the app's only account of itself and the first
-thing worth attaching to a bug report.
-
-**One window per wiki.** Opening the app again on a wiki it is already serving
-tells you where that window is and offers to open a different wiki instead.
-Two of them on one wiki would mean two writers on one index and a published
-address that is only true for one. Two windows on two *different* wikis is fine
-and works.
-
-Frontend, from `frontend/`:
-
-```
-pnpm dev         # dev server with HMR, proxying /api to the backend
-pnpm build       # production build, which the backend serves
-pnpm test        # 227 tests
-pnpm typecheck
-```
-
-`pnpm dev` expects a backend already running on port 3000 and proxies `/api`,
-`/api-docs`, and `/swagger-ui` to it.
-
-Site, from `site/`:
-
-```
-pnpm dev         # dev server on :4321
-pnpm build       # static output to site/dist
-pnpm typecheck   # astro check
-```
-
-This one is independent of everything above: the backend does not serve it and
-does not know it exists. Note that `pnpm dev` daemonises: the command returns
-and the server keeps running, so `pnpm exec astro dev status` is how you find
-out whether one is up, and `pnpm exec astro dev stop` ends it.
-
-The frontend's API types are generated from the OpenAPI document rather than
-written by hand, so a backend change that breaks a caller becomes a type error
-instead of a runtime surprise. After changing the API:
-
-```
-cd backend; cargo run --example dump-openapi
-cd ../frontend; pnpm gen:api
-```
-
-No server needs to be running: the example writes the spec straight from the
-compiled routes.
-
-That exists because downloading it is a trap on Windows, and the obvious way is
-the one that does not work. `curl` in PowerShell 5.1 is an alias for
-`Invoke-WebRequest`, which decodes a body as Latin-1 when its `Content-Type`
-carries no charset, and `application/json` from here carries none. Every
-non-ASCII character in the spec comes back mangled, each of its bytes re-encoded
-as two. The file stays valid JSON, stays one line, and the diff still reads like
-an ordinary regeneration, so nothing catches it. `>` and `Out-File` are no
-better; they re-encode too, and add a BOM.
-
-If you do fetch it over HTTP, download bytes and write them verbatim:
-
-```powershell
-$data = (New-Object System.Net.WebClient).DownloadData("http://127.0.0.1:3000/api-docs/openapi.json")
-[System.IO.File]::WriteAllBytes("$PWD\frontend\openapi.json", $data)
-```
-
-Worth checking after a refresh either way: the file should have no BOM, and it
-should contain no `Ã` and no `â€`, which are what mangled UTF-8 looks like once
-it has been read back as Latin-1.
-
-Windows PowerShell 5.1 has no `&&`; use `;` to chain. And do not round-trip a
-source file through `Get-Content` and `Set-Content`: 5.1 reads as ANSI and
-writes UTF-8 with a BOM, which mangles every non-ASCII character in the file and
-adds a byte-order mark that has, in this project, already hidden a page's
-frontmatter once.
+The API itself is browsable at `/swagger-ui` on the same address, and the
+OpenAPI document it is drawn from is at `/api-docs/openapi.json`.
 
 ## Why it is built this way
 
@@ -717,28 +728,10 @@ because that is the obvious thing to do here. Start with
 [the API design](knowledge-base/api-design.md) for what "friendly to agents"
 was taken to mean concretely.
 
-## Status
+## Working on it
 
-The MVP is complete: pages, search, tags, the link graph, meta-stats, live
-pickup of outside edits, and a dashboard you can write in. Since then: pinned
-pages, time tracking end to end (timers, manual entries, notes, groups, search
-over the log, and the statistics section), the drawn graph, the desktop app
-described above, accounts with per-page visibility, Idea Inbox end to end
-(capture, local candidates, lifecycle receipts, rediscovery and promotion into a
-page), and long-form writing end to end (compile with its manifest, the word log
-and its chart, and `prose/v1` with its rules over HTTP).
-
-What is still thin about serving one over a network is the operational half:
-there is no TLS of its own, no rate limiting on sign-in, and no audit log.
-Put it behind a reverse proxy.
-
-The desktop app runs and is not yet a download. Real icons, a check for a
-missing WebView2 runtime, and code signing are what stand between the two.
-[`TODO.md`](TODO.md) has that list and the rest of what is known and not done,
-each entry with the reason it is not done.
-
-Not implemented, on purpose: page history and diffs, link rewriting on move,
-file attachments, and transclusion.
+Running it from a checkout, the tests, the layout of the repository and the
+house rules are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Licence
 
@@ -751,3 +744,6 @@ the GPL says nothing about, because it is not distribution. Section 13 does: a
 modified Rhizolog that other people are allowed to talk to over a network has to
 offer them its source as well. Running your own copy, changing it, and never
 letting anyone else near it triggers none of that.
+
+Everything it is built from is under licences that combine with the AGPL; see
+[Dependency licences](knowledge-base/dependency-licences.md).

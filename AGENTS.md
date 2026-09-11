@@ -43,7 +43,8 @@ workspace** whose members are `backend/` and `desktop/`.
 | `site/` | The static product site at rhizolog.com. Astro, built separately and deployed on its own; the backend neither serves it nor knows about it |
 | `example-wiki/` | A small committed wiki, *time log*, *word log* and *rules file* to run against; its `index.md` states what the dashboard should report about all four |
 | `knowledge-base/` | Markdown knowledge base tracking Rhizolog's design and implementation |
-| `README.md` | Setup and usage, for people who are not this file |
+| `README.md` | Installing and using it, for people who are not working on it; until the site has `/docs`, it is also the manual |
+| `CONTRIBUTING.md` | Building, testing and changing it, for people who are |
 | `TODO.md` | Known and not done, with why. Keep it current rather than growing a second one |
 | `AGENTS.md` | This file: the instructions any coding agent reads; `CLAUDE.md` imports it and holds nothing of its own |
 

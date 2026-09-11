@@ -15,13 +15,25 @@ These apply to a release of any kind, including one that is only "clone it and
 project, which is why they were not written down until somebody asked what a
 beta needs.
 
-- **Dependency licences are unreviewed.** The AGPL is strong copyleft, so a
-  dependency under terms it cannot be combined with is a real problem rather
-  than a paperwork one. The Rust and npm trees here are almost entirely
-  MIT/Apache-2.0, which is fine in this direction, but nothing has actually
-  checked. `cargo-license` or `cargo-deny` over the workspace, and
-  `pnpm licenses list`, would say so in a minute. Worth doing once before
-  anybody is handed a copy, and worth having in CI after that.
+- **A binary release owes its dependencies' notices, and nothing collects
+  them.** The licences themselves are checked: on 11 September 2026 nothing in
+  either tree was anything the AGPL cannot be combined with, and the source can
+  be published as it is. See
+  [Dependency licences](knowledge-base/dependency-licences.md). What a compiled
+  copy owes is not done. MIT, BSD and Apache-2.0 all ask for their notices to
+  travel with binaries, the server also embeds Swagger UI (Apache-2.0) and the
+  dashboard, and no file gathers any of it. `cargo-about` generates the Rust
+  half, and the dashboard ships only five npm packages. Worth doing with the
+  release process below, and `cargo-deny` in CI after that, so that a new
+  dependency cannot change the answer without anybody noticing.
+- **The desktop app statically links a Microsoft binary that has no source.**
+  On the MSVC target `webview2-com-sys` links `WebView2LoaderStatic.lib` into
+  `rhizolog-desktop.exe`. The AGPL's corresponding source covers everything in
+  the object code except system libraries, and whether that loader is one is
+  arguable. It constrains nobody but a third party redistributing the app, and
+  the usual answer is an additional permission under section 7 that names it,
+  which is the copyright holder's decision to make. The headless server does
+  not link it.
 - **No per-file licence notices.** `LICENSE` and the `license` fields in the
   manifests are what a tool reads; the AGPL's own appendix also asks for a
   short notice at the top of each source file, which is what a human reads when
@@ -33,12 +45,10 @@ beta needs.
   `0.0.0` and nothing publishes it. The number travels in `server.json` and
   `/api/health`, so it is the thing a bug report will quote. Tauri takes the
   version from `Cargo.toml` when the field is omitted from `tauri.conf.json`,
-  which removes one of the three. There is also no changelog and no tag.
-- **The README is written for a contributor.** Its Quick Start opens with
-  `pnpm install`, which is right for somebody building the thing and useless to
-  somebody who was handed it. A reader who did not clone the repository needs
-  four things: what it does, where its data lives, that it binds loopback with
-  no authentication, and where to send a bug.
+  which removes one of the three. There is also no changelog and no tag. The
+  README's Install section changes with the first download: it builds from
+  source today, through `cargo install`, because there is nothing else to point
+  at.
 
 ## Before the desktop app goes to anyone else
 
@@ -69,19 +79,22 @@ between a directory of files and a site somebody can reach. The reasoning behind
 the design is in [The product site](knowledge-base/product-site.md); this is
 what is outstanding.
 
-- **The GitHub mirror holds the previous Rhizolog, not this one.**
-  `github.com/grindshell/rhizolog` exists and is public, but its last push was
-  4 June 2026, its head commit (`dc671e6`) is not in this repository's history,
-  and its README describes the earlier app: git in the browser, "no server", "No
-  SQLite". Every link that leaves the site, apart from the licence, resolves
-  there through `site/src/links.ts`: both calls to action in the hero, Docs and
-  Source in the nav, four of the five footer entries, and the second button on
-  the 404. Docs is the worst of them, because it lands on a README that
-  contradicts the page the reader just left. Putting this repository there
-  means replacing unrelated history, by force-pushing over it or by starting a
-  fresh repository under the name, and that is a decision rather than a step.
-  The site should not go up until it is made. The mirror is also where CI will
-  build releases, so a download waits on the same decision.
+- **The GitHub mirror holds the previous Rhizolog until this one is pushed over
+  it.** `github.com/grindshell/rhizolog` exists and is public, but its last push
+  was 4 June 2026, its head commit (`dc671e6`, still the head on 11 September)
+  is not in this repository's history, and its README describes the earlier
+  app: git in the browser, "no server", "No SQLite". Every link that leaves the
+  site, apart from the licence, resolves there through `site/src/links.ts`: both
+  calls to action in the hero, Docs and Source in the nav, four of the five
+  footer entries, and the second button on the 404. Docs is the worst of them,
+  because it lands on a README that contradicts the page the reader just left.
+  On 11 September 2026 the decision was made to force-push this repository over
+  it, once the README had been rewritten for somebody who has not cloned
+  anything and the dependency licences had been checked. The push is what is
+  left, and the site should not go up before it. Check that Issues is switched
+  on while you are there: the README and the footer both send bug reports to
+  it. The mirror is also where CI will build releases, so a download waits on
+  the same push.
 - **`site/dist` has not been deployed, and the domain is serving something in
   between.** DNS is no longer the unknown: `rhizolog.com` and `www.rhizolog.com`
   both resolve through Cloudflare and answer (checked 10 September 2026). What
@@ -101,12 +114,13 @@ what is outstanding.
   as well as files, so a request for an asset that is not there answers `404`
   with `Cache-Control: public, max-age=31536000, immutable`, and Cloudflare
   stores it like any other response. This is not hypothetical. On 10 September
-  2026 a check of `/_astro/Base.DwAu8oM9.css`, this build's stylesheet, came
-  back `404` and then `cf-cache-status: HIT`. Content hashing gives unchanged CSS
-  the same name, so unless the stylesheet changes before the first deploy,
-  visitors served by that edge get the page without it until the cache is
-  purged. Purge Cloudflare's cache after deploying, which is worth doing every
-  time anyway, and override the header inside `handle_errors`:
+  2026 a check of `/_astro/Base.DwAu8oM9.css`, the build's stylesheet then, came
+  back `404` and then `cf-cache-status: HIT`. The build has since moved to
+  `Base.CfJ2U-VE.css`, so that entry no longer matters, and asking the live site
+  for the new name before deploying would poison it the same way: content
+  hashing keeps an unchanged stylesheet's name, which is what turns one early
+  request into a year. Purge Cloudflare's cache after deploying, which is worth
+  doing every time anyway, and override the header inside `handle_errors`:
   `header Cache-Control "no-store"` should do it, and is untested, so check it
   with `curl -I` against a missing `/_astro/` path after pushing the Caddyfile.
 - **No `og:image`, so every shared link renders as a text-only card.**
@@ -124,6 +138,12 @@ what is outstanding.
   `robots.txt` before adding one. The `Sitemap:` line in it is the reason to add
   a sitemap at the same time. A sitemap alone is marginal at two pages and stops
   being marginal with the docs.
+- **The fonts' licence travels as a URL rather than a text.** IBM Plex is under
+  the SIL Open Font License, which asks every copy to carry IBM's copyright and
+  the licence itself, and serving a webfont is distributing it. The subsetted
+  `.woff` files `@fontsource` builds keep the copyright and the licence's URL
+  in their name tables and drop its text. An `OFL.txt` in `site/public/` closes
+  that; see [Dependency licences](knowledge-base/dependency-licences.md).
 - **Both figures on the landing page are hand-authored placeholders**, their
   components say so at the top, and since 10 September 2026 their captions say
   so too. Before that, both captions described `example-wiki` as though the

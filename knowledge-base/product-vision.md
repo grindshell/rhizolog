@@ -84,8 +84,10 @@ It costs nothing for the single user the product is designed around. Running
 your own copy, modifying it, and never letting anyone else near it triggers
 none of the licence at all.
 
-Two consequences that are not done yet, both in [`TODO.md`](../TODO.md): the
-dependency trees have never been checked for anything the AGPL cannot be
-combined with, and the per-file notices the licence's own appendix asks for do
-not exist. The `license` field is set once in `[workspace.package]` and
-inherited, so the two crates cannot drift apart on the answer.
+The dependency trees were checked against it on 11 September 2026, and nothing
+in them is anything the AGPL cannot be combined with.
+[Dependency licences](dependency-licences.md) has the method, the counts, and
+what a binary release still owes. The per-file notices the licence's own
+appendix asks for do not exist yet, and are in [`TODO.md`](../TODO.md). The
+`license` field is set once in `[workspace.package]` and inherited, so the two
+crates cannot drift apart on the answer.
