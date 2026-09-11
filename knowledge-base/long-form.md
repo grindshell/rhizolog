@@ -1822,10 +1822,61 @@ All seventeen pages were reindexed, `index.md` against a body 1,515 words shorte
 than the one the log last described, and both log files came out byte for byte
 identical.
 
-What it does not cover is a pull while the server is running. The watcher does
-not read the word log, because the server appends to it on every save, so a page
-arriving with its log line is weighed against the log as that server last read
-it. That one is in [`TODO.md`](../TODO.md).
+### A pull while the server is running
+
+That was left open when the fix above landed. The watcher ignores
+`.rhizolog/words/`, so a running server weighed a pulled page against the log as
+it had last read it, and the pulled edit went in twice.
+
+Two fixes were weighed. The watcher could tell the server's own appends from
+anybody else's and rescan on the rest, which would also have caught an edit to
+the log alone; but it is the echo suppression `watcher.rs` argues against, and it
+only works if the line and the page arrive in the same batch or the line first.
+Or the watcher could read the log before weighing a page, which is the scan's
+own order and needs only that the line be on disk by then.
+
+The second, and the log is read whole rather than as one slug's lines. Reading
+one slug's total would have weighed the pulled page correctly and left
+`page_words` behind, and the next API write to that page is weighed against
+`page_words`: it would have found the index's body ahead of the table and
+recorded the pulled edit as a net, the same double count one save later.
+Folding in just that slug's lines is the partial rebuild `rebuild_words` refuses
+to be. So the watcher reads the log back in the way the scan does, before a
+batch that names a page.
+
+Three things came with it:
+
+- **The log is held across a line and its row.** `words::record` appends and
+  then inserts, and a rebuild that read the log between the two and replaced the
+  table after them would have dropped the row, or folded it in twice the other
+  way round. The rescan a directory event triggers always had that race;
+  rereading on every batch would have met it constantly. `WordLog::hold` now
+  covers the append and the insert in one, and the read and the rebuild in the
+  other.
+- **A body the index already holds is nothing written, whatever the log says.**
+  The stale-index check opened a window it did not close. An API write reaches
+  the index and then the log, and the echo of an earlier save could weigh the
+  page in between, find the table a line behind, and record a net that the API's
+  own line then doubled. Before that check an identical body said nothing by
+  construction; it is now a rule of its own, ahead of the count.
+- **The reread is skipped when nobody else wrote.** The API's own writes echo
+  into the watcher, so rereading on every batch was a read of the whole log per
+  save, and measured it was not cheap. On a 50,000-line log, 3.2 MB and about
+  ten busy years, a reread took about 400 ms in a release build: an external
+  edit took about 910 ms to reindex against about 520 ms on an empty log, and
+  all of it under the lock API writes wait on. The log now remembers each month
+  file's length and modification time as this process last read or wrote them,
+  and the watcher rereads only when the directory disagrees. Against the same
+  log, five edits reindexed in 512 to 559 ms with no reread; one line appended
+  by another process made the next edit reread once, at 996 ms, and the one
+  after went back to none. It is bookkeeping of the server's own writes, which
+  is what the rejected fix needed too, and the difference is which way it fails:
+  a stamp it cannot account for costs a read, never a missed line, and an
+  append of its own over somebody else's drops the record rather than papering
+  over theirs.
+
+What is still open is a page whose batch is processed before its line exists,
+which is in [`TODO.md`](../TODO.md).
 
 ## Test strategy
 
@@ -1879,6 +1930,8 @@ it. That one is in [`TODO.md`](../TODO.md).
 - **And survives keeping a stale one.** An index older than the log records none
   of what the log already holds, and only what it has not seen, as a `net`; an
   index that took a write the log missed gets the same answer at the next write.
+  A page pulled with its line under a running server records nothing, and nor
+  does the echo of an API write caught between the index and the log.
 - A move keeps one series across both slugs; a delete and a new page at the same
   slug are two.
 - On a wiki with accounts, an observation against an unreadable page reports its

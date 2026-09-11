@@ -22,6 +22,34 @@
 //! Rhizolog's own [`crate::store`] does the same — so a single save can arrive
 //! as several events. Windows is especially chatty here. The debouncer collapses
 //! a burst into one batch.
+//!
+//! ## The word log is read, not watched
+//!
+//! `.rhizolog/words/` is ignored like the database, and not because it is
+//! derived: the server appends to it on every save, so watching it would mean a
+//! rescan per save or the echo suppression the section above argues against. It
+//! is read instead, whole, before every batch that names a page. Weighing a page
+//! asks what the log last said about it, and a `git pull` brings a page and the
+//! line describing its edit together; weighed against the log as the server last
+//! read it, the pulled edit would be recorded a second time.
+//!
+//! Whole rather than one slug's lines, because the table it lands in is also
+//! what the next API write to that page is weighed against, and a table caught
+//! up for one slug is a partial rebuild.
+//!
+//! And only when somebody else has written to it. The log remembers each month
+//! file's length and modification time as this process last read or wrote them,
+//! so a batch whose log nobody else has touched costs a directory listing. That
+//! matters because the API's own writes echo here too: on a 50,000-line log,
+//! about ten busy years, a full reread took about 400 ms in a release build, and
+//! every save paying that while holding the lock API writes wait on would have
+//! been a tax that only grows. The check errs towards reading, since a wrong
+//! "changed" costs a read and a wrong "unchanged" costs an edit counted twice.
+//!
+//! It cannot help a page whose batch is processed before its line arrives. Git
+//! writes `.rhizolog/` first by default, since it sorts first, and a checkout
+//! lands inside one debounce window; a sync tool that writes in some other
+//! order, or slowly, can still get an edit counted twice.
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
@@ -34,7 +62,10 @@ use tokio::task::JoinHandle;
 use crate::ideas::{
     CAPTURES_DIR, CaptureId, EVENTS_DIR, EventId, IDEAS_DIR, IdeaId, IdeaStore, THREADS_DIR,
 };
-use crate::index::{Index, sync::sync};
+use crate::index::{
+    Index,
+    sync::{refresh_words, sync},
+};
 use crate::slug::Slug;
 use chrono::Utc;
 
@@ -258,7 +289,8 @@ fn classify(relative: &Path) -> Change {
 /// be for. The exceptions are the time log and Idea Inbox, which are authored
 /// data that happen to share the directory, and which therefore have to be
 /// watched exactly as the pages are. Accounts stay ignored: they are read from
-/// disk on every request and there is no index over them to keep in step.
+/// disk on every request and there is no index over them to keep in step. So
+/// does the word log, which is read rather than watched; see the module notes.
 fn classify_internal(rest: &[&str]) -> Change {
     match rest {
         [TIMES_DIR, tail @ ..] => classify_time(tail),
@@ -337,6 +369,9 @@ async fn apply(
             Err(error) => tracing::warn!(%error, "could not rescan the wiki"),
         },
         Reindex::Targets(targets) => {
+            if !targets.pages.is_empty() {
+                reread_words(words, index).await;
+            }
             for slug in targets.pages {
                 if let Err(error) = reindex_page(store, words, index, &slug).await {
                     tracing::warn!(%slug, %error, "could not reindex a changed page");
@@ -363,6 +398,18 @@ async fn apply(
                 }
             }
         }
+    }
+}
+
+/// Read the word log back in before a batch of pages is weighed against it, if
+/// anybody else has written to it since this process last did.
+///
+/// A failure costs what not rereading would: the pages are weighed against the
+/// log as it was last read, which is how it was before this existed. See "The
+/// word log is read, not watched" above.
+async fn reread_words(words: &WordLog, index: &Index) {
+    if let Err(error) = refresh_words(words, index).await {
+        tracing::warn!(%error, "could not read the word log back in; pages will be weighed against it as last read");
     }
 }
 
@@ -504,6 +551,8 @@ async fn reindex_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::words::{Kind, Observation};
 
     fn root() -> PathBuf {
         PathBuf::from("/wiki")
@@ -692,6 +741,156 @@ mod tests {
         // Even alongside identifiable pages: the directory may have taken
         // others with it.
         assert_eq!(planned(&["notes", "a.md"]), Some(Reindex::Everything));
+    }
+
+    // -------------------------------------------------------------- word log
+
+    async fn wiki() -> (
+        tempfile::TempDir,
+        Store,
+        TimeStore,
+        IdeaStore,
+        WordLog,
+        Index,
+    ) {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let store = Store::open(directory.path()).await.expect("open store");
+        let times = TimeStore::open(directory.path())
+            .await
+            .expect("open time log");
+        let ideas = IdeaStore::open(directory.path())
+            .await
+            .expect("open idea inbox");
+        let words = WordLog::open(directory.path())
+            .await
+            .expect("open word log");
+        let index = Index::open(None).await.expect("open index");
+        (directory, store, times, ideas, words, index)
+    }
+
+    async fn write(store: &Store, slug: &Slug, body: &str) {
+        store
+            .write(slug, crate::page::Frontmatter::default(), body)
+            .await
+            .expect("write page");
+    }
+
+    fn line(slug: &Slug, actor: &str, change: crate::index::WordChange) -> Observation {
+        Observation {
+            at: Utc::now(),
+            slug: slug.clone(),
+            actor: actor.to_owned(),
+            account: None,
+            kind: change.kind,
+            added: change.added,
+            removed: change.removed,
+            total: change.total,
+            from: None,
+        }
+    }
+
+    /// A `git pull` brings a page and the line describing its edit together,
+    /// the line first since `.rhizolog/` sorts first. Weighed against the log as
+    /// the server last read it, the edit would be recorded a second time.
+    ///
+    /// The line comes from a second writer over the same directory rather than
+    /// through this process's log, because that is what a pull is, and because
+    /// this process's own appends are rightly not news to it.
+    #[tokio::test]
+    async fn a_pulled_edit_is_not_recorded_again() {
+        let (directory, store, times, ideas, words, index) = wiki().await;
+        let a = Slug::parse("a").unwrap();
+
+        write(&store, &a, "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index)
+            .await
+            .expect("sync");
+
+        let pulled = crate::index::WordChange {
+            kind: Kind::Observed,
+            added: 2,
+            removed: 0,
+            total: 5,
+        };
+        WordLog::open(directory.path())
+            .await
+            .expect("another writer")
+            .append(&line(&a, "file", pulled))
+            .await
+            .expect("the pulled line");
+        write(&store, &a, "One two three four five.\n").await;
+
+        apply(&store, &times, &ideas, &words, &index, slugs(&["a"])).await;
+
+        let (log, _) = words.read().await.expect("read");
+        assert_eq!(
+            log.len(),
+            2,
+            "a baseline and the pulled line, and nothing after them"
+        );
+        assert_eq!(index.last_word_total(&a).await.unwrap(), Some(5));
+    }
+
+    /// And an edit nobody wrote a line for is still somebody writing, which the
+    /// reread must not swallow.
+    #[tokio::test]
+    async fn an_edit_with_no_line_is_still_recorded() {
+        let (_directory, store, times, ideas, words, index) = wiki().await;
+        let a = Slug::parse("a").unwrap();
+
+        write(&store, &a, "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index)
+            .await
+            .expect("sync");
+        write(&store, &a, "One two three four five.\n").await;
+
+        apply(&store, &times, &ideas, &words, &index, slugs(&["a"])).await;
+
+        let (log, _) = words.read().await.expect("read");
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[1].actor, "file");
+        assert_eq!(log[1].kind, Kind::Observed);
+        assert_eq!((log[1].added, log[1].removed), (2, 0));
+    }
+
+    /// The echo of an API write can be read back in the moment between that
+    /// write reaching the index and its line reaching the log. It has to say
+    /// nothing, or the write is recorded twice: as the net the echo would find,
+    /// and as the churn the API was about to record.
+    #[tokio::test]
+    async fn the_echo_of_a_write_still_in_flight_records_nothing() {
+        let (_directory, store, times, ideas, words, index) = wiki().await;
+        let a = Slug::parse("a").unwrap();
+
+        write(&store, &a, "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index)
+            .await
+            .expect("sync");
+
+        // An API write, stopped between its two halves.
+        let page = store
+            .write(
+                &a,
+                crate::page::Frontmatter::default(),
+                "One two three four five.\n",
+            )
+            .await
+            .expect("write page");
+        let change = index.upsert(&page).await.expect("index page");
+
+        apply(&store, &times, &ideas, &words, &index, slugs(&["a"])).await;
+
+        // And the API finishing.
+        words::record(&words, &index, line(&a, "api", change)).await;
+
+        let (log, _) = words.read().await.expect("read");
+        assert_eq!(
+            log.len(),
+            2,
+            "a baseline and the API's edit, and nothing from the echo"
+        );
+        assert_eq!(log[1].actor, "api");
+        assert_eq!((log[1].added, log[1].removed), (2, 0));
     }
 
     #[test]

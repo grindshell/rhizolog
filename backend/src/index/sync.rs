@@ -24,7 +24,7 @@ use crate::ideas::IdeaStore;
 use crate::index::{Index, IndexError};
 use crate::store::Store;
 use crate::times::TimeStore;
-use crate::words::{self, By, WordLog};
+use crate::words::{self, By, Held, WordLog};
 
 /// What one scan of one tree found.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -164,8 +164,37 @@ pub async fn sync(
 /// figure for a report about what reconciling found: three pages written while
 /// the server was down are three lines the scan writes, not three lines it
 /// discovered.
-async fn sync_words(words: &WordLog, index: &Index) -> Result<WordSync, IndexError> {
-    let (observations, skipped) = match words.read().await {
+///
+/// The log is held from the read to the end of the rebuild, since an
+/// observation recorded in between would otherwise be dropped from the table or
+/// folded into it twice; the lock on [`WordLog`] says how.
+pub(crate) async fn sync_words(words: &WordLog, index: &Index) -> Result<WordSync, IndexError> {
+    let mut held = words.hold().await;
+    fold_words(&mut held, index).await
+}
+
+/// [`sync_words`], unless the log is exactly what this process last read or
+/// wrote, in which case `None` and nothing is read.
+///
+/// For the watcher, which runs it before every batch of pages for the reason the
+/// scan reads the log first: see `crate::watcher`, "The word log is read, not
+/// watched". The API's own writes echo into the watcher, so without the check
+/// every save would pay for reading the whole log.
+pub(crate) async fn refresh_words(
+    words: &WordLog,
+    index: &Index,
+) -> Result<Option<WordSync>, IndexError> {
+    let mut held = words.hold().await;
+
+    if held.unchanged().await {
+        return Ok(None);
+    }
+
+    fold_words(&mut held, index).await.map(Some)
+}
+
+async fn fold_words(held: &mut Held<'_>, index: &Index) -> Result<WordSync, IndexError> {
+    let (observations, skipped) = match held.read().await {
         Ok(read) => read,
         Err(error) => {
             tracing::error!(%error, "could not read the word log; the series will be empty");
@@ -924,6 +953,70 @@ mod tests {
         assert_eq!(log[1].kind, crate::words::Kind::Net);
         assert_eq!((log[1].added, log[1].removed), (3, 0));
         assert_eq!(log[1].total, 6);
+    }
+
+    /// A rebuild waits for the log to be let go. A line and its row are written
+    /// under the same hold, so a rebuild that did not wait could land between
+    /// them and drop the row, or fold it in twice.
+    #[tokio::test]
+    async fn a_rebuild_waits_while_the_log_is_held() {
+        let (_directory, _store, _times, _ideas, words, index) = fixture().await;
+        let held = words.hold().await;
+
+        let rebuild = tokio::spawn({
+            let (words, index) = (words.clone(), index.clone());
+            async move { sync_words(&words, &index).await }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !rebuild.is_finished(),
+            "the rebuild went ahead while the log was held"
+        );
+
+        drop(held);
+        rebuild.await.expect("task").expect("rebuild");
+    }
+
+    /// The watcher rereads the log only when somebody other than this process
+    /// has written to it, which is what keeps the reread off every save.
+    #[tokio::test]
+    async fn the_log_is_reread_only_when_somebody_else_wrote_to_it() {
+        let (directory, store, times, ideas, words, index) = fixture().await;
+        write(&store, "a", "One two three.\n").await;
+        sync(&store, &times, &ideas, &words, &index).await.unwrap();
+
+        assert!(
+            refresh_words(&words, &index).await.unwrap().is_none(),
+            "the scan's own baseline is not news"
+        );
+
+        // Another writer over the same directory, which is what git or a second
+        // machine looks like from here.
+        let elsewhere = WordLog::open(directory.path())
+            .await
+            .expect("another writer");
+        elsewhere
+            .append(&crate::words::Observation {
+                at: Utc::now(),
+                slug: slug("b"),
+                actor: "file".to_owned(),
+                account: None,
+                kind: crate::words::Kind::Baseline,
+                added: 0,
+                removed: 0,
+                total: 3,
+                from: None,
+            })
+            .await
+            .expect("append elsewhere");
+
+        let reread = refresh_words(&words, &index).await.unwrap();
+        assert_eq!(reread.map(|read| read.observations), Some(2));
+        assert!(
+            refresh_words(&words, &index).await.unwrap().is_none(),
+            "and once read, it is not news twice"
+        );
     }
 
     /// A page gone from disk while nothing was watching closes its series, so

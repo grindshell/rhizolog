@@ -24,7 +24,9 @@
 pub mod diff;
 pub mod stats;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use thiserror::Error;
@@ -313,14 +315,35 @@ pub enum WordLogError {
 #[derive(Debug, Clone)]
 pub struct WordLog {
     root: PathBuf,
-    /// Serialises appends within this process.
+    /// Serialises this process's use of the log: every append, and every read
+    /// that `page_words` is rebuilt from.
     ///
     /// An `O_APPEND` write of one short line is atomic on every filesystem worth
     /// naming, but there is no reason to depend on that when one lock removes
     /// the question. It is why a process must hold **one** `WordLog` rather than
     /// opening a second over the same directory.
-    gate: std::sync::Arc<Mutex<()>>,
+    ///
+    /// It has to cover more than the write, which is what [`WordLog::hold`] is
+    /// for. A line and its row in `page_words` are written one after the other,
+    /// and a rebuild of that table which read the log before the line and
+    /// replaced the table after the row would drop the row; one which read after
+    /// the line and replaced before the row would leave it there twice. So
+    /// [`record`] holds the log across both, and so does the rebuild.
+    ///
+    /// And it carries what this process last knew the log's files to be, so a
+    /// caller holding it can ask whether anybody else has written since. See
+    /// [`Held::unchanged`].
+    gate: std::sync::Arc<Mutex<Seen>>,
 }
+
+/// A month file's length and when it was last written, which is what "has
+/// anybody touched this" is decided by.
+type FileStamp = (u64, SystemTime);
+
+/// What this process last knew each month file to be. `None` until the log is
+/// first read, and after anything that leaves the answer in doubt; both mean
+/// the next check reads the log.
+type Seen = Option<BTreeMap<PathBuf, FileStamp>>;
 
 impl WordLog {
     /// Open (creating if necessary) the word log for the wiki at `wiki_root`.
@@ -330,7 +353,7 @@ impl WordLog {
 
         Ok(Self {
             root,
-            gate: std::sync::Arc::new(Mutex::new(())),
+            gate: std::sync::Arc::new(Mutex::new(None)),
         })
     }
 
@@ -352,12 +375,65 @@ impl WordLog {
         self.root.join(format!("{}.log", at.format("%Y-%m")))
     }
 
+    /// Hold the log still until the guard is dropped: nothing in this process
+    /// appends to it, or rebuilds `page_words` from it, in the meantime.
+    ///
+    /// For a caller whose two steps have to be one, which is [`record`] and the
+    /// rebuild in `index::sync`. The note on the lock says why.
+    pub async fn hold(&self) -> Held<'_> {
+        Held {
+            log: self,
+            seen: self.gate.lock().await,
+        }
+    }
+
     /// Append one observation.
     pub async fn append(&self, observation: &Observation) -> Result<(), WordLogError> {
-        let line = format!("{}\n", observation.line());
-        let path = self.month(observation.at);
+        self.hold().await.append(observation).await
+    }
 
-        let _held = self.gate.lock().await;
+    /// Every observation in the log, oldest first. See [`Held::read`].
+    pub async fn read(&self) -> Result<(Vec<Observation>, usize), WordLogError> {
+        self.hold().await.read().await
+    }
+}
+
+/// The log, held still. See [`WordLog::hold`].
+pub struct Held<'a> {
+    log: &'a WordLog,
+    seen: tokio::sync::MutexGuard<'a, Seen>,
+}
+
+impl Held<'_> {
+    /// Whether the log is still exactly what this process last read or wrote:
+    /// the same month files, each the same length and last written at the same
+    /// instant.
+    ///
+    /// `false` whenever it cannot be sure, because a wrong `false` costs a read
+    /// and a wrong `true` costs a pulled edit counted twice.
+    pub async fn unchanged(&self) -> bool {
+        match (self.seen.as_ref(), stamps(&self.log.root).await) {
+            (Some(seen), Ok(now)) => *seen == now,
+            _ => false,
+        }
+    }
+
+    /// Append one observation.
+    pub async fn append(&mut self, observation: &Observation) -> Result<(), WordLogError> {
+        let line = format!("{}\n", observation.line());
+        let path = self.log.month(observation.at);
+
+        // Whether the file is still what this process last saw, asked before
+        // writing. If somebody else has written to it since, stamping it after
+        // this line would claim their lines had been read, so the whole record is
+        // dropped instead and the next check reads the log. A write landing in
+        // the instant between this and the line below is the one thing it can
+        // miss.
+        let known = match (self.seen.as_ref(), stamp(&path).await) {
+            (Some(seen), Ok(now)) => seen.get(&path).copied() == now,
+            _ => false,
+        };
+
         let mut file = tokio::fs::OpenOptions::new()
             .append(true)
             .create(true)
@@ -370,6 +446,16 @@ impl WordLog {
         // page slower for a record whose worst case is one lost observation that
         // the next write to the page reports as a `net`.
         file.flush().await?;
+        drop(file);
+
+        match (known, stamp(&path).await) {
+            (true, Ok(Some(after))) => {
+                if let Some(seen) = self.seen.as_mut() {
+                    seen.insert(path, after);
+                }
+            }
+            _ => *self.seen = None,
+        }
 
         Ok(())
     }
@@ -378,31 +464,24 @@ impl WordLog {
     ///
     /// The whole thing, because it is small: a line is under a hundred bytes and
     /// a busy year is a few hundred kilobytes. This is what `page_words` is
-    /// rebuilt from, so reading it has to be the cheap and obviously correct
+    /// rebuilt from, at startup and by the watcher whenever somebody else has
+    /// written to it, so reading it has to be the cheap and obviously correct
     /// operation rather than the clever one.
     ///
     /// Lines that will not parse are skipped and counted, not fatal. A log is
     /// appended to by a running server; a truncated last line after a hard
     /// power-off should cost that line and nothing else.
-    pub async fn read(&self) -> Result<(Vec<Observation>, usize), WordLogError> {
-        let mut months: Vec<PathBuf> = Vec::new();
-        let mut entries = tokio::fs::read_dir(&self.root).await?;
-
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if path.extension().is_some_and(|extension| extension == "log") {
-                months.push(path);
-            }
-        }
-
-        // By name, which for `YYYY-MM.log` is by date.
-        months.sort();
+    pub async fn read(&mut self) -> Result<(Vec<Observation>, usize), WordLogError> {
+        // Stamped before anything is read, so a line landing while this reads is
+        // a change the next time anybody asks, rather than recorded as read.
+        // In order of name, which for `YYYY-MM.log` is by date.
+        let stamps = stamps(&self.log.root).await?;
 
         let mut observations = Vec::new();
         let mut skipped = 0;
 
-        for month in months {
-            let text = tokio::fs::read_to_string(&month).await?;
+        for month in stamps.keys() {
+            let text = tokio::fs::read_to_string(month).await?;
 
             for line in text.lines() {
                 if line.trim().is_empty() {
@@ -420,8 +499,39 @@ impl WordLog {
         // which costs one sort of a small vector and removes a way for the
         // series to come out scrambled.
         observations.sort_by_key(|observation| observation.at);
+        *self.seen = Some(stamps);
 
         Ok((observations, skipped))
+    }
+}
+
+/// Every month file's stamp, as the directory holds them now.
+async fn stamps(root: &Path) -> std::io::Result<BTreeMap<PathBuf, FileStamp>> {
+    let mut stamps = BTreeMap::new();
+    let mut entries = tokio::fs::read_dir(root).await?;
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "log") {
+            continue;
+        }
+        if let Some(stamp) = stamp(&path).await? {
+            stamps.insert(path, stamp);
+        }
+    }
+
+    Ok(stamps)
+}
+
+/// One file's stamp, or `None` if it is not there.
+///
+/// Asked of the file rather than read off the directory listing, which on NTFS
+/// is brought up to date lazily and can lag behind a file just written.
+async fn stamp(path: &Path) -> std::io::Result<Option<FileStamp>> {
+    match tokio::fs::metadata(path).await {
+        Ok(metadata) => Ok(Some((metadata.len(), metadata.modified()?))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -448,7 +558,11 @@ impl WordLog {
 /// page whose file still matches the index, and after a write that got as far
 /// as the index it does.
 pub async fn record(log: &WordLog, index: &Index, observation: Observation) {
-    if let Err(error) = log.append(&observation).await {
+    // Held across both halves, so that a rebuild of `page_words` from the log
+    // cannot land between the line and its row. See the lock on `WordLog`.
+    let mut held = log.hold().await;
+
+    if let Err(error) = held.append(&observation).await {
         tracing::error!(
             slug = %observation.slug,
             %error,
@@ -839,5 +953,43 @@ mod tests {
         let log = WordLog::open(directory.path()).await.expect("open");
 
         assert_eq!(log.read().await.expect("read"), (Vec::new(), 0));
+    }
+
+    /// The log knows whether anybody else has written to it since this process
+    /// last looked, and errs towards saying they have.
+    #[tokio::test]
+    async fn the_log_notices_a_write_that_was_not_its_own() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let log = WordLog::open(directory.path()).await.expect("open");
+        let elsewhere = WordLog::open(directory.path())
+            .await
+            .expect("another writer");
+
+        assert!(
+            !log.hold().await.unchanged().await,
+            "never read, so it cannot know"
+        );
+
+        log.read().await.expect("read");
+        assert!(log.hold().await.unchanged().await);
+
+        log.append(&observation()).await.expect("append");
+        assert!(
+            log.hold().await.unchanged().await,
+            "its own line is not news"
+        );
+
+        elsewhere
+            .append(&observation())
+            .await
+            .expect("append elsewhere");
+        assert!(!log.hold().await.unchanged().await, "somebody else's is");
+
+        // And a line of its own on top does not paper over theirs.
+        log.append(&observation()).await.expect("append");
+        assert!(!log.hold().await.unchanged().await);
+
+        log.read().await.expect("read");
+        assert!(log.hold().await.unchanged().await, "until it has read them");
     }
 }

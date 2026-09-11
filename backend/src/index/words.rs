@@ -116,12 +116,17 @@ pub(super) fn last_total(connection: &Connection, slug: &str) -> rusqlite::Resul
 
 /// Decide what a write was worth, from the three things that are known about it.
 ///
-/// The four cases are the whole of it, and the last two are the interesting
+/// The five cases are the whole of it, and the last two are the interesting
 /// ones:
 ///
 /// - **Nothing recorded at this slug.** A first sighting, so a
 ///   [`Kind::Baseline`]. Without it, pointing the server at an existing wiki
 ///   would report the whole thing as written on a Tuesday.
+/// - **The body the index already holds.** Nothing was written, whatever the
+///   log says. This is the watcher reading back a write the API has just made,
+///   and it has to hold even in the moment between that write reaching the
+///   index and its line reaching the log: weighed any further, the echo would
+///   find the log a line behind and record the write a second time, as a net.
 /// - **A previous body the log last saw.** The ordinary case, and a real
 ///   churn: see [`crate::words::diff::churn`].
 /// - **A previous total but no previous body.** The index was deleted and the
@@ -156,6 +161,7 @@ pub(super) fn weigh(
 ) -> WordChange {
     let (kind, churn) = match (last, before) {
         (None, _) => (Kind::Baseline, Churn::default()),
+        (Some(_), Some(before)) if before == after => (Kind::Observed, Churn::default()),
         (Some(last), Some(before)) => {
             let churn = crate::words::diff::churn(before, after);
 
@@ -431,6 +437,18 @@ mod tests {
     #[test]
     fn a_rebuild_over_an_untouched_wiki_records_nothing() {
         let change = weigh(Some(41230), None, "irrelevant\n", 41230);
+
+        assert!(change.churn().is_nothing());
+        assert!(!change.is_recordable());
+    }
+
+    /// The watcher reading back an API write before its line has reached the
+    /// log. The index's body is the file's, so nothing was written, and a log a
+    /// line behind is no reason to say otherwise.
+    #[test]
+    fn the_body_the_index_already_holds_is_nothing_whatever_the_log_says() {
+        let body = "One two three four five.\n";
+        let change = weigh(Some(3), Some(body), body, 5);
 
         assert!(change.churn().is_nothing());
         assert!(!change.is_recordable());
