@@ -745,5 +745,27 @@ modified Rhizolog that other people are allowed to talk to over a network has to
 offer them its source as well. Running your own copy, changing it, and never
 letting anyone else near it triggers none of that.
 
-Everything it is built from is under licences that combine with the AGPL; see
+### An additional permission for the WebView2 loader
+
+The desktop app is linked with Microsoft's WebView2 loader, which comes as a
+compiled library with no source. So that anybody may pass on a desktop app built
+from Rhizolog, changed or not, this is granted under section 7 of the licence:
+
+> **Additional permission under GNU AGPL version 3 section 7**
+>
+> If you modify Rhizolog, or any covered work, by linking or combining it with
+> the Microsoft Edge WebView2 loader (`WebView2Loader.dll` or
+> `WebView2LoaderStatic.lib`, as distributed in Microsoft's WebView2 SDK, or a
+> modified version of either), containing parts covered by the terms of
+> Microsoft's licence for that SDK, the licensors of Rhizolog grant you
+> additional permission to convey the resulting work. Corresponding Source for
+> a non-source form of such a combination need not include the source code of
+> the loader.
+
+It names the loader and nothing else; the rest of Rhizolog is under the AGPL as
+written. Section 7 lets anybody passing on a copy remove the permission, so a
+version without the desktop app can drop it.
+
+Everything else Rhizolog is built from is under licences that combine with the
+AGPL as they stand; see
 [Dependency licences](knowledge-base/dependency-licences.md).

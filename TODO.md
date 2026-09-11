@@ -22,23 +22,18 @@ beta needs.
   [Dependency licences](knowledge-base/dependency-licences.md). What a compiled
   copy owes is not done. MIT, BSD and Apache-2.0 all ask for their notices to
   travel with binaries, the server also embeds Swagger UI (Apache-2.0) and the
-  dashboard, and no file gathers any of it. `cargo-about` generates the Rust
+  dashboard, the desktop app links Microsoft's WebView2 loader under the SDK's
+  own terms, and no file gathers any of it. `cargo-about` generates the Rust
   half, and the dashboard ships only five npm packages. Worth doing with the
   release process below, and `cargo-deny` in CI after that, so that a new
   dependency cannot change the answer without anybody noticing.
-- **The desktop app statically links a Microsoft binary that has no source.**
-  On the MSVC target `webview2-com-sys` links `WebView2LoaderStatic.lib` into
-  `rhizolog-desktop.exe`. The AGPL's corresponding source covers everything in
-  the object code except system libraries, and whether that loader is one is
-  arguable. It constrains nobody but a third party redistributing the app, and
-  the usual answer is an additional permission under section 7 that names it,
-  which is the copyright holder's decision to make. The headless server does
-  not link it.
 - **No per-file licence notices.** `LICENSE` and the `license` fields in the
   manifests are what a tool reads; the AGPL's own appendix also asks for a
   short notice at the top of each source file, which is what a human reads when
   a file has been copied somewhere on its own. Not done, because it touches
-  every file in the repository and is worth doing in one deliberate pass.
+  every file in the repository and is worth doing in one deliberate pass. Each
+  notice should carry the section 7 permission for the WebView2 loader too,
+  which lives in the README's Licence section until then.
 - **There is no release process, and no single definition of "the version".**
   `backend/Cargo.toml`, `desktop/Cargo.toml` and `desktop/tauri.conf.json` all
   say `0.1.0` and are bumped by hand in step; `frontend/package.json` says
@@ -129,21 +124,15 @@ what is outstanding.
   point at. One static PNG of the mark on the dark ground, and
   `summary_large_image` with it.
 - **No `robots.txt` of the site's own.** `site/public/` holds the favicon and
-  nothing else. The domain answers `/robots.txt` anyway, because Cloudflare
-  serves a managed one at the edge, and it disallows ClaudeBot, GPTBot,
-  Google-Extended, CCBot and several more. For a product whose pitch is an API
+  the fonts' licence and nothing else. The domain answers `/robots.txt` anyway,
+  because Cloudflare serves a managed one at the edge, and it disallows
+  ClaudeBot, GPTBot, Google-Extended, CCBot and several more. For a product whose pitch is an API
   meant for agents, whether their crawlers may read the page selling it is worth
   deciding on purpose rather than inheriting; it is a Cloudflare setting, not
   anything in this repository. Check what Cloudflare does with an origin
   `robots.txt` before adding one. The `Sitemap:` line in it is the reason to add
   a sitemap at the same time. A sitemap alone is marginal at two pages and stops
   being marginal with the docs.
-- **The fonts' licence travels as a URL rather than a text.** IBM Plex is under
-  the SIL Open Font License, which asks every copy to carry IBM's copyright and
-  the licence itself, and serving a webfont is distributing it. The subsetted
-  `.woff` files `@fontsource` builds keep the copyright and the licence's URL
-  in their name tables and drop its text. An `OFL.txt` in `site/public/` closes
-  that; see [Dependency licences](knowledge-base/dependency-licences.md).
 - **Both figures on the landing page are hand-authored placeholders**, their
   components say so at the top, and since 10 September 2026 their captions say
   so too. Before that, both captions described `example-wiki` as though the

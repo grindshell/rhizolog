@@ -11,8 +11,10 @@ found.
 is.** Three things are owed or open, and none of them is about the source:
 
 1. A binary release owes its dependencies' notices, and nothing collects them.
-2. The desktop app statically links a Microsoft binary that has no source.
-3. The product site serves its fonts without their licence text.
+2. The desktop app statically links a Microsoft binary that has no source, and
+   now has a section 7 permission that names it.
+3. The product site served its fonts without their licence text, which
+   `site/public/OFL.txt` now carries.
 
 ## How it was checked
 
@@ -132,12 +134,22 @@ loader that comes with an SDK rather than with the operating system is one is
 arguable. It constrains nobody but a third party, since the copyright holder can
 distribute their own code linked with anything they like. Somebody
 redistributing a modified desktop app is who it could catch, and the usual
-answer is an additional permission under section 7 that names the loader. That
-is the copyright holder's decision, and this page does not make it. The headless
-server does not link the loader, and every Tauri app on Windows is in the same
-position.
+answer is an additional permission under section 7 that names the loader. The
+headless server does not link the loader, and every Tauri app on Windows is in
+the same position.
 
-### The fonts' licence text is not served with them
+**The permission was granted on 11 September 2026**, and its text is in the
+README's Licence section. It follows the shape of the FSF's own template for
+linking with a library the GPL cannot absorb, without that template's optional
+sentence requiring the library's source, since there is none to include. It
+names both forms of the loader, the static library the MSVC target links and the
+DLL other targets link, and nothing else, so it cannot be read as a licence to
+combine Rhizolog with anything a future dependency happens to bring. Section 7
+lets anybody passing on a copy remove it. The `license` field in the manifests
+stays `AGPL-3.0-or-later`: an additional permission only loosens the licence,
+and SPDX has no identifier for this one.
+
+### The fonts' licence text was not served with them
 
 IBM Plex Sans and IBM Plex Mono are under the SIL Open Font License 1.1, which
 asks every copy to include IBM's copyright and the licence, either as a file
@@ -147,8 +159,13 @@ copyright (name ID 0) and the licence's URL (name ID 14), and not the licence
 text (name ID 13), which subsetting dropped. Only the `.woff` files were read;
 the `.woff2` ones are Brotli-compressed and come from the same subsetter.
 
-An `OFL.txt` in `site/public/` is the whole fix. It concerns the site alone: the
-dashboard uses none of these fonts.
+`site/public/OFL.txt` fixes it, added on 11 September 2026: the two
+`@fontsource` packages' `LICENSE` files, byte for byte, one after the other,
+since each carries its own family's copyright lines above the same licence. It
+is served at `/OFL.txt`, a stand-alone text file beside the fonts, which is the
+first of the three places the OFL allows. It concerns the site alone: the
+dashboard uses none of these fonts. A font family added to the site later needs
+its own licence added to the same file.
 
 ## Doing it again
 
